@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/publish.json",
+  "title": "wharfy publish output (v1)",
+  "description": "`wharfy publish [channel] --json` の出力。書き込み前(--dry-run / プレビュー)は plan に差分を返す。所有する配布物だけが差分対象(③ / 03_nondestructive_boundary.md)。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
+    "command": { "const": "publish" },
+    "ok": { "type": "boolean" },
+    "message": { "type": "string" },
+    "data": {
+      "type": "object",
+      "properties": {
+        "applied": {
+          "description": "実際に書いたか(--yes)。false なら plan のプレビュー段階。",
+          "type": "boolean"
+        },
+        "plan": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/planItem" }
+        }
+      },
+      "required": ["plan"],
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem" }
+    },
+    "next": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next" }
+  },
+  "required": ["schema_version", "command", "ok", "data", "next"],
+  "additionalProperties": false,
+  "$defs": {
+    "planItem": {
+      "description": "1 チャネルへの所有配布物に対する操作。owned_artifact は wharfy が所有するものに限る。",
+      "type": "object",
+      "properties": {
+        "channel": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind" },
+        "owned_artifact": {
+          "description": "書き込む対象(自前 tap の Formula 等)。利用者のソース・CI は決して入らない。",
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "enum": ["create", "update", "noop", "skip", "prepare"]
+        },
+        "diff": {
+          "description": "書き込み前に見せる差分。action=noop/skip では空でよい。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "skip/prepare の理由(例: トークン未設定、gated は申請のみ)。",
+          "type": "string"
+        }
+      },
+      "required": ["channel", "action"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "schema_version": "1",
+  "tool": "wharfy",
+  "version": "v0.0.0-test (0000000, 2026-06-18)",
+  "start": "wharfy status",
+  "state_readers": [
+    "status",
+    "config"
+  ],
+  "commands": [
+    {
+      "name": "agent",
+      "summary": "print this capability map (read once, then drive)",
+      "next": [
+        "status"
+      ]
+    },
+    {
+      "name": "status",
+      "summary": "what is built / signed / published, and where",
+      "next": [
+        "build"
+      ]
+    },
+    {
+      "name": "config",
+      "summary": "show the resolved effective config",
+      "next": [
+        "build"
+      ]
+    },
+    {
+      "name": "build",
+      "summary": "cross-compile for every os/arch",
+      "next": [
+        "sign",
+        "publish"
+      ]
+    },
+    {
+      "name": "sign",
+      "summary": "sign \u0026 notarize what can be signed",
+      "next": [
+        "publish"
+      ]
+    },
+    {
+      "name": "publish",
+      "summary": "push to owned channels; prepare gated ones",
+      "args": "[channel]",
+      "next": [
+        "verify"
+      ]
+    },
+    {
+      "name": "verify",
+      "summary": "install from each channel and run it"
+    },
+    {
+      "name": "version",
+      "summary": "print the version (the git tag is the single source)",
+      "next": [
+        "agent"
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "name": "homebrew",
+      "kind": "owned"
+    }
+  ]
+}

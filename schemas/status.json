@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/status.json",
+  "title": "wharfy status output (v1)",
+  "description": "`wharfy status --json` の出力。Result envelope の必須項目に加え、リリース状態を top-level に持つ。各チャネルは source と drift で記録vs実体の照合結果を見せる(②③ / 04_state_model.md)。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
+    "command": { "const": "status" },
+    "ok": { "type": "boolean" },
+    "message": { "type": "string" },
+    "project": { "type": "string", "minLength": 1 },
+    "version": { "type": "string" },
+    "tag": { "type": "string" },
+    "build": {
+      "type": "object",
+      "properties": {
+        "ok": { "type": "boolean" },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/artifact" }
+        }
+      },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "sign": {
+      "description": "OS 名 -> 署名/公証の状態。",
+      "type": "object",
+      "propertyNames": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os" },
+      "additionalProperties": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/signTarget" }
+    },
+    "channels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/channelStatus" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem" }
+    },
+    "next": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next" }
+  },
+  "required": ["schema_version", "command", "ok", "project", "channels", "next"],
+  "additionalProperties": false,
+  "$defs": {
+    "channelStatus": {
+      "description": "status における 1 チャネルの状態。owned/gated 共通。",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind" },
+        "published": { "type": "boolean" },
+        "version": { "type": "string" },
+        "target": { "type": "string", "description": "owned の発行先(tap/bucket 等)。" },
+        "assets": { "type": "integer", "minimum": 0, "description": "releases のアセット数等。" },
+        "reason": { "type": "string", "description": "published=false の理由。" },
+        "source": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/stateSource" },
+        "drift": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/drift" },
+        "state": {
+          "description": "gated チャネルの申請状態。",
+          "type": "string",
+          "enum": ["none", "prepared", "pr_open", "merged", "closed", "rejected"]
+        },
+        "pr": { "type": "string", "format": "uri", "description": "gated の PR/申請 URL。" }
+      },
+      "required": ["name", "kind", "published", "source"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "source=drift なら drift 詳細を非 null で必須にする。",
+          "if": { "properties": { "source": { "const": "drift" } } },
+          "then": {
+            "properties": { "drift": { "type": "object" } },
+            "required": ["drift"]
+          }
+        }
+      ]
+    }
+  }
+}

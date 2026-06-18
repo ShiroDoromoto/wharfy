@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/config.json",
+  "title": "wharfy config output (v1)",
+  "description": "`wharfy config --json` の出力。解決後の実効設定(既定推測・エスケープハッチ反映済み)を data に返す。生ファイルではない(01_architecture.md / ADR-4)。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
+    "command": { "const": "config" },
+    "ok": { "type": "boolean" },
+    "message": { "type": "string" },
+    "data": { "$ref": "#/$defs/resolved" },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem" }
+    },
+    "next": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next" }
+  },
+  "required": ["schema_version", "command", "ok", "data", "next"],
+  "additionalProperties": false,
+  "$defs": {
+    "resolved": {
+      "description": "実効設定。最小 wharfy.yaml から既定を埋めて組み立てた結果。",
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "main": { "type": "string", "description": "ビルド対象 main パッケージ。" },
+        "github": { "type": "string", "description": "owner/repo。tap/bucket 既定生成の素。" },
+        "homepage": { "type": "string", "format": "uri" },
+        "license": { "type": "string" },
+        "channels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/resolvedChannel" }
+        },
+        "build": {
+          "type": "object",
+          "properties": {
+            "goos": {
+              "type": "array",
+              "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os" }
+            },
+            "goarch": {
+              "type": "array",
+              "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/arch" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["project", "channels"],
+      "additionalProperties": false
+    },
+    "resolvedChannel": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind" },
+        "target": { "type": "string", "description": "解決済みの発行先(自前 tap/bucket 等)。" }
+      },
+      "required": ["name", "kind"],
+      "additionalProperties": false
+    }
+  }
+}

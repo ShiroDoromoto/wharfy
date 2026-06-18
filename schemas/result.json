@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/result.json",
+  "title": "wharfy Result envelope (v1)",
+  "description": "全コマンド共通の戻り(--json)。build / sign / verify はこの汎用 envelope に従う。status / config / publish はこれを土台に data を固める専用スキーマを持つ。02_output_contracts.md の envelope に対応。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
+    "command": { "type": "string", "minLength": 1 },
+    "ok": { "type": "boolean" },
+    "message": {
+      "description": "人間向け一行と同じ文。",
+      "type": "string"
+    },
+    "data": {
+      "description": "コマンド固有のペイロード。専用スキーマを持つコマンドはそちらで形を固める。",
+      "type": "object"
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning" }
+    },
+    "errors": {
+      "description": "ok=false の時に解消の手がかりを載せる。",
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem" }
+    },
+    "next": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next" }
+  },
+  "required": ["schema_version", "command", "ok", "message", "next"],
+  "allOf": [
+    {
+      "description": "ok=false なら errors を必須にする。",
+      "if": { "properties": { "ok": { "const": false } } },
+      "then": { "required": ["errors"] }
+    }
+  ],
+  "additionalProperties": false
+}

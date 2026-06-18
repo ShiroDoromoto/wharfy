@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/agent.json",
+  "title": "wharfy agent output (v1)",
+  "description": "`wharfy agent --json` の出力。能力レジストリから生成される一枚の地図(①聞けば分かる)。Result envelope とは別形。02_output_contracts.md / 05_drift_protection.md に対応。",
+  "type": "object",
+  "properties": {
+    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
+    "tool": { "type": "string", "const": "wharfy" },
+    "version": {
+      "description": "samples/version.go の versionLine()。例: v1.4.0 (abc1234, 2026-06-18)。",
+      "type": "string",
+      "minLength": 1
+    },
+    "start": {
+      "description": "最初に叩くべきコマンド。",
+      "type": "string",
+      "minLength": 1
+    },
+    "state_readers": {
+      "description": "状態の読み口になるコマンド名(status / channels / config 等)。",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "commands": {
+      "description": "能力カタログ。レジストリの全エントリがここに出る(テストで担保)。",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/commandSpec" }
+    },
+    "channels": {
+      "type": "array",
+      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelRef" }
+    }
+  },
+  "required": ["schema_version", "tool", "version", "start", "commands"],
+  "additionalProperties": false
+}

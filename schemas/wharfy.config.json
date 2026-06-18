@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/wharfy.config.json",
+  "title": "wharfy.yaml input (v1, advisory)",
+  "description": "利用者が書く最小設定ファイルの入力スキーマ。エディタ補助・typo 検出が目的の【助言】であり、出力契約のような凍結対象ではない(07_config_spec.md)。全フィールド省略可: 推測が効けばほぼ空で動く。",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "string", "minLength": 1,
+      "description": "省略時: github repo 名 → Go モジュール末尾 → ディレクトリ名。"
+    },
+    "binary": {
+      "type": "string", "minLength": 1,
+      "description": "省略時: project と同じ。"
+    },
+    "main": {
+      "type": "string", "minLength": 1,
+      "description": "ビルド対象 main パッケージ。省略時: 単一 main を自動検出。曖昧なら next: でエラー案内。"
+    },
+    "github": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$",
+      "description": "owner/repo。省略時: git remote origin から推測。"
+    },
+    "homepage": { "type": "string", "format": "uri" },
+    "description": { "type": "string" },
+    "license": { "type": "string", "description": "SPDX 識別子。省略時: LICENSE から検出。" },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["homebrew", "scoop", "apt", "rpm", "releases", "script", "container", "aur", "goinstall", "winget"]
+      },
+      "uniqueItems": true,
+      "description": "省略時: [homebrew, scoop, releases, script, goinstall]（追加設定不要な owned 列。goinstall は Go ターゲット時のみ）。apt/rpm/container/aur/winget は外部インフラ・鍵・審査が要るため明示 opt-in。"
+    },
+    "build": {
+      "type": "object",
+      "properties": {
+        "goos": {
+          "type": "array",
+          "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os" },
+          "uniqueItems": true
+        },
+        "goarch": {
+          "type": "array",
+          "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/arch" },
+          "uniqueItems": true
+        },
+        "env": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "ビルド環境変数(例: CGO_ENABLED=0)。"
+        },
+        "ldflags_extra": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "version/commit/date は wharfy が自動注入。追加分だけここに。"
+        }
+      },
+      "additionalProperties": false
+    },
+    "homebrew": {
+      "type": "object",
+      "properties": {
+        "tap": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "既定: <owner>/homebrew-<project>。" },
+        "dependencies": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "scoop": {
+      "type": "object",
+      "properties": {
+        "bucket": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "既定: <owner>/scoop-<project>。" }
+      },
+      "additionalProperties": false
+    },
+    "apt": {
+      "type": "object",
+      "properties": {
+        "repo": { "type": "string", "format": "uri", "description": "self-host の hosted repo。apt 有効時は必須。" }
+      },
+      "additionalProperties": false
+    },
+    "rpm": {
+      "type": "object",
+      "properties": {
+        "repo": { "type": "string", "format": "uri", "description": "yum/dnf 共通の hosted repo。rpm 有効時は必須。" }
+      },
+      "additionalProperties": false
+    },
+    "winget": {
+      "type": "object",
+      "properties": {
+        "identifier": { "type": "string", "description": "winget PackageIdentifier。既定: <Owner>.<Project>。" }
+      },
+      "additionalProperties": false
+    },
+    "script": {
+      "type": "object",
+      "description": "curl|sh インストーラ。install.sh を生成・公開し、中身は Releases を読む。",
+      "properties": {
+        "base_url": { "type": "string", "format": "uri", "description": "install.sh の公開 URL ベース。既定: GitHub Releases の latest アセット。" }
+      },
+      "additionalProperties": false
+    },
+    "container": {
+      "type": "object",
+      "description": "OCI イメージ(owned, 即時)。push トークンは GITHUB_TOKEN(packages:write)を env で。",
+      "properties": {
+        "image": { "type": "string", "description": "OCI イメージ名。既定: ghcr.io/<owner>/<project>。" }
+      },
+      "additionalProperties": false
+    },
+    "aur": {
+      "type": "object",
+      "description": "Arch User Repository。自前 PKGBUILD を審査なしで push。SSH 鍵は AUR_SSH_KEY を env で。",
+      "properties": {
+        "package": { "type": "string", "description": "AUR パッケージ名。既定: <project>-bin(ビルド済みバイナリ慣習)。" }
+      },
+      "additionalProperties": false
+    },
+    "goinstall": {
+      "type": "object",
+      "description": "go install 手順チャネル。発行はせず module 公開と version 注入を確認し案内するだけ(梱包ゼロ)。",
+      "properties": {
+        "module": { "type": "string", "description": "go install 対象モジュールパス。既定: go.mod から推測。" }
+      },
+      "additionalProperties": false
+    },
+    "passthrough": {
+      "type": "object",
+      "description": "エスケープハッチ。生 GoReleaser 断片等。ここだけ自由(契約外・安定保証外)。",
+      "properties": {
+        "goreleaser": { "type": "string", "description": "生 .goreleaser.yaml 断片。生成設定に deep merge(最後勝ち)。" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

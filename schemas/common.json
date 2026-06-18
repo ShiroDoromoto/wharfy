@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/common.json",
+  "title": "wharfy common definitions (v1)",
+  "description": "全コマンドの出力が共有する型。各コマンドのスキーマから $ref で参照する。02_output_contracts.md の契約に対応。",
+  "$defs": {
+    "schemaVersion": {
+      "description": "出力契約の世代。互換変更(追加)は据え置き、破壊変更(削除/意味変更)で繰り上げ。",
+      "type": "string",
+      "const": "1"
+    },
+    "nextItem": {
+      "description": "次の一手。do はそのまま実行できるコマンド文字列(環境変数設定を含みうる)。",
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "do": { "type": "string", "minLength": 1 }
+      },
+      "required": ["reason", "do"],
+      "additionalProperties": false
+    },
+    "next": {
+      "description": "next: ブロック。全コマンドが返す。",
+      "type": "array",
+      "items": { "$ref": "#/$defs/nextItem" }
+    },
+    "warning": {
+      "description": "非致命の注意。AI が分岐できるようコード付き。",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "problem": {
+      "description": "致命エラー(ok=false の時)。hint は任意の解消ヒント。",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "hint": { "type": "string" }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "os": {
+      "type": "string",
+      "enum": ["linux", "darwin", "windows"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["amd64", "arm64"]
+    },
+    "artifact": {
+      "description": "クロスビルドの成果物 1 つ。",
+      "type": "object",
+      "properties": {
+        "os": { "$ref": "#/$defs/os" },
+        "arch": { "$ref": "#/$defs/arch" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": ["os", "arch", "path"],
+      "additionalProperties": false
+    },
+    "channelKind": {
+      "description": "owned=自分で持てる(即時発行) / gated=審査制(申請を組み立て状態追跡)。",
+      "type": "string",
+      "enum": ["owned", "gated"]
+    },
+    "stateSource": {
+      "description": "status の各チャネルの真実の出所。recorded=記録のみ / probed=実体照合済み一致 / drift=食い違い。",
+      "type": "string",
+      "enum": ["recorded", "probed", "drift"]
+    },
+    "driftKind": {
+      "description": "記録と実体の食い違いの種別(04_state_model.md)。",
+      "type": "string",
+      "enum": ["behind", "ahead", "missing", "untracked"]
+    },
+    "drift": {
+      "description": "drift の詳細。一致時は null。",
+      "type": ["object", "null"],
+      "properties": {
+        "recorded": { "type": ["string", "null"], "description": "ローカル記録の版。" },
+        "remote": { "type": ["string", "null"], "description": "チャネル実体の版。" },
+        "kind": { "$ref": "#/$defs/driftKind" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
+    "commandSpec": {
+      "description": "能力レジストリの 1 エントリ。agent 出力はこれの配列。05_drift_protection.md の単一真実。",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "args": { "type": "string" },
+        "next": {
+          "description": "既定の次コマンド名。状態で上書きされうる。参照先は registry に実在する。",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "required": ["name", "summary"],
+      "additionalProperties": false
+    },
+    "channelRef": {
+      "description": "agent 出力でのチャネル参照(名前と種別のみ)。",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/channelKind" }
+      },
+      "required": ["name", "kind"],
+      "additionalProperties": false
+    },
+    "signTarget": {
+      "description": "OS ごとの署名/公証の状態。signed=false の時は reason を持つ。",
+      "type": "object",
+      "properties": {
+        "signed": { "type": "boolean" },
+        "notarized": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "required": ["signed"],
+      "additionalProperties": false
+    }
+  }
+}
