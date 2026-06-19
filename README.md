@@ -100,9 +100,13 @@ rpm: { provider: fury, user: <name> }   # delivery: https://yum.fury.io/<name>/
 ```
 
 Or give raw URLs for any host — `{ repo: <delivery-url>, push: <upload-url> }` (omit `push` when
-upload and delivery share a host). The upload token is read from `PACKAGE_REPO_TOKEN` (env only,
-never written to `wharfy.yaml` or generated files). When `repo` is unset, `publish` skips the
-channel and its `next:` block walks you through the hosting options.
+upload and delivery share a host). When `repo` is unset, `publish` skips the channel and its
+`next:` block walks you through the hosting options.
+
+The upload token is **never written to `wharfy.yaml` or generated files**. Pass it via the
+`PACKAGE_REPO_TOKEN` environment variable (good for CI), or save it once to your OS keychain with
+`wharfy auth fury` — it prompts hidden (the value never reaches your shell history or an agent's
+transcript) and `publish` then loads it from the keychain when the env var is unset.
 
 Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you, and
 some are **strict**. `homebrew-core` requires a notable, established project **and** a formula

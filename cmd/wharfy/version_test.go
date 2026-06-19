@@ -6,12 +6,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
-// TestMain は package 全体のテストがネットワークに出ないようにする(設計: go test に network 不要)。
-// 新版チェックの既定 URL を無効化し、必要なテストだけ httptest を割り当てる。
+// TestMain は package 全体のテストを外部依存から隔離する(設計: go test に network/keychain 不要)。
+// 新版チェックの既定 URL を無効化し、keyring を in-memory mock にする
+// (resolveToken 経由で実 OS keychain を触らないように)。
 func TestMain(m *testing.M) {
 	releasesAPIURL = ""
+	keyring.MockInit()
 	os.Exit(m.Run())
 }
 

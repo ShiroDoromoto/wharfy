@@ -16,6 +16,7 @@ type handler func(ctx context.Context, c registry.Command, args []string) output
 var handlers = map[string]handler{
 	"version": runVersion,
 	"config":  runConfig,
+	"auth":    runAuth,
 	"build":   runBuild,
 	"release": runRelease,
 	"publish": runPublish,

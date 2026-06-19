@@ -45,6 +45,7 @@ var Commands = []Command{
 	{Name: "agent", Summary: "print this capability map (read once, then drive)", Next: []string{"status"}},
 	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
 	{Name: "config", Summary: "show the resolved effective config", Next: []string{"build"}},
+	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}},
 	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}},
 	{Name: "sign", Summary: "sign & notarize what can be signed", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh)", Next: []string{"publish"}},

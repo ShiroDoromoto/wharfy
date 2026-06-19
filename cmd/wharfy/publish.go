@@ -164,7 +164,7 @@ func unionRequires(chans []string, tagMissing bool) []requirement {
 		reqs = append(reqs, requirement{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (release upload / fork+PR)"})
 	}
 	if containsStr(chans, "apt") || containsStr(chans, "rpm") {
-		reqs = append(reqs, requirement{Requirement: "PACKAGE_REPO_TOKEN", Met: os.Getenv("PACKAGE_REPO_TOKEN") != "", Hint: "export PACKAGE_REPO_TOKEN=… (apt/rpm hosted repo)"})
+		reqs = append(reqs, requirement{Requirement: "PACKAGE_REPO_TOKEN", Met: resolveToken("PACKAGE_REPO_TOKEN", "package_repo_token") != "", Hint: "export PACKAGE_REPO_TOKEN=… or run: wharfy auth fury (keychain)"})
 	}
 	if containsStr(chans, "aur") {
 		reqs = append(reqs, requirement{Requirement: "AUR_SSH_KEY", Met: os.Getenv("AUR_SSH_KEY") != "", Hint: "export AUR_SSH_KEY=… (aur push)"})
@@ -373,7 +373,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if repo == "" {
 			repo = pushURL
 		}
-		token := os.Getenv("PACKAGE_REPO_TOKEN")
+		token := resolveToken("PACKAGE_REPO_TOKEN", "package_repo_token")
 		if token == "" {
 			return skip("PACKAGE_REPO_TOKEN not set")
 		}
@@ -1020,11 +1020,14 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	if tagMissing {
 		return tagMissingResult(c, version)
 	}
-	token := os.Getenv("PACKAGE_REPO_TOKEN")
+	token := resolveToken("PACKAGE_REPO_TOKEN", "package_repo_token")
 	if token == "" {
 		res := output.New(c.Name, "cannot publish without a token", false)
-		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "PACKAGE_REPO_TOKEN required to upload to the hosted repo", Hint: "export PACKAGE_REPO_TOKEN=…"}}
-		res.Next = []output.NextDo{{Reason: "set the token then retry", Do: "export PACKAGE_REPO_TOKEN=… ; wharfy publish " + chName + " --yes"}}
+		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "PACKAGE_REPO_TOKEN required to upload to the hosted repo", Hint: "export PACKAGE_REPO_TOKEN=… or run: wharfy auth fury"}}
+		res.Next = []output.NextDo{
+			{Reason: "save the token to the OS keychain, then retry", Do: "wharfy auth fury"},
+			{Reason: "or pass it via env then retry", Do: "export PACKAGE_REPO_TOKEN=… ; wharfy publish " + chName + " --yes"},
+		}
 		return res
 	}
 
@@ -1112,7 +1115,7 @@ func packageDiff(names []string, repo string) string {
 func pkgRequirements(tagMissing bool) []requirement {
 	return []requirement{
 		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
-		{Requirement: "PACKAGE_REPO_TOKEN", Met: os.Getenv("PACKAGE_REPO_TOKEN") != "", Hint: "export PACKAGE_REPO_TOKEN=… (hosted repo upload)"},
+		{Requirement: "PACKAGE_REPO_TOKEN", Met: resolveToken("PACKAGE_REPO_TOKEN", "package_repo_token") != "", Hint: "export PACKAGE_REPO_TOKEN=… or run: wharfy auth fury (keychain)"},
 	}
 }
 

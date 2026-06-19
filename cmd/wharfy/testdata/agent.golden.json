@@ -30,6 +30,14 @@
       ]
     },
     {
+      "name": "auth",
+      "summary": "save a credential (e.g. fury token) to the OS keychain",
+      "args": "\u003ckind\u003e",
+      "next": [
+        "publish"
+      ]
+    },
+    {
       "name": "build",
       "summary": "cross-compile for every os/arch",
       "next": [

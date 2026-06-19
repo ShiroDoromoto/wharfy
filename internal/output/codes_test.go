@@ -32,6 +32,7 @@ var expectedCodes = []string{
 	"github_unresolved",
 	"goinstall_only_go",
 	"internal",
+	"keychain_failed",
 	"main_ambiguous",
 	"network_error",
 	"probe_failed",

@@ -32,6 +32,7 @@ const (
 	ErrBuilderUnavailable = "builder_unavailable"  // 下層ビルダ(GoReleaser)が見つからない/起動不可
 	ErrTokenMissing       = "token_missing"        // その操作に必須のトークン未設定
 	ErrAuthFailed         = "auth_failed"          // トークン/鍵はあるが認証失敗
+	ErrKeychainFailed     = "keychain_failed"      // OS keychain への保存/読み出しに失敗(ロック/権限)
 	ErrTargetCreateFailed = "target_create_failed" // 自前 tap/bucket/repo 作成失敗
 	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
@@ -75,6 +76,7 @@ var Catalog = []CatalogEntry{
 	{ErrBuilderUnavailable, KindError, "下層ビルダが見つからない/起動不可"},
 	{ErrTokenMissing, KindError, "その操作に必須のトークン未設定"},
 	{ErrAuthFailed, KindError, "トークン/鍵はあるが認証失敗"},
+	{ErrKeychainFailed, KindError, "OS keychain への保存/読み出しに失敗(ロック/権限)"},
 	{ErrTargetCreateFailed, KindError, "自前 tap/bucket/repo 作成失敗"},
 	{ErrConsentRequired, KindError, "strict gated への申請に明示同意が必要(未同意)"},
 	{ErrPublishFailed, KindError, "チャネルへの発行失敗"},
