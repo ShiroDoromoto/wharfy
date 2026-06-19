@@ -21,13 +21,14 @@ type ArchiveRef struct {
 
 // FormulaInput は formula 生成の入力(解決済み設定＋アーカイブ情報から組む)。
 type FormulaInput struct {
-	Project     string
-	Binary      string // 既定: Project
-	Description string
-	Homepage    string
-	License     string
-	Version     string // 先頭 v なしの版(例: 1.4.0)
-	Archives    []ArchiveRef
+	Project      string
+	Binary       string // 既定: Project
+	Description  string
+	Homepage     string
+	License      string
+	Version      string   // 先頭 v なしの版(例: 1.4.0)
+	Dependencies []string // ランタイム依存(depends_on "<dep>")。空なら出さない
+	Archives     []ArchiveRef
 }
 
 // GenerateFormula は formula 文字列を生成する。darwin/linux の arm/intel を持つ分だけ出す。
@@ -49,6 +50,14 @@ func GenerateFormula(in FormulaInput) string {
 		fmt.Fprintf(&b, "  license %q\n", in.License)
 	}
 	b.WriteString("\n")
+
+	// ランタイム依存は全 OS 共通なので on_* ブロックの外(top-level)に出す。決定的に sort。
+	for _, dep := range sortedDeps(in.Dependencies) {
+		fmt.Fprintf(&b, "  depends_on %q\n", dep)
+	}
+	if len(in.Dependencies) > 0 {
+		b.WriteString("\n")
+	}
 
 	writeOSBlock(&b, "on_macos", "darwin", in.Archives)
 	writeOSBlock(&b, "on_linux", "linux", in.Archives)
@@ -113,6 +122,13 @@ func className(project string) string {
 		parts[i] = strings.ToUpper(p[:1]) + p[1:]
 	}
 	return strings.Join(parts, "")
+}
+
+// sortedDeps は依存リストを入力を壊さずに sort したコピーを返す(生成物を決定的にする・02)。
+func sortedDeps(deps []string) []string {
+	out := append([]string(nil), deps...)
+	sort.Strings(out)
+	return out
 }
 
 // SortArchives は os/arch で安定順にする(生成 formula を決定的にして diff/golden を安定させる)。

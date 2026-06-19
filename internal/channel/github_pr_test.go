@@ -74,3 +74,19 @@ func TestGenerateCoreFormulaMainPath(t *testing.T) {
 		t.Errorf("default main should be root \".\":\n%s", g)
 	}
 }
+
+// core formula はソースビルドの go(build 依存)に加え、宣言したランタイム依存も出す。
+func TestGenerateCoreFormulaRuntimeDeps(t *testing.T) {
+	f := GenerateCoreFormula(CoreFormulaInput{
+		Project: "x", Version: "1", SourceURL: "u", SourceSHA: "s",
+		Dependencies: []string{"openssl", "git"}, // 非ソート
+	})
+	if !strings.Contains(f, "  depends_on \"git\"\n  depends_on \"openssl\"\n  depends_on \"go\" => :build\n") {
+		t.Errorf("runtime deps (sorted) must precede the go build dep:\n%s", f)
+	}
+	// 依存無しでも go の build 依存は出る(従来挙動)。
+	g := GenerateCoreFormula(CoreFormulaInput{Project: "x", Version: "1", SourceURL: "u", SourceSHA: "s"})
+	if !strings.Contains(g, `depends_on "go" => :build`) {
+		t.Errorf("build dep go must remain:\n%s", g)
+	}
+}

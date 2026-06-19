@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -49,15 +50,24 @@ type glDockerV2 struct {
 }
 
 // glNFPM は deb/rpm 生成(apt/rpm チャネル)。nfpm 経由でビルド成果物からパッケージを作る。
+// 依存はフォーマットごとに名前が異なるため Overrides(deb/rpm)に振り分ける(apt と rpm を別宣言)。
 type glNFPM struct {
-	ID          string   `yaml:"id"`
-	PackageName string   `yaml:"package_name"`
-	IDs         []string `yaml:"ids"` // 含めるビルド id(旧 builds)
-	Homepage    string   `yaml:"homepage,omitempty"`
-	Description string   `yaml:"description,omitempty"`
-	License     string   `yaml:"license,omitempty"`
-	Maintainer  string   `yaml:"maintainer"`
-	Formats     []string `yaml:"formats"`
+	ID          string                    `yaml:"id"`
+	PackageName string                    `yaml:"package_name"`
+	IDs         []string                  `yaml:"ids"` // 含めるビルド id(旧 builds)
+	Homepage    string                    `yaml:"homepage,omitempty"`
+	Description string                    `yaml:"description,omitempty"`
+	License     string                    `yaml:"license,omitempty"`
+	Maintainer  string                    `yaml:"maintainer"`
+	Formats     []string                  `yaml:"formats"`
+	Overrides   map[string]glNFPMOverride `yaml:"overrides,omitempty"`
+}
+
+// glNFPMOverride は 1 フォーマット(deb/rpm)固有の上書き。ランタイム依存を区分ごとに持つ。
+type glNFPMOverride struct {
+	Depends    []string `yaml:"depends,omitempty"`
+	Recommends []string `yaml:"recommends,omitempty"`
+	Suggests   []string `yaml:"suggests,omitempty"`
 }
 
 // DistDir はビルド成果物の出力先(.wharfy 配下＝利用者 root を汚さない・03)。
@@ -150,6 +160,7 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 			License:     cfg.License,
 			Maintainer:  maintainer(cfg),
 			Formats:     formats,
+			Overrides:   nfpmOverrides(cfg, in),
 		}}
 	}
 
@@ -292,6 +303,54 @@ func pkgFormats(cfg Config) []string {
 		f = append(f, "rpm")
 	}
 	return f
+}
+
+// nfpmOverrides は apt(→deb)/rpm(→rpm)で宣言したランタイム依存を、有効なフォーマットだけ
+// overrides.<format> に振り分ける。依存名はディストロで異なるため format ごとに別宣言できる。
+// 依存無し(または該当チャネル無効)なら nil を返し、overrides は出力に出ない(後方互換)。
+func nfpmOverrides(cfg Config, in File) map[string]glNFPMOverride {
+	out := map[string]glNFPMOverride{}
+	if HasChannel(cfg, "apt") {
+		if ov, ok := repoOverride(in.Apt); ok {
+			out["deb"] = ov
+		}
+	}
+	if HasChannel(cfg, "rpm") {
+		if ov, ok := repoOverride(in.Rpm); ok {
+			out["rpm"] = ov
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// repoOverride は RepoInput の依存 3 区分を 1 フォーマットの override に変換する(決定的に sort)。
+// 全区分が空なら ok=false(その format の override を出さない)。
+func repoOverride(in *RepoInput) (glNFPMOverride, bool) {
+	if in == nil {
+		return glNFPMOverride{}, false
+	}
+	ov := glNFPMOverride{
+		Depends:    sortedStrings(in.Depends),
+		Recommends: sortedStrings(in.Recommends),
+		Suggests:   sortedStrings(in.Suggests),
+	}
+	if len(ov.Depends) == 0 && len(ov.Recommends) == 0 && len(ov.Suggests) == 0 {
+		return glNFPMOverride{}, false
+	}
+	return ov, true
+}
+
+// sortedStrings は入力を壊さず sort したコピーを返す(空なら nil で omitempty に乗せる)。
+func sortedStrings(ss []string) []string {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := append([]string(nil), ss...)
+	sort.Strings(out)
+	return out
 }
 
 // maintainer は nfpm が要求する maintainer を github owner から組む(deb は必須)。

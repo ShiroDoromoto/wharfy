@@ -64,14 +64,15 @@
       "type": "object",
       "properties": {
         "tap": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "既定: <owner>/homebrew-<project>。" },
-        "dependencies": { "type": "array", "items": { "type": "string" } }
+        "dependencies": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "ランタイム依存。formula の depends_on \"<dep>\" として出力。" }
       },
       "additionalProperties": false
     },
     "scoop": {
       "type": "object",
       "properties": {
-        "bucket": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "既定: <owner>/scoop-<project>。" }
+        "bucket": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "既定: <owner>/scoop-<project>。" },
+        "dependencies": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "ランタイム依存。manifest の depends として出力。" }
       },
       "additionalProperties": false
     },
@@ -81,7 +82,10 @@
         "provider": { "type": "string", "enum": ["fury"], "description": "ホスト型サービス。指定すると user から push/配信 URL を自動導出する。" },
         "user": { "type": "string", "description": "provider の名前空間(fury のユーザー名)。provider 指定時に必須。" },
         "repo": { "type": "string", "format": "uri", "description": "配信(probe/install)URL。provider 未指定時に使用。" },
-        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック(push=配信が同一の汎用ホスト用)。" }
+        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック(push=配信が同一の汎用ホスト用)。" },
+        "depends": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "必須ランタイム依存(deb Depends)。deb の生成物にのみ反映。" },
+        "recommends": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "推奨依存(deb Recommends)。" },
+        "suggests": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "提案依存(deb Suggests)。" }
       },
       "additionalProperties": false
     },
@@ -91,7 +95,10 @@
         "provider": { "type": "string", "enum": ["fury"], "description": "ホスト型サービス。指定すると user から push/配信 URL を自動導出する。" },
         "user": { "type": "string", "description": "provider の名前空間(fury のユーザー名)。provider 指定時に必須。" },
         "repo": { "type": "string", "format": "uri", "description": "yum/dnf 共通の配信(probe/install)URL。provider 未指定時に使用。" },
-        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック。" }
+        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック。" },
+        "depends": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "必須ランタイム依存(rpm Requires)。rpm の生成物にのみ反映。" },
+        "recommends": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "推奨依存(rpm 弱依存 Recommends)。" },
+        "suggests": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "提案依存(rpm Suggests)。" }
       },
       "additionalProperties": false
     },

@@ -57,6 +57,81 @@ func TestNFPMFormats(t *testing.T) {
 	}
 }
 
+// nfpmOverridesOf は生成 YAML から nfpms[0].overrides を取り出す(無ければ nil)。
+func nfpmOverridesOf(t *testing.T, cfg Config, in File) map[string]any {
+	t.Helper()
+	data, err := GenerateGoReleaser(cfg, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	nf, ok := m["nfpms"].([]any)
+	if !ok || len(nf) == 0 {
+		return nil
+	}
+	ov, _ := nf[0].(map[string]any)["overrides"].(map[string]any)
+	return ov
+}
+
+func strSlice(v any) []string {
+	items, _ := v.([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.(string))
+	}
+	return out
+}
+
+func TestNFPMOverrides(t *testing.T) {
+	cfg := pkgConfig("apt", "rpm")
+	in := File{
+		// 依存名はディストロで違うので apt と rpm を別宣言。入力は非ソート。
+		Apt: &RepoInput{Depends: []string{"git", "ca-certificates"}, Recommends: []string{"bash-completion"}},
+		Rpm: &RepoInput{Depends: []string{"git-core"}},
+	}
+	ov := nfpmOverridesOf(t, cfg, in)
+	if ov == nil {
+		t.Fatal("expected overrides for apt+rpm with deps")
+	}
+	deb, _ := ov["deb"].(map[string]any)
+	if got := strSlice(deb["depends"]); len(got) != 2 || got[0] != "ca-certificates" || got[1] != "git" {
+		t.Errorf("deb.depends should be sorted [ca-certificates git], got %v", deb["depends"])
+	}
+	if got := strSlice(deb["recommends"]); len(got) != 1 || got[0] != "bash-completion" {
+		t.Errorf("deb.recommends = %v", deb["recommends"])
+	}
+	rpm, _ := ov["rpm"].(map[string]any)
+	if got := strSlice(rpm["depends"]); len(got) != 1 || got[0] != "git-core" {
+		t.Errorf("rpm.depends = %v (format isolation: rpm must not inherit apt deps)", rpm["depends"])
+	}
+	if _, ok := rpm["recommends"]; ok {
+		t.Errorf("rpm declared no recommends → key must be omitted, got %v", rpm["recommends"])
+	}
+}
+
+func TestNFPMOverridesOmitted(t *testing.T) {
+	// 依存無し → overrides を出さない(後方互換)。
+	if ov := nfpmOverridesOf(t, pkgConfig("apt", "rpm"), File{}); ov != nil {
+		t.Errorf("no deps → no overrides, got %v", ov)
+	}
+	// apt のみ宣言 → deb override だけ。rpm チャネル無効なら rpm 宣言は無視。
+	cfg := pkgConfig("apt")
+	in := File{
+		Apt: &RepoInput{Depends: []string{"git"}},
+		Rpm: &RepoInput{Depends: []string{"should-not-appear"}},
+	}
+	ov := nfpmOverridesOf(t, cfg, in)
+	if _, ok := ov["deb"]; !ok {
+		t.Errorf("apt deps → deb override expected, got %v", ov)
+	}
+	if _, ok := ov["rpm"]; ok {
+		t.Errorf("rpm channel disabled → no rpm override, got %v", ov)
+	}
+}
+
 func TestResolveAptRpmTarget(t *testing.T) {
 	r := stubResolver("https://github.com/acme/widget-demo.git", []string{"./cmd/widget"}, "github.com/acme/widget-demo")
 	cfg, err := r.Resolve(File{

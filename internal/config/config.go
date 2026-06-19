@@ -50,6 +50,12 @@ type RepoInput struct {
 	Push     string `yaml:"push"`     // アップロード URL。空なら Repo にフォールバック
 	Provider string `yaml:"provider"` // "fury" 等。User から push/配信を導出する
 	User     string `yaml:"user"`     // provider の名前空間(fury のユーザー名)
+	// ランタイム依存。deb/rpm の native 3 区分に対応(必須/推奨/提案)。
+	// 単一 nfpm エントリの overrides.<format> に振り分けるため apt と rpm で別々に書ける
+	// (依存パッケージ名はディストロで異なるため)。空なら出力に出ない(後方互換)。
+	Depends    []string `yaml:"depends"`    // 必須(deb Depends / rpm Requires)
+	Recommends []string `yaml:"recommends"` // 推奨(deb Recommends / rpm 弱依存)
+	Suggests   []string `yaml:"suggests"`   // 提案(deb Suggests)
 }
 
 // ContainerInput は OCI イメージの設定。Image は既定 ghcr.io/<owner>/<project> を上書き。
@@ -70,7 +76,8 @@ type HomebrewInput struct {
 }
 
 type ScoopInput struct {
-	Bucket string `yaml:"bucket"`
+	Bucket       string   `yaml:"bucket"`
+	Dependencies []string `yaml:"dependencies"`
 }
 
 type GoinstallIn struct {

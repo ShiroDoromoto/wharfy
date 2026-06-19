@@ -438,7 +438,8 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		}
 		formula := channel.GenerateCoreFormula(channel.CoreFormulaInput{
 			Project: cfg.Project, Binary: cfg.Project, Main: cfg.Main, Description: in.Description, Homepage: cfg.Homepage,
-			License: cfg.License, Version: version, SourceURL: sourceTarballURL(ghOwner, ghRepo, version), SourceSHA: sha})
+			License: cfg.License, Version: version, Dependencies: homebrewDeps(in),
+			SourceURL: sourceTarballURL(ghOwner, ghRepo, version), SourceSHA: sha})
 		prURL, err := newCoreSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, channel.CoreInput{
 			Central: central, Project: cfg.Project, Version: version,
 			FormulaFile: channel.CoreFormulaPath(cfg.Project), Formula: formula})
@@ -802,7 +803,7 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 	mkFormula := func(sha string) string {
 		return channel.GenerateCoreFormula(channel.CoreFormulaInput{
 			Project: cfg.Project, Binary: cfg.Project, Main: cfg.Main, Description: in.Description,
-			Homepage: cfg.Homepage, License: cfg.License, Version: version,
+			Homepage: cfg.Homepage, License: cfg.License, Version: version, Dependencies: homebrewDeps(in),
 			SourceURL: srcURL, SourceSHA: sha,
 		})
 	}
@@ -1363,6 +1364,22 @@ func channelPushTargetByName(cfg config.Config, name string) string {
 	return ""
 }
 
+// homebrewDeps / scoopDeps は wharfy.yaml の宣言した owned チャネルのランタイム依存を返す
+// (契約に出ない生成入力なので解決後 Config ではなく File から直接引く)。in が nil なら空。
+func homebrewDeps(in config.File) []string {
+	if in.Homebrew == nil {
+		return nil
+	}
+	return in.Homebrew.Dependencies
+}
+
+func scoopDeps(in config.File) []string {
+	if in.Scoop == nil {
+		return nil
+	}
+	return in.Scoop.Dependencies
+}
+
 // homebrewPublisher / scoopPublisher は archive から各 Publisher を組む。
 func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Homebrew {
 	return &channel.Homebrew{
@@ -1370,12 +1387,13 @@ func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo
 		Tap:     tap,
 		Store:   newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN")),
 		Input: channel.FormulaInput{
-			Project:     cfg.Project,
-			Description: in.Description,
-			Homepage:    cfg.Homepage,
-			License:     cfg.License,
-			Version:     version,
-			Archives:    formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+			Project:      cfg.Project,
+			Description:  in.Description,
+			Homepage:     cfg.Homepage,
+			License:      cfg.License,
+			Version:      version,
+			Dependencies: homebrewDeps(in),
+			Archives:     formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 		},
 	}
 }
@@ -1386,14 +1404,15 @@ func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, gh
 		Bucket:  bucket,
 		Store:   newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN")),
 		Input: channel.ScoopInput{
-			Project:     cfg.Project,
-			Description: in.Description,
-			Homepage:    cfg.Homepage,
-			License:     cfg.License,
-			Version:     version,
-			Owner:       ghOwner,
-			Repo:        ghRepo,
-			Archives:    scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+			Project:      cfg.Project,
+			Description:  in.Description,
+			Homepage:     cfg.Homepage,
+			License:      cfg.License,
+			Version:      version,
+			Dependencies: scoopDeps(in),
+			Owner:        ghOwner,
+			Repo:         ghRepo,
+			Archives:     scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 		},
 	}
 }

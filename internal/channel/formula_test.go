@@ -42,6 +42,20 @@ func TestGenerateFormulaStructure(t *testing.T) {
 	}
 }
 
+func TestGenerateFormulaDependencies(t *testing.T) {
+	in := sampleInput()
+	in.Dependencies = []string{"node", "git"} // 非ソート入力
+	got := GenerateFormula(in)
+	// top-level に sort 済みで出る(全 OS 共通)。
+	if !strings.Contains(got, "  depends_on \"git\"\n  depends_on \"node\"\n") {
+		t.Errorf("expected sorted top-level depends_on lines:\n%s", got)
+	}
+	// 依存無しは一切出さない(後方互換)。
+	if strings.Contains(GenerateFormula(sampleInput()), "depends_on") {
+		t.Errorf("no deps should omit depends_on entirely")
+	}
+}
+
 func TestGenerateFormulaOnlyAvailableOS(t *testing.T) {
 	in := sampleInput()
 	in.Archives = []ArchiveRef{{OS: "linux", Arch: "amd64", URL: "u", SHA256: "x"}}

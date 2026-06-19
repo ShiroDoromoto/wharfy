@@ -54,6 +54,32 @@ func TestManifestVersion(t *testing.T) {
 	}
 }
 
+func TestGenerateScoopManifestDependencies(t *testing.T) {
+	in := scoopInput()
+	in.Dependencies = []string{"nodejs", "git"} // 非ソート入力
+	var m map[string]any
+	if err := json.Unmarshal([]byte(GenerateScoopManifest(in)), &m); err != nil {
+		t.Fatalf("manifest not valid JSON: %v", err)
+	}
+	deps, ok := m["depends"].([]any)
+	if !ok || len(deps) != 2 || deps[0] != "git" || deps[1] != "nodejs" {
+		t.Errorf("depends should be sorted [git, nodejs], got %v", m["depends"])
+	}
+	// 依存無しは depends を出さない(omitempty・後方互換)。
+	if _, ok := mapFromJSON(t, GenerateScoopManifest(scoopInput()))["depends"]; ok {
+		t.Errorf("no deps should omit depends")
+	}
+}
+
+func mapFromJSON(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	return m
+}
+
 func newScoop(store TapStore) *Scoop {
 	return &Scoop{Project: "widget", Bucket: "acme/scoop-widget", Store: store, Input: scoopInput()}
 }

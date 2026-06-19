@@ -20,14 +20,15 @@ type ScoopArch struct {
 
 // ScoopInput は manifest 生成の入力。
 type ScoopInput struct {
-	Project     string
-	Binary      string // 既定: Project。bin は <Binary>.exe
-	Description string
-	Homepage    string
-	License     string
-	Version     string // 先頭 v なし(例: 1.4.0)
-	Owner, Repo string // autoupdate URL の Releases リポジトリ
-	Archives    []ScoopArch
+	Project      string
+	Binary       string // 既定: Project。bin は <Binary>.exe
+	Description  string
+	Homepage     string
+	License      string
+	Version      string   // 先頭 v なし(例: 1.4.0)
+	Dependencies []string // ランタイム依存(manifest の "depends")。空なら出さない
+	Owner, Repo  string   // autoupdate URL の Releases リポジトリ
+	Archives     []ScoopArch
 }
 
 // Scoop は scoop チャネルの Publisher。Bucket は "owner/scoop-<project>"。
@@ -110,6 +111,7 @@ type scoopManifest struct {
 	Description  string                    `json:"description,omitempty"`
 	Homepage     string                    `json:"homepage,omitempty"`
 	License      string                    `json:"license,omitempty"`
+	Depends      []string                  `json:"depends,omitempty"`
 	Architecture map[string]scoopArchEntry `json:"architecture"`
 	Checkver     string                    `json:"checkver,omitempty"`
 	Autoupdate   *scoopAutoupdate          `json:"autoupdate,omitempty"`
@@ -158,11 +160,16 @@ func GenerateScoopManifest(in ScoopInput) string {
 		}
 	}
 
+	var depends []string
+	if len(in.Dependencies) > 0 {
+		depends = sortedDeps(in.Dependencies) // 決定的に sort(02 出力契約)
+	}
 	m := scoopManifest{
 		Version:      in.Version,
 		Description:  in.Description,
 		Homepage:     in.Homepage,
 		License:      in.License,
+		Depends:      depends,
 		Architecture: arch,
 		Checkver:     "github",
 	}

@@ -108,6 +108,24 @@ The upload token is **never written to `wharfy.yaml` or generated files**. Pass 
 `wharfy auth fury` — it prompts hidden (the value never reaches your shell history or an agent's
 transcript) and `publish` then loads it from the keychain when the env var is unset.
 
+### Runtime dependencies
+
+If your binary shells out to another tool at runtime, declare it so "the usual install" pulls
+it in too. Each owned package channel emits it in that channel's native form:
+
+```yaml
+homebrew: { dependencies: [git] }                       # → depends_on "git"
+scoop:    { dependencies: [git] }                       # → manifest "depends"
+apt:      { provider: fury, user: <name>, depends: [git], recommends: [bash-completion] }
+rpm:      { provider: fury, user: <name>, depends: [git-core] }   # package names differ per distro
+```
+
+`apt`/`rpm` keep `depends` (required) / `recommends` / `suggests` separate — deb's three tiers
+(rpm maps them to `Requires` + weak deps) — and each set is scoped to its own format, so the
+package names can differ across distros. Output is deterministic (sorted); omit the key and the
+generated artifact is unchanged. (`homebrew-core` source-build formulae also get these as
+`depends_on`, alongside the build-only `go`.)
+
 Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you, and
 some are **strict**. `homebrew-core` requires a notable, established project **and** a formula
 that passes `brew audit --new --strict`. For it, wharfy generates a **source-build** formula

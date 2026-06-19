@@ -40,15 +40,16 @@ type CoreSubmitter interface {
 // CoreFormulaInput は homebrew-core 向け source-build formula の入力。
 // binary を同梱せずソースから `go build` する core 流儀(自前 tap の binary formula とは別物)。
 type CoreFormulaInput struct {
-	Project     string
-	Binary      string // 既定: Project
-	Main        string // main パッケージのパス(例 ./cmd/wharfy)。空なら "." (リポジトリ root)
-	Description string
-	Homepage    string
-	License     string
-	Version     string // 先頭 v なし
-	SourceURL   string // ソース tarball(GitHub の tags archive)
-	SourceSHA   string // そのソース tarball の sha256(空なら dry-run の暫定表示)
+	Project      string
+	Binary       string // 既定: Project
+	Main         string // main パッケージのパス(例 ./cmd/wharfy)。空なら "." (リポジトリ root)
+	Description  string
+	Homepage     string
+	License      string
+	Version      string   // 先頭 v なし
+	Dependencies []string // ランタイム依存(depends_on "<dep>")。build 依存の go とは別に出す
+	SourceURL    string   // ソース tarball(GitHub の tags archive)
+	SourceSHA    string   // そのソース tarball の sha256(空なら dry-run の暫定表示)
 }
 
 // GenerateCoreFormula は homebrew-core 向けの source-build formula(Go)を生成する。
@@ -79,7 +80,11 @@ func GenerateCoreFormula(in CoreFormulaInput) string {
 	if in.License != "" {
 		fmt.Fprintf(&b, "  license %q\n", in.License)
 	}
-	b.WriteString("\n  depends_on \"go\" => :build\n\n")
+	b.WriteString("\n")
+	for _, dep := range sortedDeps(in.Dependencies) {
+		fmt.Fprintf(&b, "  depends_on %q\n", dep)
+	}
+	b.WriteString("  depends_on \"go\" => :build\n\n")
 	b.WriteString("  def install\n")
 	fmt.Fprintf(&b, "    system \"go\", \"build\", *std_go_args(ldflags: \"-s -w -X main.version=#{version}\"), %q\n", mainPkg)
 	b.WriteString("  end\n\n")
