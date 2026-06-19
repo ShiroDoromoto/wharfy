@@ -102,7 +102,7 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 		Github:   github,
 		Homepage: homepage,
 		License:  license,
-		Channels: r.resolveChannels(in, owner, project),
+		Channels: r.resolveChannels(in, owner, github, project),
 		Build:    resolveBuild(in.Build),
 	}
 	return cfg, mainErr
@@ -130,7 +130,7 @@ func (r *Resolver) resolveMain(explicit, project string) (string, error) {
 }
 
 // resolveChannels は channels の明示値 or 既定列を、種別・発行先まで解決する。
-func (r *Resolver) resolveChannels(in File, owner, project string) []ResolvedChannel {
+func (r *Resolver) resolveChannels(in File, owner, github, project string) []ResolvedChannel {
 	names := in.Channels
 	if len(names) == 0 {
 		names = DefaultChannels
@@ -140,7 +140,7 @@ func (r *Resolver) resolveChannels(in File, owner, project string) []ResolvedCha
 		out = append(out, ResolvedChannel{
 			Name:   name,
 			Kind:   Kind(name),
-			Target: r.channelTarget(name, in, owner, project),
+			Target: r.channelTarget(name, in, owner, github, project),
 		})
 	}
 	return out
@@ -148,7 +148,7 @@ func (r *Resolver) resolveChannels(in File, owner, project string) []ResolvedCha
 
 // channelTarget は自前 tap/bucket 等の発行先を既定生成する(ADR-8: プロジェクトごと命名)。
 // 解決できない(owner 不明など)場合は空(schema 上 target は任意)。
-func (r *Resolver) channelTarget(name string, in File, owner, project string) string {
+func (r *Resolver) channelTarget(name string, in File, owner, github, project string) string {
 	switch name {
 	case "homebrew":
 		if in.Homebrew != nil && in.Homebrew.Tap != "" {
@@ -165,9 +165,9 @@ func (r *Resolver) channelTarget(name string, in File, owner, project string) st
 			return fmt.Sprintf("%s/scoop-%s", owner, project)
 		}
 	case "releases":
-		if owner != "" {
-			return owner + "/" + project
-		}
+		// 発行先は実リポジトリ(github の owner/repo)。project 名と repo 名が違う場合に
+		// owner/project だと実体とズレるため github をそのまま使う。
+		return github
 	case "goinstall":
 		if in.Goinstall != nil && in.Goinstall.Module != "" {
 			return in.Goinstall.Module

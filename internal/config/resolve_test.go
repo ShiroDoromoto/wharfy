@@ -77,6 +77,22 @@ func TestResolveExplicitWins(t *testing.T) {
 	}
 }
 
+// releases の発行先は実リポジトリ(github)。project 名と repo 名が違っても github を使う。
+func TestResolveReleasesTargetIsGithub(t *testing.T) {
+	r := stubResolver("https://github.com/acme/widget-demo.git", []string{"./cmd/widget"}, "github.com/acme/widget-demo")
+	cfg, err := r.Resolve(File{Project: "widget", Channels: []string{"homebrew", "releases"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := targetOf(cfg, "releases"); got != "acme/widget-demo" {
+		t.Errorf("releases target = %q, want acme/widget-demo (the real repo, not owner/project)", got)
+	}
+	// homebrew は ADR-8 の <owner>/homebrew-<project> のまま。
+	if got := targetOf(cfg, "homebrew"); got != "acme/homebrew-widget" {
+		t.Errorf("homebrew target = %q, want acme/homebrew-widget", got)
+	}
+}
+
 func TestResolvePrefersCmdProject(t *testing.T) {
 	// ./cmd/<project> が候補にあれば、複数 main でもそれを選ぶ(曖昧扱いしない)。
 	r := stubResolver("https://github.com/acme/mytool.git",
