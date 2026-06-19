@@ -54,6 +54,13 @@ type Containerizer interface {
 	Containers(ctx context.Context, root, configPath string) ([]Artifact, error)
 }
 
+// MultiReleaser は全チャネル一括発行の境界。1 回の release で archive・nfpm・docker を
+// まとめて作り/上げ、Archive ＋ Linux Package 成果物を返す(publish 一括で多重 release を避ける)。
+// skipDocker=true で docker pipe を抑止(container を出さない/docker 不在のとき)。
+type MultiReleaser interface {
+	ReleaseAll(ctx context.Context, root, configPath string, skipDocker bool) ([]Artifact, error)
+}
+
 // UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
 type UnavailableError struct {
 	Bin string
@@ -99,7 +106,7 @@ func NewGoReleaserBuilder(distDir string) *GoReleaserBuilder {
 
 func (b *GoReleaserBuilder) Build(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	// build = クロスビルドのみ(発行しない)。--snapshot で tag 無しでも通す。--clean で dist を掃除。
-	return b.runAndParse(ctx, root, configPath, "Binary",
+	return b.runAndParse(ctx, root, configPath, []string{"Binary"},
 		"build", "--snapshot", "--clean", "--config", configPath)
 }
 
@@ -107,7 +114,7 @@ func (b *GoReleaserBuilder) Build(ctx context.Context, root, configPath string) 
 // homebrew formula 等は archive の sha256 を要するため、build(バイナリのみ)とは別経路で作る。
 // --snapshot は tag 無し・dirty でも通り、発行はしない(ローカル生成のみ＝preview 用)。
 func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath string) ([]Artifact, error) {
-	return b.runAndParse(ctx, root, configPath, "Archive",
+	return b.runAndParse(ctx, root, configPath, []string{"Archive"},
 		"release", "--snapshot", "--clean", "--config", configPath)
 }
 
@@ -116,25 +123,37 @@ func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath strin
 // formula push は wharfy が所有するので --skip=homebrew で goreleaser には書かせない(03)。
 func (b *GoReleaserBuilder) Release(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	// docker は container チャネルが別経路(Containers)で扱うので、ここでは作らない。
-	return b.runAndParse(ctx, root, configPath, "Archive",
+	return b.runAndParse(ctx, root, configPath, []string{"Archive"},
 		"release", "--clean", "--skip=homebrew,docker", "--config", configPath)
 }
 
 // Packages は nfpm の deb/rpm をローカルに作る。--skip=publish で GitHub には上げない
 // (apt/rpm の発行先は hosted repo)。実タグの版でパッケージ化するため --snapshot は使わない。
 func (b *GoReleaserBuilder) Packages(ctx context.Context, root, configPath string) ([]Artifact, error) {
-	return b.runAndParse(ctx, root, configPath, "Linux Package",
+	return b.runAndParse(ctx, root, configPath, []string{"Linux Package"},
 		"release", "--clean", "--skip=publish,docker", "--config", configPath)
 }
 
 // Containers は OCI イメージ(per-arch)をビルドし ghcr へ push、manifest list を作る。
 // goreleaser の docker pipe に任せる(ADR-5)。docker デーモン ＋ ghcr 認証が要る。
 func (b *GoReleaserBuilder) Containers(ctx context.Context, root, configPath string) ([]Artifact, error) {
-	return b.runAndParse(ctx, root, configPath, "Docker Image",
+	return b.runAndParse(ctx, root, configPath, []string{"Docker Image"},
 		"release", "--clean", "--skip=homebrew", "--config", configPath)
 }
 
-func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, typ string, args ...string) ([]Artifact, error) {
+// ReleaseAll は 1 回の release で全成果物を作る(publish 一括用)。archive・install.sh(extra_files)・
+// nfpm を GitHub Releases へ上げ、container 設定があれば docker も build+push する(--skip=homebrew
+// のみ。dockers ブロックが無ければ docker は noop)。Archive ＋ Linux Package 成果物を返す。
+func (b *GoReleaserBuilder) ReleaseAll(ctx context.Context, root, configPath string, skipDocker bool) ([]Artifact, error) {
+	skip := "homebrew"
+	if skipDocker {
+		skip = "homebrew,docker"
+	}
+	return b.runAndParse(ctx, root, configPath, []string{"Archive", "Linux Package"},
+		"release", "--clean", "--skip="+skip, "--config", configPath)
+}
+
+func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath string, types []string, args ...string) ([]Artifact, error) {
 	if _, err := b.LookPath(b.Bin); err != nil {
 		return nil, &UnavailableError{Bin: b.Bin, Err: err}
 	}
@@ -142,7 +161,7 @@ func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, t
 	if err != nil {
 		return nil, &FailedError{Err: err, Output: tail(out, 4000)}
 	}
-	return parseArtifacts(root, filepath.Join(root, b.DistDir, "artifacts.json"), typ)
+	return parseArtifacts(root, filepath.Join(root, b.DistDir, "artifacts.json"), types...)
 }
 
 // glArtifact は GoReleaser の dist/artifacts.json の 1 エントリ(必要分のみ)。
@@ -153,9 +172,13 @@ type glArtifact struct {
 	Type string `json:"type"`
 }
 
-// parseArtifacts は artifacts.json を読み、指定 type(Binary/Archive)だけ抜き、
+// parseArtifacts は artifacts.json を読み、指定 type(Binary/Archive/Linux Package 等)だけ抜き、
 // 各ファイルの sha256 を自前計算する。GoReleaser のチェックサム形式に依存しない(robust)。
-func parseArtifacts(root, artifactsPath, typ string) ([]Artifact, error) {
+func parseArtifacts(root, artifactsPath string, types ...string) ([]Artifact, error) {
+	want := make(map[string]bool, len(types))
+	for _, t := range types {
+		want[t] = true
+	}
 	b, err := os.ReadFile(artifactsPath)
 	if err != nil {
 		return nil, &FailedError{Err: fmt.Errorf("read %s: %w", artifactsPath, err)}
@@ -166,7 +189,7 @@ func parseArtifacts(root, artifactsPath, typ string) ([]Artifact, error) {
 	}
 	var out []Artifact
 	for _, a := range raw {
-		if a.Type != typ {
+		if !want[a.Type] {
 			continue
 		}
 		full := a.Path

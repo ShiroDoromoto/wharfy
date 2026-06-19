@@ -35,6 +35,7 @@ var (
 	}
 	newWingetSubmitter = func(token string) channel.Submitter { return channel.NewGitHubWingetSubmitter(token) }
 	newAurPusher       = func(sshKey string) channel.AurPusher { return channel.NewGitAurPusher(sshKey) }
+	newMultiReleaser   = func(distDir string) build.MultiReleaser { return build.NewGoReleaserBuilder(distDir) }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
@@ -64,11 +65,6 @@ type requirement struct {
 // --yes 無し: plan のプレビュー(applied:false)。--yes: 実書き込み(applied:true)。
 // 実装済み: homebrew / goinstall。未対応チャネルは plan で skip を返す(型は同一)。
 func runPublish(ctx context.Context, c registry.Command, args []string) output.Result {
-	ch := "homebrew"
-	if len(args) > 0 {
-		ch = args[0]
-	}
-
 	root, err := os.Getwd()
 	if err != nil {
 		return internalError(c, err)
@@ -84,7 +80,12 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	}
 	version, tagMissing := publishVersion(root)
 
-	switch ch {
+	// 引数なし = 全チャネル一括(release は 1 回・多重 release 衝突を避ける)。
+	if len(args) == 0 {
+		return publishAll(ctx, c, root, cfg, in, version, tagMissing)
+	}
+
+	switch args[0] {
 	case "homebrew":
 		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
 	case "scoop":
@@ -105,13 +106,305 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishScript(ctx, c, root, cfg, in, version, tagMissing)
 	default:
 		item := channel.PlanItem{
-			Channel: ch, Action: channel.ActionSkip,
-			Reason: "channel not implemented yet (owned: homebrew, scoop, apt, rpm, container, script, goinstall)",
+			Channel: args[0], Action: channel.ActionSkip,
+			Reason: "unknown channel (owned: homebrew/scoop/apt/rpm/container/aur/script/goinstall, gated: winget)",
 		}
-		res := publishResult(c, "channel "+ch+" not implemented yet", false, []channel.PlanItem{item})
-		res.Next = []output.NextDo{{Reason: "publish a supported channel", Do: "wharfy publish homebrew"}}
+		res := publishResult(c, "channel "+args[0]+" not implemented", false, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "publish a supported channel or all", Do: "wharfy publish"}}
 		return res
 	}
+}
+
+// implementedChannels は cfg.Channels のうち publish が扱える順序付きリスト。
+func implementedChannels(cfg config.Config) []string {
+	known := map[string]bool{
+		"homebrew": true, "scoop": true, "apt": true, "rpm": true, "container": true,
+		"aur": true, "winget": true, "goinstall": true, "script": true, "releases": true,
+	}
+	var out []string
+	for _, ch := range cfg.Channels {
+		if known[ch.Name] {
+			out = append(out, ch.Name)
+		}
+	}
+	return out
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// unionRequires は一括 publish の前提条件を、構成チャネルから合算する。
+func unionRequires(chans []string, tagMissing bool) []requirement {
+	reqs := []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+	}
+	// goinstall 以外は GitHub Releases(ReleaseAll)を要する。
+	needsRelease := false
+	for _, ch := range chans {
+		if ch != "goinstall" {
+			needsRelease = true
+		}
+	}
+	if needsRelease {
+		reqs = append(reqs, requirement{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (release upload / fork+PR)"})
+	}
+	if containsStr(chans, "apt") || containsStr(chans, "rpm") {
+		reqs = append(reqs, requirement{Requirement: "PACKAGE_REPO_TOKEN", Met: os.Getenv("PACKAGE_REPO_TOKEN") != "", Hint: "export PACKAGE_REPO_TOKEN=… (apt/rpm hosted repo)"})
+	}
+	if containsStr(chans, "aur") {
+		reqs = append(reqs, requirement{Requirement: "AUR_SSH_KEY", Met: os.Getenv("AUR_SSH_KEY") != "", Hint: "export AUR_SSH_KEY=… (aur push)"})
+	}
+	if containsStr(chans, "container") {
+		reqs = append(reqs, requirement{Requirement: "docker", Met: dockerAvailable(), Hint: "install Docker (with buildx)"})
+	}
+	return reqs
+}
+
+// publishAll は全チャネルを一括発行する。release は 1 回(ReleaseAll)だけ走らせ、各チャネルの
+// 書き込み(formula/manifest/upload/PR)をその成果物に対して行う(多重 release 衝突を避ける)。
+func publishAll(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	chans := implementedChannels(cfg)
+	if len(chans) == 0 {
+		item := channel.PlanItem{Channel: "(all)", Action: channel.ActionSkip, Reason: "no implemented channels in config"}
+		res := publishResult(c, "nothing to publish", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "add channels", Do: "wharfy config"}}
+		return res
+	}
+	reqs := unionRequires(chans, tagMissing)
+
+	if !flagYes {
+		// 一括 preview は軽量サマリ(各チャネルの発行先と操作)。詳細差分は単体 publish <ch> --dry-run。
+		var items []channel.PlanItem
+		for _, ch := range chans {
+			items = append(items, planChannelSummary(ch, cfg))
+		}
+		res := output.New(c.Name, fmt.Sprintf("plan: %d channel(s)", len(items)), true)
+		res.Data = publishData{Applied: false, Plan: items, Requires: reqs}
+		next := []output.NextDo{}
+		for _, r := range reqs {
+			if !r.Met {
+				next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
+			}
+		}
+		res.Next = append(next, output.NextDo{Reason: "apply all channels (one release)", Do: "wharfy publish --yes"})
+		return res
+	}
+
+	// apply: release を 1 回だけ走らせるための前提。
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	ghOwner, ghRepo, _ := splitOwnerName(cfg.Github)
+	dockerOK := dockerAvailable()
+	skipDocker := !(containsStr(chans, "container") && dockerOK)
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	archs, rerr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, skipDocker)
+	if rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+
+	st, _ := state.Load(root, cfg.Project)
+	if st.Publish == nil {
+		st.Publish = map[string]state.PublishRecord{}
+	}
+	now := nowUTC().Format(time.RFC3339)
+
+	var items []channel.PlanItem
+	var warns []output.Warning
+	for _, ch := range chans {
+		item, w, aerr := applyChannel(ctx, ch, cfg, in, version, ghOwner, ghRepo, archs, st, now, dockerOK)
+		if aerr != nil {
+			// 1 チャネルの失敗は全体を止める(release は済み・冪等に再実行できる)。
+			res := output.New(c.Name, "publish failed at "+ch, false)
+			res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: ch + ": " + aerr.Error(), Hint: "fix and re-run; release/other channels already applied"}}
+			res.Next = []output.NextDo{{Reason: "retry the batch (idempotent)", Do: "wharfy publish --yes"}}
+			_ = state.Save(root, st)
+			return res
+		}
+		items = append(items, item)
+		if w != nil {
+			warns = append(warns, *w)
+		}
+	}
+	_ = state.Save(root, st)
+
+	res := publishResult(c, fmt.Sprintf("published %d channel(s) at %s", len(items), version), true, items)
+	res.Data = publishData{Applied: true, Plan: items}
+	res.Warnings = warns
+	res.Next = []output.NextDo{{Reason: "verify installs work", Do: "wharfy verify"}}
+	return res
+}
+
+// planChannelSummary は一括 preview 用の軽量 plan(発行先＋操作。差分は出さない)。
+func planChannelSummary(ch string, cfg config.Config) channel.PlanItem {
+	target := channelTargetByName(cfg, ch)
+	it := channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionCreate}
+	switch ch {
+	case "homebrew":
+		it.OwnedArtifact = orUnresolved(target, "Formula/"+cfg.Project+".rb")
+	case "scoop":
+		it.OwnedArtifact = orUnresolved(target, "bucket/"+cfg.Project+".json")
+	case "apt", "rpm":
+		if target == "" {
+			it.Action, it.Reason = channel.ActionSkip, ch+".repo not set"
+		} else {
+			it.OwnedArtifact = target
+		}
+	case "container":
+		it.OwnedArtifact = orUnresolved(target, "(image)")
+	case "aur":
+		it.OwnedArtifact = "aur:" + orUnresolved(target, "(pkg)")
+	case "winget":
+		it.Action, it.OwnedArtifact = channel.ActionPrepare, "microsoft/winget-pkgs (PR)"
+	case "script":
+		it.OwnedArtifact = cfg.Github + " release:" + config.InstallScriptName
+	case "releases":
+		it.OwnedArtifact = orUnresolved(cfg.Github, "(releases)")
+	case "goinstall":
+		it.Action, it.Reason = channel.ActionNoop, "advisory (go install)"
+	}
+	return it
+}
+
+func orUnresolved(target, suffix string) string {
+	if target == "" {
+		return "(unresolved):" + suffix
+	}
+	return target + ":" + suffix
+}
+
+// applyChannel は 1 チャネルを共有 archs に対して書き込み、状態を更新する(release は呼ばない)。
+func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.File, version, ghOwner, ghRepo string, archs []build.Artifact, st *state.State, now string, dockerOK bool) (channel.PlanItem, *output.Warning, error) {
+	mk := func(kind, action, art string) channel.PlanItem {
+		return channel.PlanItem{Channel: ch, Kind: kind, Action: action, OwnedArtifact: art}
+	}
+	skip := func(reason string) (channel.PlanItem, *output.Warning, error) {
+		return channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionSkip, Reason: reason},
+			&output.Warning{Code: output.WarnChannelSkipped, Message: ch + " skipped — " + reason}, nil
+	}
+
+	switch ch {
+	case "releases":
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		return mk(channel.KindOwned, channel.ActionUpdate, cfg.Github), nil, nil
+
+	case "homebrew":
+		tap, ok := homebrewTarget(cfg)
+		to, tr, ok2 := splitOwnerName(tap)
+		if !ok || !ok2 {
+			return skip("tap unresolved")
+		}
+		item, pub, err := homebrewPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs).Publish(ctx)
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
+		item.Action = channel.ActionUpdate
+		return item, nil, nil
+
+	case "scoop":
+		bucket := channelTargetByName(cfg, "scoop")
+		bo, br, ok := splitOwnerName(bucket)
+		if !ok {
+			return skip("bucket unresolved")
+		}
+		item, pub, err := scoopPublisher(cfg, in, bucket, bo, br, ghOwner, ghRepo, version, archs).Publish(ctx)
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["scoop"] = state.PublishRecord{Version: version, Target: bucket, Commit: pub.Commit, At: now}
+		item.Action = channel.ActionUpdate
+		return item, nil, nil
+
+	case "apt", "rpm":
+		repo := channelTargetByName(cfg, ch)
+		if repo == "" {
+			return skip(ch + ".repo not set")
+		}
+		token := os.Getenv("PACKAGE_REPO_TOKEN")
+		if token == "" {
+			return skip("PACKAGE_REPO_TOKEN not set")
+		}
+		ext := map[string]string{"apt": ".deb", "rpm": ".rpm"}[ch]
+		if _, err := uploadLinuxPackages(ctx, archs, ext, repo, token); err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish[ch] = state.PublishRecord{Version: version, Target: repo, At: now}
+		return mk(channel.KindOwned, channel.ActionUpdate, repo), nil, nil
+
+	case "container":
+		image := channelTargetByName(cfg, "container")
+		if !dockerOK {
+			return skip("docker unavailable")
+		}
+		st.Publish["container"] = state.PublishRecord{Version: version, Target: image, At: now}
+		return mk(channel.KindOwned, channel.ActionUpdate, image), nil, nil // ReleaseAll が push 済み
+
+	case "script":
+		st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
+		return mk(channel.KindOwned, channel.ActionUpdate, cfg.Github+" release:"+config.InstallScriptName), nil, nil // ReleaseAll が install.sh を同梱済み
+
+	case "aur":
+		pkg := channelTargetByName(cfg, "aur")
+		sshKey := os.Getenv("AUR_SSH_KEY")
+		if sshKey == "" {
+			return skip("AUR_SSH_KEY not set")
+		}
+		ai := channel.AurInput{Package: pkg, Project: cfg.Project, Version: version, License: cfg.License,
+			Description: in.Description, Homepage: cfg.Homepage, Maintainer: aurMaintainer(ghOwner),
+			Sources: aurSources(archs, ghOwner, ghRepo, cfg.Project, version)}
+		commit, err := newAurPusher(sshKey).Push(ctx, pkg, ai.Files())
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now}
+		return mk(channel.KindOwned, channel.ActionUpdate, "aur:"+pkg), nil, nil
+
+	case "winget":
+		identifier := channelTargetByName(cfg, "winget")
+		wi := channel.WingetInput{Identifier: identifier, Project: cfg.Project, Version: version, License: cfg.License,
+			Description: in.Description, Homepage: cfg.Homepage, Installers: wingetInstallers(archs, ghOwner, ghRepo, cfg.Project, version)}
+		prURL, err := newWingetSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, wi, channel.GenerateWingetManifests(wi))
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["winget"] = state.PublishRecord{Version: version, Target: identifier, State: "pr_open", PR: prURL, At: now}
+		return mk(channel.KindGated, channel.ActionPrepare, "microsoft/winget-pkgs (PR)"),
+			&output.Warning{Code: output.WarnGatedPending, Message: "winget PR awaiting review: " + prURL}, nil
+
+	case "goinstall":
+		// 梱包ゼロ。release 不要・書き込みなし。記録もしない(advisory)。
+		return mk(channel.KindOwned, channel.ActionNoop, ""), nil, nil
+	}
+	return channel.PlanItem{Channel: ch, Action: channel.ActionSkip, Reason: "unknown"}, nil, nil
+}
+
+// uploadLinuxPackages は archs の deb/rpm を hosted repo へ上げ、件数を返す。
+func uploadLinuxPackages(ctx context.Context, archs []build.Artifact, ext, repo, token string) (int, error) {
+	n := 0
+	for _, a := range archs {
+		if filepath.Ext(a.Path) != ext {
+			continue
+		}
+		if err := uploadPackage(ctx, repo, token, a.Path); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // publishHomebrew / publishScoop は archive を要する owned チャネル。tap/bucket(自前リポジトリ)
