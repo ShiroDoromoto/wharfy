@@ -10,3 +10,13 @@ channels:
   - apt
   - rpm
   - winget
+
+# apt/rpm は fury.io(Gemfury)のホスト型 repo に push する。provider+user で
+# push(push.fury.io)/配信(apt.fury.io・yum.fury.io)URL を自動導出する。
+# push トークンは環境変数 PACKAGE_REPO_TOKEN から読む(ここには書かない)。
+apt:
+  provider: fury
+  user: shirodoromoto
+rpm:
+  provider: fury
+  user: shirodoromoto
