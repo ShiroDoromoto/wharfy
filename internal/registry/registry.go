@@ -56,9 +56,10 @@ var Commands = []Command{
 var StateReaders = []string{"status", "config"}
 
 // Channels は agent が宣伝するチャネル一覧。実装済み Publisher に追従させる(同じ生成思想)。
-// スライス1 は homebrew(owned)1 本のみ。横展開は型が固まってから(08 §5)。
+// homebrew で型を固めた後、低摩擦な goinstall / script から横展開中(08 §5)。
 var Channels = []ChannelRef{
 	{Name: "homebrew", Kind: "owned"},
+	{Name: "goinstall", Kind: "owned"},
 }
 
 // Names は登録コマンド名の集合。drift テストや next: 参照健全性の照合に使う。

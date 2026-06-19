@@ -68,6 +68,10 @@
     {
       "name": "homebrew",
       "kind": "owned"
+    },
+    {
+      "name": "goinstall",
+      "kind": "owned"
     }
   ]
 }
