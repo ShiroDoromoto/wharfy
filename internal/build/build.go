@@ -25,6 +25,52 @@ type Artifact struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
+// ArtifactsFile は release が記録する成果物マニフェストの相対パス(.wharfy 配下)。
+// release(アップロード)と publish <ch>(マニフェスト書き込み)を切り離す土台:
+// release が実 sha 付きの成果物一覧をここに残し、publish はビルドし直さず消費する。
+const ArtifactsFile = ".wharfy/artifacts.json"
+
+// ArtifactSet は release が version とその成果物(実 sha256)を束ねて記録したもの。
+type ArtifactSet struct {
+	Version   string     `json:"version"`
+	Artifacts []Artifact `json:"artifacts"`
+}
+
+// SaveArtifacts は成果物一覧を .wharfy/artifacts.json に原子的に書く(temp+rename)。
+func SaveArtifacts(root, version string, arts []Artifact) error {
+	set := ArtifactSet{Version: version, Artifacts: arts}
+	data, err := json.MarshalIndent(set, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, ArtifactsFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// LoadArtifacts は記録済み成果物を読む。無ければ found=false(エラーではない)。
+func LoadArtifacts(root string) (ArtifactSet, bool, error) {
+	path := filepath.Join(root, ArtifactsFile)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return ArtifactSet{}, false, nil
+	}
+	if err != nil {
+		return ArtifactSet{}, false, err
+	}
+	var set ArtifactSet
+	if err := json.Unmarshal(data, &set); err != nil {
+		return ArtifactSet{}, false, err
+	}
+	return set, true, nil
+}
+
 // Builder はビルド境界。configPath は生成 GoReleaser 設定(.wharfy/goreleaser.yaml)。
 // root は利用者リポジトリのルート(サブプロセスの作業ディレクトリ)。
 type Builder interface {

@@ -34,12 +34,19 @@
       "summary": "cross-compile for every os/arch",
       "next": [
         "sign",
-        "publish"
+        "release"
       ]
     },
     {
       "name": "sign",
       "summary": "sign \u0026 notarize what can be signed",
+      "next": [
+        "release"
+      ]
+    },
+    {
+      "name": "release",
+      "summary": "upload the github release (archives, packages, install.sh)",
       "next": [
         "publish"
       ]

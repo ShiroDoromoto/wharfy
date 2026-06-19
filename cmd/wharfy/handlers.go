@@ -17,6 +17,7 @@ var handlers = map[string]handler{
 	"version": runVersion,
 	"config":  runConfig,
 	"build":   runBuild,
+	"release": runRelease,
 	"publish": runPublish,
 	"sign":    runSign,
 	"verify":  runVerify,

@@ -82,8 +82,8 @@ func TestBuildWiringSuccess(t *testing.T) {
 	if !ok || len(bd.Artifacts) != 2 {
 		t.Fatalf("expected 2 artifacts in data, got %+v", res.Data)
 	}
-	if !hasNextDo(res, "wharfy sign") || !hasNextDo(res, "wharfy publish") {
-		t.Errorf("next should include sign and publish: %+v", res.Next)
+	if !hasNextDo(res, "wharfy sign") || !hasNextDo(res, "wharfy release") {
+		t.Errorf("next should include sign and release: %+v", res.Next)
 	}
 	// 生成設定と状態が .wharfy/ に書かれる(root は汚さない)。
 	if _, err := os.Stat(filepath.Join(root, ".wharfy", "goreleaser.yaml")); err != nil {

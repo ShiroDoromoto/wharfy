@@ -10,13 +10,15 @@ import (
 )
 
 type fakeMultiReleaser struct {
-	arts  []build.Artifact
-	calls int
-	err   error
+	arts           []build.Artifact
+	calls          int
+	err            error
+	lastSkipDocker bool
 }
 
-func (f *fakeMultiReleaser) ReleaseAll(context.Context, string, string, bool) ([]build.Artifact, error) {
+func (f *fakeMultiReleaser) ReleaseAll(_ context.Context, _, _ string, skipDocker bool) ([]build.Artifact, error) {
 	f.calls++
+	f.lastSkipDocker = skipDocker
 	return f.arts, f.err
 }
 
