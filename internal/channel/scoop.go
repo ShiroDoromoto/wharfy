@@ -85,6 +85,12 @@ func (s *Scoop) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	return item, PubResult{Commit: commit}, nil
 }
 
+// RepoExists は自前 bucket リポジトリが在るか(dry-run の予告に使う)。
+func (s *Scoop) RepoExists(ctx context.Context) (bool, error) { return s.Store.Exists(ctx) }
+
+// EnsureRepo は bucket が無ければ作る(--yes の上でのみ・ADR-8)。
+func (s *Scoop) EnsureRepo(ctx context.Context) (bool, error) { return ensureRepo(ctx, s.Store) }
+
 // Probe は bucket 上の manifest の版を返す(実体・04 の照合の基点)。
 func (s *Scoop) Probe(ctx context.Context) (RemoteState, error) {
 	base, found, err := s.Store.Get(ctx, s.ManifestPath())

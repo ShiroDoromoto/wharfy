@@ -15,12 +15,14 @@ import (
 
 // InMemoryTapStore はテスト用。tap の内容をメモリに持つ(末端の差し替え・01)。
 type InMemoryTapStore struct {
-	Files   map[string]string
-	Commits int // Put 回数(書き込み発生の検証用)
+	Files      map[string]string
+	Commits    int  // Put 回数(書き込み発生の検証用)
+	RepoExists bool // リポジトリの存在(既定 true)。false にすると Create を経由する
+	Created    int  // Create 回数
 }
 
 func NewInMemoryTapStore() *InMemoryTapStore {
-	return &InMemoryTapStore{Files: map[string]string{}}
+	return &InMemoryTapStore{Files: map[string]string{}, RepoExists: true}
 }
 
 func (s *InMemoryTapStore) Get(_ context.Context, path string) (string, bool, error) {
@@ -32,6 +34,14 @@ func (s *InMemoryTapStore) Put(_ context.Context, path, content, _ string) (stri
 	s.Files[path] = content
 	s.Commits++
 	return fmt.Sprintf("inmem%d", s.Commits), nil
+}
+
+func (s *InMemoryTapStore) Exists(context.Context) (bool, error) { return s.RepoExists, nil }
+
+func (s *InMemoryTapStore) Create(context.Context) error {
+	s.RepoExists = true
+	s.Created++
+	return nil
 }
 
 // GitHubTapStore は GitHub Contents API 経由の実体(owned tap への読み書き)。
@@ -155,6 +165,95 @@ func (s *GitHubTapStore) Put(ctx context.Context, path, content, message string)
 	}
 	_ = json.Unmarshal(body, &out)
 	return out.Commit.SHA, nil
+}
+
+// Exists は tap/bucket リポジトリが在るかを返す(GET /repos/owner/repo)。
+func (s *GitHubTapStore) Exists(ctx context.Context) (bool, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s", s.api(), s.Owner, s.Repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	s.auth(req)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("github get repo %s/%s: %s", s.Owner, s.Repo, resp.Status)
+	}
+}
+
+// Create は tap/bucket を作る(auto_init で既定ブランチを用意)。owner が認証ユーザなら
+// /user/repos、組織なら /orgs/{owner}/repos に作る。--yes の上でのみ呼ばれる(03/ADR-8)。
+func (s *GitHubTapStore) Create(ctx context.Context) error {
+	if s.Token == "" {
+		return fmt.Errorf("GITHUB_TOKEN required to create %s/%s", s.Owner, s.Repo)
+	}
+	login, err := s.authedLogin(ctx)
+	if err != nil {
+		return err
+	}
+	endpoint := "/user/repos"
+	if login != s.Owner {
+		endpoint = "/orgs/" + s.Owner + "/repos"
+	}
+	payload := map[string]any{
+		"name":        s.Repo,
+		"private":     false,
+		"auto_init":   true,
+		"description": "managed by wharfy",
+	}
+	b, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.api()+endpoint, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	s.auth(req)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("github create %s/%s: %s: %s", s.Owner, s.Repo, resp.Status, snippet(body))
+	}
+	return nil
+}
+
+// authedLogin は認証ユーザの login を返す(repo 作成先の判定に使う)。
+func (s *GitHubTapStore) authedLogin(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api()+"/user", nil)
+	if err != nil {
+		return "", err
+	}
+	s.auth(req)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github /user: %s", resp.Status)
+	}
+	var u struct {
+		Login string `json:"login"`
+	}
+	_ = json.Unmarshal(body, &u)
+	return u.Login, nil
 }
 
 func (s *GitHubTapStore) auth(req *http.Request) {

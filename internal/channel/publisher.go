@@ -60,4 +60,30 @@ type TapStore interface {
 	Get(ctx context.Context, path string) (content string, found bool, err error)
 	// Put は path に content を書き(commit message 付き)、commit を返す。書き込みは owned のみ(03)。
 	Put(ctx context.Context, path, content, message string) (commit string, err error)
+	// Exists は所有リポジトリ(tap/bucket)自体が在るか。無ければ false。
+	Exists(ctx context.Context) (bool, error)
+	// Create は所有リポジトリを作る(初期化付き)。利用者の明示同意(--yes)の上でのみ呼ぶ(03/ADR-8)。
+	Create(ctx context.Context) error
+}
+
+// RepoBacked は自前リポジトリ(tap/bucket)に書く owned チャネル(homebrew/scoop)。
+// 未作成なら --yes で wharfy が作成する(ADR-8)。dry-run は RepoExists で予告に使う。
+type RepoBacked interface {
+	RepoExists(ctx context.Context) (bool, error)
+	EnsureRepo(ctx context.Context) (created bool, err error)
+}
+
+// ensureRepo は store のリポジトリが無ければ作る(homebrew/scoop 共通)。created=作成したか。
+func ensureRepo(ctx context.Context, store TapStore) (bool, error) {
+	exists, err := store.Exists(ctx)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	if err := store.Create(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }

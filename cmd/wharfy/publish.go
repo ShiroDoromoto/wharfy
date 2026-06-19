@@ -310,7 +310,11 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if !ok || !ok2 {
 			return skip("tap unresolved")
 		}
-		item, pub, err := homebrewPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs).Publish(ctx)
+		hb := homebrewPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs)
+		if _, err := hb.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
+			return channel.PlanItem{}, nil, err
+		}
+		item, pub, err := hb.Publish(ctx)
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
@@ -324,7 +328,11 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if !ok {
 			return skip("bucket unresolved")
 		}
-		item, pub, err := scoopPublisher(cfg, in, bucket, bo, br, ghOwner, ghRepo, version, archs).Publish(ctx)
+		sc := scoopPublisher(cfg, in, bucket, bo, br, ghOwner, ghRepo, version, archs)
+		if _, err := sc.EnsureRepo(ctx); err != nil { // 未作成なら bucket を作る(ADR-8)
+			return channel.PlanItem{}, nil, err
+		}
+		item, pub, err := sc.Publish(ctx)
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
@@ -945,7 +953,7 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
-		return ownedReleaseDryRun(ctx, c, makePub(archs), version, chName, tagMissing)
+		return ownedReleaseDryRun(ctx, c, makePub(archs), version, chName, target, tagMissing)
 	}
 
 	// apply: 高コストな実リリースの前に前提を確認する(tag / token)。
@@ -1141,7 +1149,7 @@ func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, gh
 }
 
 // ownedReleaseDryRun は plan をプレビューする(書かない)。requires で実 apply の前提条件を先出し。
-func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Publisher, version, chName string, tagMissing bool) output.Result {
+func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Publisher, version, chName, target string, tagMissing bool) output.Result {
 	item, err := pub.Plan(ctx)
 	if err != nil {
 		return probeFailedResult(c, err)
@@ -1155,6 +1163,15 @@ func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Pub
 	res := output.New(c.Name, msg, true)
 	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
 	res.Next = dryRunNext(item, reqs, chName)
+	// 自前リポジトリ(tap/bucket)が未作成なら予告する(--yes で wharfy が作る・ADR-8)。
+	if rb, ok := pub.(channel.RepoBacked); ok {
+		if exists, e := rb.RepoExists(ctx); e == nil && !exists {
+			res.Warnings = append(res.Warnings, output.Warning{
+				Code:    output.WarnTapWillBeCreated,
+				Message: target + " does not exist yet — wharfy will create it on --yes",
+			})
+		}
+	}
 	return res
 }
 
@@ -1220,6 +1237,19 @@ func tokenMissingResult(c registry.Command) output.Result {
 // ownedReleaseApply は実 archive 反映後に formula/manifest を所有リポジトリに書く(--yes)。
 // 前提(tag/token)は確認済み。archive は既に GitHub Releases へアップロード済み(実 checksum)。
 func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publisher, root, project, chName, target, releaseTarget, version string) output.Result {
+	// 自前リポジトリ(tap/bucket)が無ければ作る(--yes の明示同意があるので・ADR-8/03)。
+	created := false
+	if rb, ok := pub.(channel.RepoBacked); ok {
+		c2, err := rb.EnsureRepo(ctx)
+		if err != nil {
+			res := output.New(c.Name, "failed to create "+target, false)
+			res.Errors = []output.Problem{{Code: output.ErrTargetCreateFailed, Message: err.Error(), Hint: "check token scope (repo create) or create " + target + " manually"}}
+			res.Next = []output.NextDo{{Reason: "fix permissions then retry", Do: "wharfy publish " + chName + " --yes"}}
+			return res
+		}
+		created = c2
+	}
+
 	item, pubres, err := pub.Publish(ctx)
 	if err != nil {
 		res := output.New(c.Name, "publish failed", false)
@@ -1242,6 +1272,9 @@ func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publ
 	item.Action = channel.ActionUpdate // 反映済みの操作を明示(create/update いずれも書いた)
 	res := publishResult(c, "published "+project+" "+version+" → "+target, true, []channel.PlanItem{item})
 	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	if created {
+		res.Warnings = append(res.Warnings, output.Warning{Code: output.WarnTapWillBeCreated, Message: "created " + target})
+	}
 	res.Next = []output.NextDo{{Reason: "install from the channel and run it", Do: "wharfy verify"}}
 	return res
 }

@@ -72,6 +72,12 @@ func (h *Homebrew) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	return item, PubResult{Commit: commit}, nil
 }
 
+// RepoExists は自前 tap リポジトリが在るか(dry-run の tap_will_be_created 予告に使う)。
+func (h *Homebrew) RepoExists(ctx context.Context) (bool, error) { return h.Store.Exists(ctx) }
+
+// EnsureRepo は tap が無ければ作る(--yes の上でのみ呼ばれる・ADR-8)。created=作成したか。
+func (h *Homebrew) EnsureRepo(ctx context.Context) (bool, error) { return ensureRepo(ctx, h.Store) }
+
 // Probe は tap 上の formula の版を返す(実体・04 の照合の基点)。
 func (h *Homebrew) Probe(ctx context.Context) (RemoteState, error) {
 	base, found, err := h.Store.Get(ctx, h.FormulaPath())
