@@ -11,9 +11,10 @@ import (
 
 // 共通グローバルフラグ(設計 01 CLI 層)。全コマンドが受ける。
 var (
-	flagJSON   bool
-	flagDryRun bool
-	flagYes    bool
+	flagJSON    bool
+	flagDryRun  bool
+	flagYes     bool
+	flagNoProbe bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -29,6 +30,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "machine-readable output (see schemas/)")
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "show what would change; write nothing")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "apply changes to owned distribution (publish writes the tap)")
+	root.PersistentFlags().BoolVar(&flagNoProbe, "no-probe", false, "status: read records only; do not probe channel reality")
 
 	for _, c := range registry.Commands {
 		root.AddCommand(newCommand(c))
@@ -46,9 +48,12 @@ func newCommand(c registry.Command) *cobra.Command {
 		Use:   use,
 		Short: c.Summary,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// agent は Result envelope と別形(agent.json)なので特別扱い。
+			// agent / status は Result envelope と別形(agent.json / status.json)なので特別扱い。
 			if c.Name == "agent" {
 				return runAgent(flagJSON)
+			}
+			if c.Name == "status" {
+				return runStatus(cmd.Context(), flagJSON)
 			}
 			res := dispatch(cmd.Context(), c, args)
 			output.Emit(res, flagJSON)
