@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -86,8 +88,14 @@ func TestPublishWingetApply(t *testing.T) {
 	}
 }
 
-// status: 記録された gated 状態(pr_open + PR)を見せ、gated_pending を warning。
-func TestStatusWingetGated(t *testing.T) {
+func swapWingetProbeBase(url string) func() {
+	prev := wingetProbeBase
+	wingetProbeBase = url
+	return func() { wingetProbeBase = prev }
+}
+
+// status: PR API を probe して実状態を反映。open → pr_open(gated_pending)。
+func TestStatusWingetProbeOpen(t *testing.T) {
 	root := scratchModule(t)
 	writeChannels(t, root, "project: demo\nchannels: [winget]\n")
 	chdir(t, root)
@@ -97,12 +105,54 @@ func TestStatusWingetGated(t *testing.T) {
 	}
 	_ = state.Save(root, st)
 
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"state":"open","merged":false}`))
+	}))
+	defer srv.Close()
+	defer swapWingetProbeBase(srv.URL)()
+
 	out, err := buildStatus(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wg := findChannel(out.Channels, "winget")
-	if wg == nil || wg.Kind != "gated" || wg.State != "pr_open" || wg.PR == "" {
-		t.Fatalf("winget status should show gated pr_open + PR: %+v", wg)
+	if wg == nil || wg.Kind != "gated" || wg.State != "pr_open" || wg.Source != state.SourceProbed {
+		t.Fatalf("winget should be probed pr_open: %+v", wg)
+	}
+	if !hasStatusWarning(out, "gated_pending") {
+		t.Errorf("pr_open should warn gated_pending: %+v", out.Warnings)
+	}
+}
+
+func hasStatusWarning(out statusOutput, code string) bool {
+	for _, w := range out.Warnings {
+		if w.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// status: PR が merged → state=merged・published=true・警告なし(記録は pr_open でも実状態で上書き)。
+func TestStatusWingetProbeMerged(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [winget]\n")
+	chdir(t, root)
+	st, _ := state.Load(root, "demo")
+	st.Publish = map[string]state.PublishRecord{
+		"winget": {Version: "0.6.0", Target: "acme.demo", State: "pr_open", PR: "https://github.com/microsoft/winget-pkgs/pull/99", At: "t"},
+	}
+	_ = state.Save(root, st)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"state":"closed","merged":true}`))
+	}))
+	defer srv.Close()
+	defer swapWingetProbeBase(srv.URL)()
+
+	out, _ := buildStatus(context.Background(), true)
+	wg := findChannel(out.Channels, "winget")
+	if wg == nil || wg.State != "merged" || !wg.Published {
+		t.Fatalf("winget should be merged+published: %+v", wg)
 	}
 }

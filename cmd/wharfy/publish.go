@@ -42,10 +42,11 @@ var (
 	dockerAvailable = func() bool { _, err := exec.LookPath("docker"); return err == nil }
 	// goinstallProxy / scriptProbeURL / aurRPCBase / ociProbeBase はテストで実体照合先を
 	// httptest に差し替える(空＝既定)。apt/rpm は cfg の repo URL をそのまま probe する。
-	goinstallProxy = ""
-	scriptProbeURL = ""
-	aurRPCBase     = ""
-	ociProbeBase   = ""
+	goinstallProxy  = ""
+	scriptProbeURL  = ""
+	aurRPCBase      = ""
+	ociProbeBase    = ""
+	wingetProbeBase = ""
 )
 
 // publishData は publish の固有ペイロード(schemas/publish.json data)。
