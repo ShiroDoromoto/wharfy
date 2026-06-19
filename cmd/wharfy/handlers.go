@@ -32,9 +32,25 @@ func dispatch(ctx context.Context, c registry.Command, args []string) output.Res
 }
 
 // runVersion は tag を単一ソースにした版を返す(目印: `wharfy --json version` が envelope)。
-func runVersion(_ context.Context, c registry.Command, _ []string) output.Result {
+// best-effort で最新リリースと比較し、新版があれば next: に upgrade を案内する(C: 更新導線)。
+func runVersion(ctx context.Context, c registry.Command, _ []string) output.Result {
+	v, commit, date := resolveVersion()
 	res := output.New(c.Name, versionLine(), true)
-	res.Next = nextFromSpec(c)
+	info := versionInfo{Version: v, Commit: commit, Date: date}
+
+	if latest, ok := latestReleaseTag(ctx); ok {
+		info.Latest = latest
+		info.UpdateAvailable = updateAvailable(v, latest)
+	}
+	if info.UpdateAvailable {
+		res.Next = append([]output.NextDo{{
+			Reason: "newer wharfy available: " + info.Latest + " (you have " + v + "); brew/scoop users upgrade via your installer",
+			Do:     "go install github.com/ShiroDoromoto/wharfy/cmd/wharfy@latest",
+		}}, nextFromSpec(c)...)
+	} else {
+		res.Next = nextFromSpec(c)
+	}
+	res.Data = info
 	return res
 }
 

@@ -44,7 +44,7 @@ func Reconcile(recorded, remote string, remoteFound, probed bool) (source string
 	case recorded != "" && !remoteFound:
 		return SourceDrift, &Drift{Recorded: recorded, Kind: DriftMissing}
 	}
-	switch compareVersions(remote, recorded) {
+	switch CompareVersions(remote, recorded) {
 	case 0:
 		return SourceProbed, nil
 	case -1:
@@ -54,9 +54,9 @@ func Reconcile(recorded, remote string, remoteFound, probed bool) (source string
 	}
 }
 
-// compareVersions は先頭 v を無視し、ドット区切りの数値部を順に比べる。
+// CompareVersions は先頭 v を無視し、ドット区切りの数値部を順に比べる。
 // 数値化できない部分は文字列比較にフォールバックする。返り値 -1/0/1。
-func compareVersions(a, b string) int {
+func CompareVersions(a, b string) int {
 	pa := strings.Split(strings.TrimPrefix(a, "v"), ".")
 	pb := strings.Split(strings.TrimPrefix(b, "v"), ".")
 	n := len(pa)
