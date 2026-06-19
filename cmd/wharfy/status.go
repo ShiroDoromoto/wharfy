@@ -124,6 +124,12 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 		return assessGoinstall(ctx, cs, ch.Target, tag)
 	case "aur":
 		return assessAur(ctx, cs, ch.Target, recordedVer)
+	case "container":
+		return assessContainer(ctx, cs, ch.Target, recordedVer)
+	case "apt":
+		return assessApt(ctx, cs, ch.Target, cfg.Project, recordedVer)
+	case "rpm":
+		return assessRpm(ctx, cs, ch.Target, cfg.Project, recordedVer)
 	case "winget":
 		return assessWinget(cs, st.Publish["winget"])
 	default:
@@ -229,6 +235,47 @@ func assessAur(ctx context.Context, cs statusChannel, pkg, recordedVer string) (
 	}
 	warn := reconcileInto(&cs, "aur", recordedVer, rs)
 	return cs, warn
+}
+
+// assessContainer は ghcr に記録版のタグが在るかを確認する(在れば一致・無ければ missing)。
+func assessContainer(ctx context.Context, cs statusChannel, image, recordedVer string) (statusChannel, *output.Warning) {
+	if image == "" {
+		return recordedOnly(cs, recordedVer, "image unresolved"), nil
+	}
+	if recordedVer == "" {
+		return recordedOnly(cs, recordedVer, "not published yet"), nil // 確認すべきタグが無い
+	}
+	pr := &channel.OCIProbe{Image: image, Token: os.Getenv("GITHUB_TOKEN"), Base: ociProbeBase}
+	rs, err := pr.Probe(ctx, recordedVer)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(image, err)
+	}
+	warn := reconcileInto(&cs, "container", recordedVer, rs)
+	return cs, warn
+}
+
+// assessApt は hosted apt repo の Packages から版を引いて照合する(best-effort)。
+func assessApt(ctx context.Context, cs statusChannel, repo, pkg, recordedVer string) (statusChannel, *output.Warning) {
+	if repo == "" {
+		return recordedOnly(cs, recordedVer, "repo unresolved"), nil
+	}
+	rs, err := (&channel.AptProbe{Repo: repo}).Probe(ctx, pkg)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning("apt:"+repo, err)
+	}
+	return cs, reconcileInto(&cs, "apt", recordedVer, rs)
+}
+
+// assessRpm は hosted rpm repo の repomd→primary から版を引いて照合する(best-effort)。
+func assessRpm(ctx context.Context, cs statusChannel, repo, pkg, recordedVer string) (statusChannel, *output.Warning) {
+	if repo == "" {
+		return recordedOnly(cs, recordedVer, "repo unresolved"), nil
+	}
+	rs, err := (&channel.RpmProbe{Repo: repo}).Probe(ctx, pkg)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning("rpm:"+repo, err)
+	}
+	return cs, reconcileInto(&cs, "rpm", recordedVer, rs)
 }
 
 // assessScript は Release 上の install.sh が指す版を照合する。
