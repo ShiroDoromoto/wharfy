@@ -34,11 +34,18 @@ func sampleArchiveArtifacts() []build.Artifact {
 // TestPublishDryRunValidatesSchema: plan プレビューの envelope が publish.json に valid。
 func TestPublishDryRunValidatesSchema(t *testing.T) {
 	res := output.New("publish", "plan: create Formula/demo.rb", true)
-	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{{
-		Channel: "homebrew", Kind: channel.KindOwned,
-		OwnedArtifact: "acme/homebrew-demo:Formula/demo.rb",
-		Action:        channel.ActionCreate, Diff: "+class Demo < Formula\n",
-	}}}
+	res.Data = publishData{
+		Applied: false,
+		Plan: []channel.PlanItem{{
+			Channel: "homebrew", Kind: channel.KindOwned,
+			OwnedArtifact: "acme/homebrew-demo:Formula/demo.rb",
+			Action:        channel.ActionCreate, Diff: "+class Demo < Formula\n",
+		}},
+		Requires: []requirement{
+			{Requirement: "git tag", Met: false, Hint: "git tag vX.Y.Z"},
+			{Requirement: "GITHUB_TOKEN", Met: true},
+		},
+	}
 	res.Next = []output.NextDo{{Reason: "apply", Do: "wharfy publish homebrew --yes"}}
 	validateAgainst(t, publishSchemaID, res)
 }
@@ -57,6 +64,7 @@ func TestPublishSkipValidatesSchema(t *testing.T) {
 func TestPublishDryRunWiring(t *testing.T) {
 	root := scratchModule(t)
 	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "") // tag も token も無い状態を固定
 	defer swapArchiver(fakeArchiver{arts: sampleArchiveArtifacts()})()
 	store := channel.NewInMemoryTapStore()
 	defer swapTapStore(store)()
@@ -76,12 +84,29 @@ func TestPublishDryRunWiring(t *testing.T) {
 	if pd.Plan[0].Diff == "" {
 		t.Error("create plan should carry a diff")
 	}
+	// preview は実 apply の前提(tag/token)を先出しし、両方とも未充足(met=false)で見せる。
+	if !requirementUnmet(pd.Requires, "git tag") || !requirementUnmet(pd.Requires, "GITHUB_TOKEN") {
+		t.Errorf("requires should list git tag + GITHUB_TOKEN as unmet: %+v", pd.Requires)
+	}
+	// next: は未充足の前提を解消してから --yes に至る順で出す。
 	if !hasNextDo(res, "wharfy publish homebrew --yes") {
 		t.Errorf("dry-run should guide to --yes: %+v", res.Next)
+	}
+	if res.Next[len(res.Next)-1].Do != "wharfy publish homebrew --yes" {
+		t.Errorf("--yes should be the last next step after preconditions: %+v", res.Next)
 	}
 	if store.Commits != 0 {
 		t.Errorf("dry-run must not write the tap, commits = %d", store.Commits)
 	}
+}
+
+func requirementUnmet(reqs []requirement, name string) bool {
+	for _, r := range reqs {
+		if r.Requirement == name {
+			return !r.Met
+		}
+	}
+	return false
 }
 
 // TestPublishApplyWiring: --yes で tap に書き、状態に記録する(tag+token あり)。

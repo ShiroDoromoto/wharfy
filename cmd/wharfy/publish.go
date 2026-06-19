@@ -26,8 +26,17 @@ var (
 
 // publishData は publish の固有ペイロード(schemas/publish.json data)。
 type publishData struct {
-	Applied bool               `json:"applied"`
-	Plan    []channel.PlanItem `json:"plan"`
+	Applied  bool               `json:"applied"`
+	Plan     []channel.PlanItem `json:"plan"`
+	Requires []requirement      `json:"requires,omitempty"`
+}
+
+// requirement は実 apply(--yes)の前提条件と充足状況(publish.json requirement)。
+// preview で出し、credential 無しのエージェントが1往復で apply 可否を判断できるようにする。
+type requirement struct {
+	Requirement string `json:"requirement"`
+	Met         bool   `json:"met"`
+	Hint        string `json:"hint,omitempty"`
 }
 
 // runPublish は所有チャネルへ発行する。書く前に必ず差分(plan)を見せる(設計 02/03)。
@@ -112,24 +121,46 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 }
 
 // publishDryRun は plan をプレビューする(書かない)。
+// requires で実 apply の前提条件(tag/token)とその充足状況を先に見せる。
 func publishDryRun(c registry.Command, hb *channel.Homebrew, ctx context.Context, tagMissing bool) output.Result {
 	item, err := hb.Plan(ctx)
 	if err != nil {
 		return probeFailedResult(c, err)
 	}
+	reqs := applyRequirements(tagMissing)
+
 	msg := "plan: " + item.Action + " " + hb.FormulaPath()
 	if tagMissing {
 		// 正準コードに合う warning が無いので、誤コードを付けず message で正直に注記する。
-		// 実発行(--yes)では tag_missing をエラーとして停止する。
 		msg += " (preview @ " + hb.Input.Version + "; no git tag yet)"
 	}
-	res := publishResult(c, msg, true, []channel.PlanItem{item})
-	if item.Action == channel.ActionNoop {
-		res.Next = []output.NextDo{{Reason: "already up to date; verify install", Do: "wharfy verify"}}
-	} else {
-		res.Next = []output.NextDo{{Reason: "apply the shown changes to the tap", Do: "wharfy publish homebrew --yes"}}
-	}
+	res := output.New(c.Name, msg, true)
+	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+	res.Next = dryRunNext(item, reqs)
 	return res
+}
+
+// applyRequirements は --yes の前提条件と現在の充足状況を返す(preview で先出しする)。
+func applyRequirements(tagMissing bool) []requirement {
+	return []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+		{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (write access to the tap)"},
+	}
+}
+
+// dryRunNext は noop なら verify、差分ありなら未充足の前提を先に解消してから --yes を促す。
+func dryRunNext(item channel.PlanItem, reqs []requirement) []output.NextDo {
+	if item.Action == channel.ActionNoop {
+		return []output.NextDo{{Reason: "already up to date; verify install", Do: "wharfy verify"}}
+	}
+	next := []output.NextDo{}
+	for _, r := range reqs {
+		if !r.Met {
+			next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
+		}
+	}
+	next = append(next, output.NextDo{Reason: "apply the shown changes to the tap", Do: "wharfy publish homebrew --yes"})
+	return next
 }
 
 // publishApply は実際に tap に書く(--yes)。tag/token が要る。

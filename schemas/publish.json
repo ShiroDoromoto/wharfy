@@ -19,6 +19,11 @@
         "plan": {
           "type": "array",
           "items": { "$ref": "#/$defs/planItem" }
+        },
+        "requires": {
+          "description": "実 apply(--yes)の前提条件と充足状況。preview で出すことで、credential を持たないエージェントが1往復で「実 apply できるか」を判断できる(09 の tag_missing/token_missing を事前に可視化)。",
+          "type": "array",
+          "items": { "$ref": "#/$defs/requirement" }
         }
       },
       "required": ["plan"],
@@ -62,6 +67,17 @@
         }
       },
       "required": ["channel", "action"],
+      "additionalProperties": false
+    },
+    "requirement": {
+      "description": "実 apply の前提条件 1 つと、その充足状況・解消手段。",
+      "type": "object",
+      "properties": {
+        "requirement": { "type": "string", "minLength": 1, "description": "必要なもの(例: git tag / GITHUB_TOKEN)。" },
+        "met": { "type": "boolean", "description": "現在満たされているか。" },
+        "hint": { "type": "string", "description": "満たすための手順(未充足の解消導線)。" }
+      },
+      "required": ["requirement", "met"],
       "additionalProperties": false
     }
   }
