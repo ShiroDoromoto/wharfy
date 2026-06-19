@@ -57,10 +57,16 @@ Then drive — start by asking the tool what it can do:
 wharfy agent                 # one-screen capability map (use --json from an agent)
 wharfy config                # the resolved effective config
 wharfy build                 # cross-compile (via GoReleaser) → artifacts
+wharfy release --yes         # upload the github release (archives, packages, install.sh)
 wharfy publish homebrew --dry-run   # preview the formula diff before writing
-wharfy publish --yes         # publish all configured channels (one release)
-wharfy status                # what's built / published / drifted, and the next move
+wharfy publish --yes         # write each channel's manifest (reuses the release)
+wharfy status                # what's built / released / published / drifted, and the next move
 ```
+
+The order is `build → sign → release → publish → verify` (what `wharfy agent` reports).
+`release` uploads the GitHub release once and records the artifacts; `publish` then writes
+each channel's manifest against that release, so a mid-batch failure resumes safely without
+re-uploading. `wharfy publish` with no prior `release` still works — it runs the release itself.
 
 Every command also takes `--json` and ends with a `next:` block. **The authoritative,
 always-current list of commands and channels is `wharfy agent` itself** — this README does
@@ -70,13 +76,20 @@ not duplicate it (a generated map can't go stale; a hand-written table can).
 
 Owned (wharfy publishes directly): `homebrew`, `scoop`, `apt`, `rpm`, `container` (ghcr,
 multi-arch), `aur`, `releases` (GitHub Releases), `script` (`curl | sh`), `goinstall`.
-Gated (wharfy prepares a PR and tracks it, never merges): `winget`.
+Gated (wharfy prepares a PR and tracks it, never merges): `winget`, `homebrew-core`.
 
 Run `wharfy agent --json` for the live set and each channel's kind.
 
-Each channel needs its own prerequisites (a tap/bucket repo, a token, a hosted repo, docker,
-an AUR key, …). wharfy tells you what's missing: `publish --dry-run` lists a `requires` block,
-and unconfigured channels are skipped (not failed) in a batch.
+Each channel needs its own prerequisites (a token, a hosted repo, docker, an AUR key, …).
+wharfy tells you what's missing: `publish --dry-run` lists a `requires` block, and unconfigured
+channels are skipped (not failed) in a batch. Owned tap/bucket repos are created for you on
+`--yes` (a `tap_will_be_created` warning previews it).
+
+Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you. In
+particular `homebrew-core` requires a notable, established project **and** a build-from-source
+formula; wharfy generates a binary-download formula, which suits your **own tap** (or a cask)
+far better than homebrew-core's review. Treat `homebrew-core` as "opens the PR for you" — the
+audit and merge are on you and the maintainers.
 
 ## How it works
 
@@ -92,9 +105,8 @@ and unconfigured channels are skipped (not failed) in a batch.
 ## Maturity
 
 MVP. wharfy ships **itself** end-to-end via Homebrew (the strongest dogfood). The other
-channels are implemented and unit-tested but are first-run against real infrastructure — and
-wharfy does not yet auto-create owned tap/bucket repos (create them first). Expect rough edges
-on channels you haven't exercised; `--dry-run` first.
+channels are implemented and unit-tested but are first-run against real infrastructure. Expect
+rough edges on channels you haven't exercised; `--dry-run` first.
 
 ## Development
 
