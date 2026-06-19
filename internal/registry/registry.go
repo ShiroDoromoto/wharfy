@@ -60,6 +60,7 @@ var StateReaders = []string{"status", "config"}
 var Channels = []ChannelRef{
 	{Name: "homebrew", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
+	{Name: "script", Kind: "owned"},
 }
 
 // Names は登録コマンド名の集合。drift テストや next: 参照健全性の照合に使う。

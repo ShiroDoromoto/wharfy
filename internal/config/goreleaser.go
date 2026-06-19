@@ -71,7 +71,13 @@ type glBrew struct {
 }
 
 type glRelease struct {
-	GitHub glRepository `yaml:"github"`
+	GitHub     glRepository  `yaml:"github"`
+	ExtraFiles []glExtraFile `yaml:"extra_files,omitempty"`
+}
+
+// glExtraFile は release に同梱アップロードする追加アセット(script の install.sh 等)。
+type glExtraFile struct {
+	Glob string `yaml:"glob"`
 }
 
 type glRepository struct {
@@ -132,9 +138,14 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 	}
 
 	// release: github(owner/repo)が解決できる時だけ。最終フォールバック列(03)。
-	if hasChannel(cfg, "releases") {
+	// script チャネルは install.sh を同じ release に extra_files で同梱するため release を要する。
+	if HasChannel(cfg, "releases") || HasChannel(cfg, "script") {
 		if owner, name, ok := splitOwnerRepo(cfg.Github); ok {
-			gl.Release = &glRelease{GitHub: glRepository{Owner: owner, Name: name}}
+			rel := &glRelease{GitHub: glRepository{Owner: owner, Name: name}}
+			if HasChannel(cfg, "script") {
+				rel.ExtraFiles = []glExtraFile{{Glob: InstallScriptRelPath}}
+			}
+			gl.Release = rel
 		}
 	}
 
@@ -226,15 +237,6 @@ func channelTargetOf(cfg Config, name string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func hasChannel(cfg Config, name string) bool {
-	for _, c := range cfg.Channels {
-		if c.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func splitOwnerRepo(s string) (owner, name string, ok bool) {

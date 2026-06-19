@@ -71,6 +71,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
+	case "script":
+		return publishScript(ctx, c, root, cfg, in, version, tagMissing)
 	default:
 		item := channel.PlanItem{
 			Channel: ch, Action: channel.ActionSkip,
@@ -97,12 +99,8 @@ func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg c
 		return res
 	}
 
-	// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない・03)。
-	glYAML, err := config.GenerateGoReleaser(cfg, in)
-	if err != nil {
-		return internalError(c, err)
-	}
-	configPath, err := config.WriteGoReleaser(root, glYAML)
+	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く(03)。
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
 	if err != nil {
 		return internalError(c, err)
 	}
@@ -131,6 +129,71 @@ func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg c
 		return buildErrorResult(c, rerr)
 	}
 	return publishApply(c, ctx2.homebrew(archs), ctx, root, cfg, tap, version)
+}
+
+// publishScript は script チャネル(curl|sh インストーラ・03/07)。install.sh を生成し、
+// 実 release の extra_files で同梱アップロードする。書く前に install.sh の内容を見せる。
+func publishScript(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	if cfg.Github == "" {
+		item := channel.PlanItem{Channel: "script", Kind: channel.KindOwned, Action: channel.ActionSkip,
+			Reason: "github unresolved — install.sh needs the release repo"}
+		res := publishResult(c, "script skipped — github unresolved", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "set github so the release can be derived", Do: "wharfy config"}}
+		return res
+	}
+
+	script := config.GenerateInstallScript(cfg, version)
+	item := channel.PlanItem{
+		Channel: "script", Kind: channel.KindOwned,
+		OwnedArtifact: cfg.Github + " release:" + config.InstallScriptName,
+		Action:        channel.ActionCreate,
+		Diff:          channel.Diff("", script), // 同梱する install.sh の内容を見せる
+	}
+	curl := "curl -fsSL " + config.InstallURL(cfg) + " | sh"
+
+	if !flagYes {
+		reqs := applyRequirements(tagMissing)
+		msg := "plan: upload " + config.InstallScriptName + " to the release"
+		if tagMissing {
+			msg += " (preview @ " + version + "; no git tag yet)"
+		}
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, "script")
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	// 実 release: archive ＋ install.sh(extra_files)を GitHub Releases へアップロード。
+	if _, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath); rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		now := nowUTC().Format(time.RFC3339)
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
+		_ = state.Save(root, st)
+	}
+	item.Action = channel.ActionUpdate
+	res := publishResult(c, "published "+config.InstallScriptName+" → "+cfg.Github+" release", true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Next = []output.NextDo{
+		{Reason: "users install with", Do: curl},
+		{Reason: "verify install works", Do: "wharfy verify"},
+	}
+	return res
 }
 
 // publishGoinstall は goinstall チャネル(梱包ゼロ・03/07)。何も push せず、module proxy で
@@ -243,7 +306,7 @@ func publishDryRun(c registry.Command, hb *channel.Homebrew, ctx context.Context
 	}
 	res := output.New(c.Name, msg, true)
 	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
-	res.Next = dryRunNext(item, reqs)
+	res.Next = dryRunNext(item, reqs, "homebrew")
 	return res
 }
 
@@ -256,7 +319,7 @@ func applyRequirements(tagMissing bool) []requirement {
 }
 
 // dryRunNext は noop なら verify、差分ありなら未充足の前提を先に解消してから --yes を促す。
-func dryRunNext(item channel.PlanItem, reqs []requirement) []output.NextDo {
+func dryRunNext(item channel.PlanItem, reqs []requirement, chName string) []output.NextDo {
 	if item.Action == channel.ActionNoop {
 		return []output.NextDo{{Reason: "already up to date; verify install", Do: "wharfy verify"}}
 	}
@@ -266,8 +329,23 @@ func dryRunNext(item channel.PlanItem, reqs []requirement) []output.NextDo {
 			next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
 		}
 	}
-	next = append(next, output.NextDo{Reason: "apply the shown changes to the tap", Do: "wharfy publish homebrew --yes"})
+	next = append(next, output.NextDo{Reason: "apply the shown changes", Do: "wharfy publish " + chName + " --yes"})
 	return next
+}
+
+// writeGeneratedConfig は所有する生成物(goreleaser.yaml ＋ script 有効時は install.sh)を
+// .wharfy/ に書く(03)。install.sh は extra_files が参照するので、生成設定と必ず同時に書く。
+func writeGeneratedConfig(root string, cfg config.Config, in config.File, version string) (string, error) {
+	glYAML, err := config.GenerateGoReleaser(cfg, in)
+	if err != nil {
+		return "", err
+	}
+	if config.HasChannel(cfg, "script") {
+		if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
+			return "", err
+		}
+	}
+	return config.WriteGoReleaser(root, glYAML)
 }
 
 // tagMissingResult / tokenMissingResult は実 apply の前提不足(09)。実リリース前に弾く。

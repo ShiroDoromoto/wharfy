@@ -72,6 +72,10 @@
     {
       "name": "goinstall",
       "kind": "owned"
+    },
+    {
+      "name": "script",
+      "kind": "owned"
     }
   ]
 }
