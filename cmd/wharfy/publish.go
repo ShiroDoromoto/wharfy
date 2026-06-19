@@ -489,9 +489,7 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 			Diff: channel.Diff("", channel.GeneratePKGBUILD(ai)),
 		}
 		msg := "plan: push PKGBUILD for " + pkg
-		if tagMissing {
-			msg += " (preview @ " + version + "; no git tag yet)"
-		}
+		msg += previewNote(version, tagMissing, true)
 		res := output.New(c.Name, msg, true)
 		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
 		res.Next = dryRunNext(item, reqs, "aur")
@@ -615,9 +613,7 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 			Action:        channel.ActionPrepare, Diff: manifestsDiff(files),
 		}
 		msg := "plan: prepare winget PR for " + identifier
-		if tagMissing {
-			msg += " (preview @ " + version + "; no git tag yet)"
-		}
+		msg += previewNote(version, tagMissing, true)
 		res := output.New(c.Name, msg, true)
 		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
 		res.Next = dryRunNext(item, reqs, "winget")
@@ -1156,10 +1152,7 @@ func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Pub
 	}
 	reqs := applyRequirements(tagMissing)
 	msg := "plan: " + item.Action + " " + item.OwnedArtifact
-	if tagMissing {
-		// 正準コードに合う warning が無いので、誤コードを付けず message で正直に注記する。
-		msg += " (preview @ " + version + "; no git tag yet)"
-	}
+	msg += previewNote(version, tagMissing, true)
 	res := output.New(c.Name, msg, true)
 	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
 	res.Next = dryRunNext(item, reqs, chName)
@@ -1173,6 +1166,23 @@ func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Pub
 		}
 	}
 	return res
+}
+
+// previewNote は dry-run の message 注記。sha256 を含むプレビュー(formula/manifest/PKGBUILD/
+// winget installer)は snapshot ビルド由来の暫定値なので、「実値は --yes で確定」と正直に明示する
+// (follow-up #4)。tag が無い時はその旨も併記する。正準コードに合う warning が無いので message で示す。
+func previewNote(version string, tagMissing, hasChecksums bool) string {
+	var parts []string
+	if hasChecksums {
+		parts = append(parts, "checksums are provisional (snapshot); real values are set on --yes")
+	}
+	if tagMissing {
+		parts = append(parts, "no git tag yet, previewing @ "+version)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (preview: " + strings.Join(parts, "; ") + ")"
 }
 
 // applyRequirements は --yes の前提条件と現在の充足状況を返す(preview で先出しする)。

@@ -2,11 +2,47 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 )
+
+// dry-run: tag があっても、sha を含むプレビュー(homebrew)は checksums が暫定だと明示する(#4)。
+func TestPublishHomebrewDryRunMarksChecksumsProvisional(t *testing.T) {
+	root := scratchModule(t)
+	tagScratch(t, root, "v1.2.3") // tag あり(tag 欠如の注記ではないことを示す)
+	chdir(t, root)
+	defer swapArchiver(fakeArchiver{arts: sampleArchiveArtifacts()})()
+	defer swapTapStore(channel.NewInMemoryTapStore())()
+	flagYes = false
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"homebrew"})
+	if !res.OK {
+		t.Fatalf("dry-run ok: %+v", res)
+	}
+	if !strings.Contains(res.Message, "provisional") || !strings.Contains(res.Message, "--yes") {
+		t.Errorf("sha-bearing preview must mark checksums provisional: %q", res.Message)
+	}
+}
+
+// 対照: sha を含まない channel(script)は暫定 sha 注記を出さない。
+func TestPublishScriptDryRunNoProvisionalNote(t *testing.T) {
+	root := scratchModule(t)
+	tagScratch(t, root, "v1.2.3")
+	chdir(t, root)
+	defer swapArchiver(fakeArchiver{arts: sampleArchiveArtifacts()})()
+	flagYes = false
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"script"})
+	if !res.OK {
+		t.Fatalf("dry-run ok: %+v", res)
+	}
+	if strings.Contains(res.Message, "provisional") {
+		t.Errorf("script has no checksums; should not claim provisional sha: %q", res.Message)
+	}
+}
 
 // dry-run: tap が未作成なら tap_will_be_created で予告する(まだ作らない)。
 func TestPublishHomebrewDryRunWarnsTapWillBeCreated(t *testing.T) {
