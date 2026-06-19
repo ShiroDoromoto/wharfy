@@ -44,6 +44,8 @@ type statusChannel struct {
 	Reason    string       `json:"reason,omitempty"`
 	Source    string       `json:"source"`
 	Drift     *state.Drift `json:"drift,omitempty"`
+	State     string       `json:"state,omitempty"` // gated の申請状態(11A)
+	PR        string       `json:"pr,omitempty"`    // gated の PR URL
 }
 
 // runStatus は status を組み立てて出力する(agent 同様 Result envelope と別形)。
@@ -120,9 +122,31 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 		return assessScript(ctx, cs, cfg, recordedVer)
 	case "goinstall":
 		return assessGoinstall(ctx, cs, ch.Target, tag)
+	case "winget":
+		return assessWinget(cs, st.Publish["winget"])
 	default:
 		return recordedOnly(cs, recordedVer, "not assessed yet (no probe for this channel)"), nil
 	}
+}
+
+// assessWinget は gated の申請状態を記録から見せる(none/prepared/pr_open/merged/...・11A)。
+// PR 状態の API probe は未実装(記録ベース)。pr_open は gated_pending で注意喚起。
+func assessWinget(cs statusChannel, rec state.PublishRecord) (statusChannel, *output.Warning) {
+	cs.Source = state.SourceRecorded
+	if rec.Version == "" {
+		cs.State = "none"
+		cs.Published = false
+		cs.Reason = "not submitted"
+		return cs, nil
+	}
+	cs.Version = rec.Version
+	cs.State = rec.State
+	cs.PR = rec.PR
+	cs.Published = rec.State == "merged"
+	if rec.State == "pr_open" {
+		return cs, &output.Warning{Code: output.WarnGatedPending, Message: "winget PR awaiting review: " + rec.PR}
+	}
+	return cs, nil
 }
 
 // recordedOnly は照合せず記録のみで埋める(未 probe / 未実装チャネル)。

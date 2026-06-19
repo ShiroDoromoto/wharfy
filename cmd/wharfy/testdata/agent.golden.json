@@ -92,6 +92,10 @@
     {
       "name": "script",
       "kind": "owned"
+    },
+    {
+      "name": "winget",
+      "kind": "gated"
     }
   ]
 }

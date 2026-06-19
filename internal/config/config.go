@@ -26,6 +26,12 @@ type File struct {
 	Apt         *RepoInput      `yaml:"apt"`
 	Rpm         *RepoInput      `yaml:"rpm"`
 	Container   *ContainerInput `yaml:"container"`
+	Winget      *WingetIn       `yaml:"winget"`
+}
+
+// WingetIn は winget の設定。Identifier は既定 <Owner>.<Project> を上書き(PackageIdentifier)。
+type WingetIn struct {
+	Identifier string `yaml:"identifier"`
 }
 
 // RepoInput は hosted パッケージリポジトリの設定(apt/rpm 共通)。Repo は self-host の URL。

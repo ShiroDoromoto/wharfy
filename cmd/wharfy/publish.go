@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ var (
 	newTapStore      = func(owner, repo, token string) channel.TapStore {
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
+	newWingetSubmitter = func(token string) channel.Submitter { return channel.NewGitHubWingetSubmitter(token) }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
@@ -91,6 +93,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "rpm", ".rpm")
 	case "container":
 		return publishContainer(ctx, c, root, cfg, in, version, tagMissing)
+	case "winget":
+		return publishWinget(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
@@ -132,6 +136,130 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 		func(archs []build.Artifact) channel.Publisher {
 			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
 		})
+}
+
+// publishWinget は winget チャネル(gated・11A)。manifest 3 種を生成し、microsoft/winget-pkgs を
+// fork→branch→commit→PR まで組み立てる(マージはしない)。書く前に申請物を見せる。
+func publishWinget(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	identifier := channelTargetByName(cfg, "winget")
+	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
+	if identifier == "" || !ghOK {
+		item := channel.PlanItem{Channel: "winget", Kind: channel.KindGated, Action: channel.ActionSkip,
+			Reason: "winget identifier/github unresolved — set 'github' or 'winget.identifier'"}
+		res := publishResult(c, "winget skipped — unresolved", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
+		return res
+	}
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	buildInput := func(archs []build.Artifact) channel.WingetInput {
+		return channel.WingetInput{
+			Identifier:  identifier,
+			Project:     cfg.Project,
+			Version:     version,
+			License:     cfg.License,
+			Description: in.Description,
+			Homepage:    cfg.Homepage,
+			Installers:  wingetInstallers(archs, ghOwner, ghRepo, cfg.Project, version),
+		}
+	}
+	reqs := applyRequirements(tagMissing)
+
+	if !flagYes {
+		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		if aerr != nil {
+			return buildErrorResult(c, aerr)
+		}
+		files := channel.GenerateWingetManifests(buildInput(archs))
+		item := channel.PlanItem{
+			Channel: "winget", Kind: channel.KindGated,
+			OwnedArtifact: "microsoft/winget-pkgs (PR from fork)",
+			Action:        channel.ActionPrepare, Diff: manifestsDiff(files),
+		}
+		msg := "plan: prepare winget PR for " + identifier
+		if tagMissing {
+			msg += " (preview @ " + version + "; no git tag yet)"
+		}
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, "winget")
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return tokenMissingResult(c)
+	}
+	// 実 release: windows zip を GitHub Releases へ上げ、実 sha256 を得る(installer が参照)。
+	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	if rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+	wi := buildInput(archs)
+	files := channel.GenerateWingetManifests(wi)
+	prURL, serr := newWingetSubmitter(token).Submit(ctx, wi, files)
+	if serr != nil {
+		res := output.New(c.Name, "winget submission failed", false)
+		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: serr.Error(), Hint: "check GITHUB_TOKEN scope (fork + PR)"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish winget --yes"}}
+		return res
+	}
+
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		now := nowUTC().Format(time.RFC3339)
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["winget"] = state.PublishRecord{Version: version, Target: identifier, State: "pr_open", PR: prURL, At: now}
+		_ = state.Save(root, st)
+	}
+
+	item := channel.PlanItem{Channel: "winget", Kind: channel.KindGated, OwnedArtifact: "microsoft/winget-pkgs (PR)", Action: channel.ActionPrepare}
+	res := publishResult(c, "winget PR opened: "+prURL, true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Warnings = []output.Warning{{Code: output.WarnGatedPending, Message: "winget PR awaiting review (wharfy does not merge)"}}
+	res.Next = []output.NextDo{
+		{Reason: "track the review (merge is the reviewer's call)", Do: "open " + prURL},
+		{Reason: "check overall state", Do: "wharfy status"},
+	}
+	return res
+}
+
+// wingetInstallers は windows archive を winget の installer(URL+sha256)にする。
+func wingetInstallers(archs []build.Artifact, ghOwner, ghRepo, project, version string) []channel.WingetInstaller {
+	var out []channel.WingetInstaller
+	for _, a := range archs {
+		if a.OS != "windows" {
+			continue
+		}
+		name := fmt.Sprintf("%s_%s_windows_%s.zip", project, version, a.Arch)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.WingetInstaller{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	return out
+}
+
+// manifestsDiff は申請する manifest 3 種をファイル名つきで連結して見せる。
+func manifestsDiff(files map[string]string) string {
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString("--- " + n + " ---\n")
+		b.WriteString(files[n])
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // publishContainer は container チャネル(ghcr OCI・マルチアーキ・11B)。goreleaser の

@@ -192,6 +192,14 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if owner != "" {
 			return "ghcr.io/" + strings.ToLower(owner) + "/" + strings.ToLower(project)
 		}
+	case "winget":
+		// PackageIdentifier。既定 <Owner>.<Project>(winget は大小区別あり・そのまま)。
+		if in.Winget != nil && in.Winget.Identifier != "" {
+			return in.Winget.Identifier
+		}
+		if owner != "" {
+			return owner + "." + project
+		}
 	}
 	return ""
 }

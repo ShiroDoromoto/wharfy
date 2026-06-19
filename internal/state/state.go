@@ -38,10 +38,13 @@ type BuildRecord struct {
 }
 
 // PublishRecord はチャネルへの発行記録(status の照合の基点)。
+// gated(winget 等)は State / PR で申請の進行を追う(11A)。
 type PublishRecord struct {
 	Version string `json:"version,omitempty"`
 	Target  string `json:"target,omitempty"`
 	Commit  string `json:"commit,omitempty"`
+	State   string `json:"state,omitempty"` // gated: none|prepared|pr_open|merged|closed|rejected
+	PR      string `json:"pr,omitempty"`    // gated: 申請 PR の URL
 	At      string `json:"at"`
 }
 
