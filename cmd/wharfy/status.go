@@ -90,7 +90,7 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	}
 
 	for _, ch := range cfg.Channels {
-		cs, warn := assessChannel(ctx, ch, st, in, probe)
+		cs, warn := assessChannel(ctx, ch, cfg, st, probe, tag)
 		out.Channels = append(out.Channels, cs)
 		if warn != nil {
 			out.Warnings = append(out.Warnings, *warn)
@@ -101,52 +101,41 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	return out, nil
 }
 
-// assessChannel は 1 チャネルの記録＋(homebrew のみ)実体照合を行う。
-func assessChannel(ctx context.Context, ch config.ResolvedChannel, st *state.State, in config.File, probe bool) (statusChannel, *output.Warning) {
+// assessChannel は 1 チャネルの記録＋実体照合を行う。実装済み(homebrew/script/goinstall)は
+// 各チャネルの実体を probe し、未実装は記録のみで見せる(③ 黙って合わせず source/drift で見せる)。
+func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, st *state.State, probe bool, tag string) (statusChannel, *output.Warning) {
 	cs := statusChannel{Name: ch.Name, Kind: ch.Kind, Target: ch.Target}
+	recordedVer := st.Publish[ch.Name].Version
 
-	rec, hasRec := st.Publish[ch.Name]
-	recordedVer := ""
-	if hasRec {
-		recordedVer = rec.Version
+	if !probe {
+		return recordedOnly(cs, recordedVer, "not published yet"), nil
 	}
 
-	// スライス1 で実体照合できるのは homebrew のみ。他は記録のみで見せる(未実装は正直に reason)。
-	if ch.Name != "homebrew" || !probe {
-		cs.Source = state.SourceRecorded
-		cs.Published = recordedVer != ""
-		cs.Version = recordedVer
-		if !cs.Published && ch.Name != "homebrew" {
-			cs.Reason = "not assessed in slice 1 (homebrew only)"
-		} else if !cs.Published {
-			cs.Reason = "not published yet"
-		}
-		return cs, nil
+	switch ch.Name {
+	case "homebrew":
+		return assessHomebrew(ctx, cs, ch, cfg.Project, recordedVer)
+	case "script":
+		return assessScript(ctx, cs, cfg, recordedVer)
+	case "goinstall":
+		return assessGoinstall(ctx, cs, ch.Target, tag)
+	default:
+		return recordedOnly(cs, recordedVer, "not assessed yet (no probe for this channel)"), nil
 	}
+}
 
-	tapOwner, tapRepo, ok := splitOwnerName(ch.Target)
-	if !ok {
-		cs.Source = state.SourceRecorded
-		cs.Published = recordedVer != ""
-		cs.Version = recordedVer
-		cs.Reason = "tap unresolved — set 'github' or 'homebrew.tap'"
-		return cs, nil
+// recordedOnly は照合せず記録のみで埋める(未 probe / 未実装チャネル)。
+func recordedOnly(cs statusChannel, recordedVer, unpublishedReason string) statusChannel {
+	cs.Source = state.SourceRecorded
+	cs.Published = recordedVer != ""
+	cs.Version = recordedVer
+	if !cs.Published {
+		cs.Reason = unpublishedReason
 	}
+	return cs
+}
 
-	hb := &channel.Homebrew{
-		Project: st.Project,
-		Tap:     ch.Target,
-		Store:   newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN")),
-	}
-	rs, err := hb.Probe(ctx)
-	if err != nil {
-		// 照合不能は記録のみで見せ、probe_failed を warning で添える(止めない)。
-		cs.Source = state.SourceRecorded
-		cs.Published = recordedVer != ""
-		cs.Version = recordedVer
-		return cs, &output.Warning{Code: output.ErrProbeFailed, Message: "cannot probe " + ch.Target + ": " + err.Error()}
-	}
-
+// reconcileInto は記録 vs 実体を照合して cs を埋め、drift なら warning を返す(homebrew/script 共通)。
+func reconcileInto(cs *statusChannel, name, recordedVer string, rs channel.RemoteState) *output.Warning {
 	source, drift := state.Reconcile(recordedVer, rs.Version, rs.Found, true)
 	cs.Source = source
 	cs.Drift = drift
@@ -160,7 +149,71 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, st *state.Sta
 		cs.Reason = "not published yet"
 	}
 	if drift != nil {
-		return cs, &output.Warning{Code: output.WarnDriftDetected, Message: driftMessage(ch.Name, drift)}
+		return &output.Warning{Code: output.WarnDriftDetected, Message: driftMessage(name, drift)}
+	}
+	return nil
+}
+
+func probeFailedWarning(target string, err error) *output.Warning {
+	return &output.Warning{Code: output.ErrProbeFailed, Message: "cannot probe " + target + ": " + err.Error()}
+}
+
+// assessHomebrew は自前 tap の formula 版を照合する。
+func assessHomebrew(ctx context.Context, cs statusChannel, ch config.ResolvedChannel, project, recordedVer string) (statusChannel, *output.Warning) {
+	tapOwner, tapRepo, ok := splitOwnerName(ch.Target)
+	if !ok {
+		cs = recordedOnly(cs, recordedVer, "tap unresolved — set 'github' or 'homebrew.tap'")
+		return cs, nil
+	}
+	hb := &channel.Homebrew{Project: project, Tap: ch.Target, Store: newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN"))}
+	rs, err := hb.Probe(ctx)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
+	}
+	warn := reconcileInto(&cs, "homebrew", recordedVer, rs)
+	return cs, warn
+}
+
+// assessScript は Release 上の install.sh が指す版を照合する。
+func assessScript(ctx context.Context, cs statusChannel, cfg config.Config, recordedVer string) (statusChannel, *output.Warning) {
+	url := scriptProbeURL
+	if url == "" {
+		url = config.InstallURL(cfg)
+	}
+	if url == "" {
+		return recordedOnly(cs, recordedVer, "github unresolved"), nil
+	}
+	sc := &channel.Script{InstallURL: url}
+	rs, err := sc.Probe(ctx)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning("install.sh", err)
+	}
+	warn := reconcileInto(&cs, "script", recordedVer, rs)
+	return cs, warn
+}
+
+// assessGoinstall は module proxy で現タグの go install 可否を確認する(記録は持たない)。
+func assessGoinstall(ctx context.Context, cs statusChannel, module, tag string) (statusChannel, *output.Warning) {
+	if tag == "" {
+		cs.Source = state.SourceRecorded
+		cs.Published = false
+		cs.Reason = "no tag; `go install` resolves no version"
+		return cs, nil
+	}
+	gi := &channel.GoInstall{Module: module, Version: tag, Proxy: goinstallProxy}
+	rs, err := gi.Probe(ctx)
+	if err != nil {
+		cs.Source = state.SourceRecorded
+		cs.Reason = "proxy unreachable"
+		return cs, probeFailedWarning("module proxy", err)
+	}
+	// goinstall は発行物を持たない(記録 vs 実体の drift 概念が無い)。proxy 到達性を見せる。
+	cs.Source = state.SourceProbed
+	cs.Published = rs.Found
+	if rs.Found {
+		cs.Version = tag
+	} else {
+		cs.Reason = "not resolvable via `go install` yet (push the tag; public repo)"
 	}
 	return cs, nil
 }

@@ -23,8 +23,9 @@ var (
 	newTapStore = func(owner, repo, token string) channel.TapStore {
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
-	// goinstallProxy はテストで module proxy を httptest に差し替える点(空＝既定 proxy)。
+	// goinstallProxy / scriptProbeURL はテストで実体照合先を httptest に差し替える点(空＝既定)。
 	goinstallProxy = ""
+	scriptProbeURL = ""
 )
 
 // publishData は publish の固有ペイロード(schemas/publish.json data)。
