@@ -34,6 +34,24 @@ type glConfig struct {
 	NFPMs       []glNFPM    `yaml:"nfpms,omitempty"`
 	Brews       []glBrew    `yaml:"brews,omitempty"`
 	Release     *glRelease  `yaml:"release,omitempty"`
+
+	Dockers         []glDocker         `yaml:"dockers,omitempty"`
+	DockerManifests []glDockerManifest `yaml:"docker_manifests,omitempty"`
+}
+
+// glDocker は per-arch の OCI イメージビルド。glDockerManifest は多アーキ束ね(manifest list)。
+type glDocker struct {
+	ID                 string   `yaml:"id"`
+	GOOS               string   `yaml:"goos"`
+	GOARCH             string   `yaml:"goarch"`
+	Dockerfile         string   `yaml:"dockerfile"`
+	ImageTemplates     []string `yaml:"image_templates"`
+	BuildFlagTemplates []string `yaml:"build_flag_templates,omitempty"`
+}
+
+type glDockerManifest struct {
+	NameTemplate   string   `yaml:"name_template"`
+	ImageTemplates []string `yaml:"image_templates"`
 }
 
 // glNFPM は deb/rpm 生成(apt/rpm チャネル)。nfpm 経由でビルド成果物からパッケージを作る。
@@ -176,7 +194,51 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 		}
 	}
 
+	// container: ghcr のマルチアーキ OCI(linux amd64/arm64)。dockers ＋ docker_manifests を出す(11B)。
+	if HasChannel(cfg, "container") {
+		if image := containerImage(cfg); image != "" {
+			gl.Dockers, gl.DockerManifests = dockerBlocks(cfg, image)
+		}
+	}
+
 	return marshalGoReleaser(gl)
+}
+
+// dockerBlocks は image に対する per-arch dockers と :version/:latest の manifest list を組む。
+func dockerBlocks(cfg Config, image string) ([]glDocker, []glDockerManifest) {
+	arches := []string{"amd64", "arm64"}
+	if cfg.Build != nil && len(cfg.Build.GOARCH) > 0 {
+		arches = cfg.Build.GOARCH
+	}
+	var dockers []glDocker
+	var verImages []string
+	for _, arch := range arches {
+		tag := image + ":{{ .Version }}-" + arch
+		dockers = append(dockers, glDocker{
+			ID:                 cfg.Project + "-" + arch,
+			GOOS:               "linux",
+			GOARCH:             arch,
+			Dockerfile:         DockerfileRelPath,
+			ImageTemplates:     []string{tag},
+			BuildFlagTemplates: []string{"--platform=linux/" + arch},
+		})
+		verImages = append(verImages, tag)
+	}
+	manifests := []glDockerManifest{
+		{NameTemplate: image + ":{{ .Version }}", ImageTemplates: verImages},
+		{NameTemplate: image + ":latest", ImageTemplates: verImages},
+	}
+	return dockers, manifests
+}
+
+// containerImage は container の解決済みイメージ名(channels の target)。
+func containerImage(cfg Config) string {
+	for _, ch := range cfg.Channels {
+		if ch.Name == "container" {
+			return ch.Target
+		}
+	}
+	return ""
 }
 
 // marshalGoReleaser は生成物に「自動生成・編集しない」ヘッダを添えて YAML 化する。

@@ -49,6 +49,11 @@ type Packager interface {
 	Packages(ctx context.Context, root, configPath string) ([]Artifact, error)
 }
 
+// Containerizer は OCI イメージのビルド＆push 境界(container チャネル)。
+type Containerizer interface {
+	Containers(ctx context.Context, root, configPath string) ([]Artifact, error)
+}
+
 // UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
 type UnavailableError struct {
 	Bin string
@@ -110,15 +115,23 @@ func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath strin
 // GitHub Releases へアップロードし、その実アーカイブの Archive 成果物(実 sha256)を返す。
 // formula push は wharfy が所有するので --skip=homebrew で goreleaser には書かせない(03)。
 func (b *GoReleaserBuilder) Release(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	// docker は container チャネルが別経路(Containers)で扱うので、ここでは作らない。
 	return b.runAndParse(ctx, root, configPath, "Archive",
-		"release", "--clean", "--skip=homebrew", "--config", configPath)
+		"release", "--clean", "--skip=homebrew,docker", "--config", configPath)
 }
 
 // Packages は nfpm の deb/rpm をローカルに作る。--skip=publish で GitHub には上げない
 // (apt/rpm の発行先は hosted repo)。実タグの版でパッケージ化するため --snapshot は使わない。
 func (b *GoReleaserBuilder) Packages(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	return b.runAndParse(ctx, root, configPath, "Linux Package",
-		"release", "--clean", "--skip=publish", "--config", configPath)
+		"release", "--clean", "--skip=publish,docker", "--config", configPath)
+}
+
+// Containers は OCI イメージ(per-arch)をビルドし ghcr へ push、manifest list を作る。
+// goreleaser の docker pipe に任せる(ADR-5)。docker デーモン ＋ ghcr 認証が要る。
+func (b *GoReleaserBuilder) Containers(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	return b.runAndParse(ctx, root, configPath, "Docker Image",
+		"release", "--clean", "--skip=homebrew", "--config", configPath)
 }
 
 func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, typ string, args ...string) ([]Artifact, error) {

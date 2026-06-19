@@ -184,6 +184,14 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if in.Rpm != nil {
 			return in.Rpm.Repo
 		}
+	case "container":
+		// OCI イメージ名。既定 ghcr.io/<owner>/<project>(ghcr は小文字必須)。
+		if in.Container != nil && in.Container.Image != "" {
+			return in.Container.Image
+		}
+		if owner != "" {
+			return "ghcr.io/" + strings.ToLower(owner) + "/" + strings.ToLower(project)
+		}
 	}
 	return ""
 }

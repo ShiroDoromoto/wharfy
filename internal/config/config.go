@@ -11,25 +11,31 @@ package config
 // File は wharfy.yaml の入力(schemas/wharfy.config.json に対応・助言)。全フィールド省略可。
 // 未知キーは yaml.v3 が無視する(入力は厳密契約ではない)。スライス1 で解決に使うキーを持つ。
 type File struct {
-	Project     string         `yaml:"project"`
-	Binary      string         `yaml:"binary"`
-	Main        string         `yaml:"main"`
-	Github      string         `yaml:"github"`
-	Homepage    string         `yaml:"homepage"`
-	Description string         `yaml:"description"`
-	License     string         `yaml:"license"`
-	Channels    []string       `yaml:"channels"`
-	Build       *BuildInput    `yaml:"build"`
-	Homebrew    *HomebrewInput `yaml:"homebrew"`
-	Scoop       *ScoopInput    `yaml:"scoop"`
-	Goinstall   *GoinstallIn   `yaml:"goinstall"`
-	Apt         *RepoInput     `yaml:"apt"`
-	Rpm         *RepoInput     `yaml:"rpm"`
+	Project     string          `yaml:"project"`
+	Binary      string          `yaml:"binary"`
+	Main        string          `yaml:"main"`
+	Github      string          `yaml:"github"`
+	Homepage    string          `yaml:"homepage"`
+	Description string          `yaml:"description"`
+	License     string          `yaml:"license"`
+	Channels    []string        `yaml:"channels"`
+	Build       *BuildInput     `yaml:"build"`
+	Homebrew    *HomebrewInput  `yaml:"homebrew"`
+	Scoop       *ScoopInput     `yaml:"scoop"`
+	Goinstall   *GoinstallIn    `yaml:"goinstall"`
+	Apt         *RepoInput      `yaml:"apt"`
+	Rpm         *RepoInput      `yaml:"rpm"`
+	Container   *ContainerInput `yaml:"container"`
 }
 
 // RepoInput は hosted パッケージリポジトリの設定(apt/rpm 共通)。Repo は self-host の URL。
 type RepoInput struct {
 	Repo string `yaml:"repo"`
+}
+
+// ContainerInput は OCI イメージの設定。Image は既定 ghcr.io/<owner>/<project> を上書き。
+type ContainerInput struct {
+	Image string `yaml:"image"`
 }
 
 type BuildInput struct {

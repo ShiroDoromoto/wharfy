@@ -62,6 +62,7 @@ var Channels = []ChannelRef{
 	{Name: "scoop", Kind: "owned"},
 	{Name: "apt", Kind: "owned"},
 	{Name: "rpm", Kind: "owned"},
+	{Name: "container", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
 	{Name: "script", Kind: "owned"},
 }

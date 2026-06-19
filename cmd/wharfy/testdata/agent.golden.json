@@ -82,6 +82,10 @@
       "kind": "owned"
     },
     {
+      "name": "container",
+      "kind": "owned"
+    },
+    {
       "name": "goinstall",
       "kind": "owned"
     },

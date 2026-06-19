@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,14 +25,17 @@ import (
 
 // 差し替え点(テストで fake 化＝末端は差し替え可能・01)。
 var (
-	newArchiver = func(distDir string) build.Archiver { return build.NewGoReleaserBuilder(distDir) }
-	newReleaser = func(distDir string) build.Releaser { return build.NewGoReleaserBuilder(distDir) }
-	newPackager = func(distDir string) build.Packager { return build.NewGoReleaserBuilder(distDir) }
-	newTapStore = func(owner, repo, token string) channel.TapStore {
+	newArchiver      = func(distDir string) build.Archiver { return build.NewGoReleaserBuilder(distDir) }
+	newReleaser      = func(distDir string) build.Releaser { return build.NewGoReleaserBuilder(distDir) }
+	newPackager      = func(distDir string) build.Packager { return build.NewGoReleaserBuilder(distDir) }
+	newContainerizer = func(distDir string) build.Containerizer { return build.NewGoReleaserBuilder(distDir) }
+	newTapStore      = func(owner, repo, token string) channel.TapStore {
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
+	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
+	dockerAvailable = func() bool { _, err := exec.LookPath("docker"); return err == nil }
 	// goinstallProxy / scriptProbeURL はテストで実体照合先を httptest に差し替える点(空＝既定)。
 	goinstallProxy = ""
 	scriptProbeURL = ""
@@ -85,6 +89,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "apt", ".deb")
 	case "rpm":
 		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "rpm", ".rpm")
+	case "container":
+		return publishContainer(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
@@ -92,7 +98,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	default:
 		item := channel.PlanItem{
 			Channel: ch, Action: channel.ActionSkip,
-			Reason: "channel not implemented yet (supported: homebrew, goinstall)",
+			Reason: "channel not implemented yet (owned: homebrew, scoop, apt, rpm, container, script, goinstall)",
 		}
 		res := publishResult(c, "channel "+ch+" not implemented yet", false, []channel.PlanItem{item})
 		res.Next = []output.NextDo{{Reason: "publish a supported channel", Do: "wharfy publish homebrew"}}
@@ -126,6 +132,95 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 		func(archs []build.Artifact) channel.Publisher {
 			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
 		})
+}
+
+// publishContainer は container チャネル(ghcr OCI・マルチアーキ・11B)。goreleaser の
+// docker pipe で per-arch イメージをビルドし ghcr へ push、manifest list を作る。
+// docker デーモン＋ghcr 認証(GITHUB_TOKEN packages:write)が要る。書く前に計画を見せる。
+func publishContainer(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	image := channelTargetByName(cfg, "container")
+	if image == "" {
+		item := channel.PlanItem{Channel: "container", Kind: channel.KindOwned, Action: channel.ActionSkip,
+			Reason: "container image unresolved — set 'github' or 'container.image'"}
+		res := publishResult(c, "container skipped — image unresolved", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
+		return res
+	}
+
+	reqs := containerRequirements(tagMissing)
+	item := channel.PlanItem{
+		Channel: "container", Kind: channel.KindOwned, OwnedArtifact: image,
+		Action: channel.ActionCreate, Diff: containerDiff(cfg, image, version),
+	}
+
+	if !flagYes {
+		msg := "plan: build+push " + image + " (multi-arch OCI)"
+		if tagMissing {
+			msg += " (preview @ " + version + "; no git tag yet)"
+		}
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, "container")
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	if !dockerAvailable() {
+		res := output.New(c.Name, "cannot publish: docker is unavailable", false)
+		res.Errors = []output.Problem{{Code: output.ErrBuilderUnavailable, Message: "docker CLI not found", Hint: "install Docker (with buildx) and start the daemon"}}
+		res.Next = []output.NextDo{{Reason: "install docker then retry", Do: "wharfy publish container --yes"}}
+		return res
+	}
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	if _, cerr := newContainerizer(config.DistDir).Containers(ctx, root, configPath); cerr != nil {
+		return buildErrorResult(c, cerr)
+	}
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		st.Publish["container"] = state.PublishRecord{Version: version, Target: image, At: nowUTC().Format(time.RFC3339)}
+		_ = state.Save(root, st)
+	}
+	item.Action = channel.ActionUpdate
+	res := publishResult(c, "published "+image+":"+version+" (multi-arch)", true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Next = []output.NextDo{
+		{Reason: "users pull with", Do: "docker pull " + image + ":" + version},
+		{Reason: "verify install works", Do: "wharfy verify"},
+	}
+	return res
+}
+
+func containerDiff(cfg config.Config, image, version string) string {
+	arches := config.DefaultGOARCH
+	if cfg.Build != nil && len(cfg.Build.GOARCH) > 0 {
+		arches = cfg.Build.GOARCH
+	}
+	var b strings.Builder
+	for _, a := range arches {
+		b.WriteString("+ " + image + ":" + version + "-" + a + "\n")
+	}
+	b.WriteString("→ " + image + ":" + version + ", " + image + ":latest (manifest list)\n")
+	return b.String()
+}
+
+// containerRequirements は container の前提(tag / GITHUB_TOKEN(ghcr) / docker)。
+func containerRequirements(tagMissing bool) []requirement {
+	return []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+		{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (ghcr packages:write)"},
+		{Requirement: "docker", Met: dockerAvailable(), Hint: "install Docker (with buildx) and start the daemon"},
+	}
 }
 
 // publishLinuxPkg は apt(deb)/rpm チャネル。nfpm で deb/rpm を生成し、hosted repo へ
@@ -540,6 +635,12 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 	}
 	if config.HasChannel(cfg, "script") {
 		if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
+			return "", err
+		}
+	}
+	if config.HasChannel(cfg, "container") {
+		// dockers の dockerfile が参照するので、生成設定と必ず同時に書く。
+		if _, err := config.WriteDockerfile(root, config.GenerateDockerfile(cfg)); err != nil {
 			return "", err
 		}
 	}
