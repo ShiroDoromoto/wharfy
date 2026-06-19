@@ -214,9 +214,18 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	if err != nil {
 		return internalError(c, err)
 	}
-	archs, rerr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, skipDocker)
-	if rerr != nil {
-		return buildErrorResult(c, rerr)
+	// release が済んでいれば(同 version)再アップロードしない(c2)。途中失敗からの再開で高コストな
+	// release を繰り返さない土台。無ければ 1 回だけ走らせて記録する。
+	var archs []build.Artifact
+	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
+		archs = set.Artifacts
+	} else {
+		a, rerr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, skipDocker)
+		if rerr != nil {
+			return buildErrorResult(c, rerr)
+		}
+		_ = build.SaveArtifacts(root, version, a)
+		archs = a
 	}
 
 	st, _ := state.Load(root, cfg.Project)
@@ -228,12 +237,19 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	var items []channel.PlanItem
 	var warns []output.Warning
 	for _, ch := range chans {
+		// state 認識の再開(b): その version で発行済みのチャネルは飛ばす。途中失敗後の再実行で
+		// 完了済みを再処理しない(残った失敗チャネルだけ進む)。
+		if rec, ok := st.Publish[ch]; ok && rec.Version == version {
+			items = append(items, channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionNoop, Reason: "already published at " + version})
+			continue
+		}
 		item, w, aerr := applyChannel(ctx, ch, cfg, in, version, ghOwner, ghRepo, archs, st, now, dockerOK)
 		if aerr != nil {
-			// 1 チャネルの失敗は全体を止める(release は済み・冪等に再実行できる)。
+			// 1 チャネルの失敗は全体を止める。release と完了チャネルは記録済みなので、再実行は
+			// 残りだけを安全・安価に進める(release は再アップロードしない)。
 			res := output.New(c.Name, "publish failed at "+ch, false)
 			res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: ch + ": " + aerr.Error(), Hint: "fix and re-run; release/other channels already applied"}}
-			res.Next = []output.NextDo{{Reason: "retry the batch (idempotent)", Do: "wharfy publish --yes"}}
+			res.Next = []output.NextDo{{Reason: "resume the batch (skips completed)", Do: "wharfy publish --yes"}}
 			_ = state.Save(root, st)
 			return res
 		}
@@ -959,12 +975,27 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	if os.Getenv("GITHUB_TOKEN") == "" {
 		return tokenMissingResult(c)
 	}
-	// 実リリース: archive を GitHub Releases へアップロードし、実 sha256 を得る(--skip=homebrew)。
-	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	// release が済んでいれば(同 version)再アップロードせず記録済み成果物を使う(工程の分離・c2)。
+	// 無ければ実リリースを走らせて実 sha256 を得る(--skip=homebrew・後方互換のフォールバック)。
+	archs, _, rerr := releaseArtifacts(ctx, root, configPath, version)
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
 	return ownedReleaseApply(ctx, c, makePub(archs), root, cfg.Project, chName, target, cfg.Github, version)
+}
+
+// releaseArtifacts は publish の apply で使う成果物を返す。release(同 version)が記録済みなら
+// 再アップロードせず再利用し(reused=true)、無ければ release パスを走らせて記録する(後方互換)。
+func releaseArtifacts(ctx context.Context, root, configPath, version string) ([]build.Artifact, bool, error) {
+	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
+		return set.Artifacts, true, nil
+	}
+	archs, err := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	if err != nil {
+		return nil, false, err
+	}
+	_ = build.SaveArtifacts(root, version, archs) // 後続の publish <ch> が再利用できるよう記録
+	return archs, false, nil
 }
 
 func ownedSkip(c registry.Command, chName, reason string) output.Result {
