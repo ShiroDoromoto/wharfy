@@ -85,11 +85,15 @@ wharfy tells you what's missing: `publish --dry-run` lists a `requires` block, a
 channels are skipped (not failed) in a batch. Owned tap/bucket repos are created for you on
 `--yes` (a `tap_will_be_created` warning previews it).
 
-Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you. In
-particular `homebrew-core` requires a notable, established project **and** a build-from-source
-formula; wharfy generates a binary-download formula, which suits your **own tap** (or a cask)
-far better than homebrew-core's review. Treat `homebrew-core` as "opens the PR for you" — the
-audit and merge are on you and the maintainers.
+Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you, and
+some are **strict**. `homebrew-core` requires a notable, established project **and** a formula
+that passes `brew audit --new --strict`. For it, wharfy generates a **source-build** formula
+(`go build` from the tagged source, not a prebuilt binary — that's the core-appropriate shape;
+your own tap stays binary), surfaces the acceptance criteria up front, and **refuses to open a
+PR unless you pass `--acknowledge-review`** (so casual runs don't burden Homebrew maintainers
+with doomed PRs). The generated formula is a starting point, not a guaranteed audit pass; run
+`brew audit --new --strict` yourself first. `winget`, by contrast, is a broad self-service
+index and stays low-friction.
 
 ## How it works
 
