@@ -206,6 +206,9 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 			return in.Aur.Package
 		}
 		return project + "-bin"
+	case "homebrew-core":
+		// 上流の中央 repo(固定)。formula 名は project。
+		return "Homebrew/homebrew-core"
 	}
 	return ""
 }

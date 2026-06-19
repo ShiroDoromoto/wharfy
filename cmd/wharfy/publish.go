@@ -34,6 +34,7 @@ var (
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
 	newWingetSubmitter = func(token string) channel.Submitter { return channel.NewGitHubWingetSubmitter(token) }
+	newCoreSubmitter   = func(token string) channel.CoreSubmitter { return channel.NewGitHubCoreSubmitter(token) }
 	newAurPusher       = func(sshKey string) channel.AurPusher { return channel.NewGitAurPusher(sshKey) }
 	newMultiReleaser   = func(distDir string) build.MultiReleaser { return build.NewGoReleaserBuilder(distDir) }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
@@ -101,6 +102,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishContainer(ctx, c, root, cfg, in, version, tagMissing)
 	case "winget":
 		return publishWinget(ctx, c, root, cfg, in, version, tagMissing)
+	case "homebrew-core":
+		return publishHomebrewCore(ctx, c, root, cfg, in, version, tagMissing)
 	case "aur":
 		return publishAur(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
@@ -110,7 +113,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	default:
 		item := channel.PlanItem{
 			Channel: args[0], Action: channel.ActionSkip,
-			Reason: "unknown channel (owned: homebrew/scoop/apt/rpm/container/aur/script/goinstall, gated: winget)",
+			Reason: "unknown channel (owned: homebrew/scoop/apt/rpm/container/aur/script/goinstall, gated: winget/homebrew-core)",
 		}
 		res := publishResult(c, "channel "+args[0]+" not implemented", false, []channel.PlanItem{item})
 		res.Next = []output.NextDo{{Reason: "publish a supported channel or all", Do: "wharfy publish"}}
@@ -123,6 +126,7 @@ func implementedChannels(cfg config.Config) []string {
 	known := map[string]bool{
 		"homebrew": true, "scoop": true, "apt": true, "rpm": true, "container": true,
 		"aur": true, "winget": true, "goinstall": true, "script": true, "releases": true,
+		"homebrew-core": true,
 	}
 	var out []string
 	for _, ch := range cfg.Channels {
@@ -288,6 +292,8 @@ func planChannelSummary(ch string, cfg config.Config) channel.PlanItem {
 		it.OwnedArtifact = "aur:" + orUnresolved(target, "(pkg)")
 	case "winget":
 		it.Action, it.OwnedArtifact = channel.ActionPrepare, "microsoft/winget-pkgs (PR)"
+	case "homebrew-core":
+		it.Action, it.OwnedArtifact = channel.ActionPrepare, "Homebrew/homebrew-core (PR)"
 	case "script":
 		it.OwnedArtifact = cfg.Github + " release:" + config.InstallScriptName
 	case "releases":
@@ -411,6 +417,21 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		st.Publish["winget"] = state.PublishRecord{Version: version, Target: identifier, State: "pr_open", PR: prURL, At: now}
 		return mk(channel.KindGated, channel.ActionPrepare, "microsoft/winget-pkgs (PR)"),
 			&output.Warning{Code: output.WarnGatedPending, Message: "winget PR awaiting review: " + prURL}, nil
+
+	case "homebrew-core":
+		central := channelTargetByName(cfg, "homebrew-core")
+		formula := channel.GenerateFormula(channel.FormulaInput{
+			Project: cfg.Project, Description: in.Description, Homepage: cfg.Homepage,
+			License: cfg.License, Version: version, Archives: formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version)})
+		prURL, err := newCoreSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, channel.CoreInput{
+			Central: central, Project: cfg.Project, Version: version,
+			FormulaFile: channel.CoreFormulaPath(cfg.Project), Formula: formula})
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["homebrew-core"] = state.PublishRecord{Version: version, Target: central, State: "pr_open", PR: prURL, At: now}
+		return mk(channel.KindGated, channel.ActionPrepare, "Homebrew/homebrew-core (PR)"),
+			&output.Warning{Code: output.WarnGatedPending, Message: "homebrew-core PR awaiting review: " + prURL}, nil
 
 	case "goinstall":
 		// 梱包ゼロ。release 不要・書き込みなし。記録もしない(advisory)。
@@ -707,6 +728,100 @@ func manifestsDiff(files map[string]string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// publishHomebrewCore は homebrew-core チャネル(gated・*-core・11A)。自前 tap と違い上流
+// (Homebrew/homebrew-core)のレビュー＆マージが要るので、formula を生成して fork PR を出し
+// 状態を追うだけ。マージはしない。受け入れ基準(brew audit 等)は利用者責務。書く前に formula を見せる。
+func publishHomebrewCore(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	central := channelTargetByName(cfg, "homebrew-core")
+	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
+	if central == "" || !ghOK {
+		item := channel.PlanItem{Channel: "homebrew-core", Kind: channel.KindGated, Action: channel.ActionSkip,
+			Reason: "github unresolved — formula needs the release repo"}
+		res := publishResult(c, "homebrew-core skipped — unresolved", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
+		return res
+	}
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	formulaFor := func(archs []build.Artifact) string {
+		return channel.GenerateFormula(channel.FormulaInput{
+			Project:     cfg.Project,
+			Description: in.Description,
+			Homepage:    cfg.Homepage,
+			License:     cfg.License,
+			Version:     version,
+			Archives:    formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+		})
+	}
+	formulaFile := channel.CoreFormulaPath(cfg.Project)
+	reqs := applyRequirements(tagMissing)
+
+	if !flagYes {
+		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		if aerr != nil {
+			return buildErrorResult(c, aerr)
+		}
+		item := channel.PlanItem{
+			Channel: "homebrew-core", Kind: channel.KindGated,
+			OwnedArtifact: central + " (PR from fork): " + formulaFile,
+			Action:        channel.ActionPrepare,
+			Diff:          channel.Diff("", formulaFor(archs)),
+		}
+		msg := "plan: prepare homebrew-core PR for " + cfg.Project
+		msg += previewNote(version, tagMissing, true)
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, "homebrew-core")
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return tokenMissingResult(c)
+	}
+	// release が済んでいれば再利用、無ければ実 release(archive を上げ実 sha を得る・formula が参照)。
+	archs, _, rerr := releaseArtifacts(ctx, root, configPath, version)
+	if rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+	prURL, serr := newCoreSubmitter(token).Submit(ctx, channel.CoreInput{
+		Central: central, Project: cfg.Project, Version: version,
+		FormulaFile: formulaFile, Formula: formulaFor(archs),
+	})
+	if serr != nil {
+		res := output.New(c.Name, "homebrew-core submission failed", false)
+		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: serr.Error(), Hint: "check GITHUB_TOKEN scope (fork + PR)"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish homebrew-core --yes"}}
+		return res
+	}
+
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		now := nowUTC().Format(time.RFC3339)
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["homebrew-core"] = state.PublishRecord{Version: version, Target: central, State: "pr_open", PR: prURL, At: now}
+		_ = state.Save(root, st)
+	}
+
+	item := channel.PlanItem{Channel: "homebrew-core", Kind: channel.KindGated, OwnedArtifact: central + " (PR)", Action: channel.ActionPrepare}
+	res := publishResult(c, "homebrew-core PR opened: "+prURL, true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Warnings = []output.Warning{{Code: output.WarnGatedPending, Message: "homebrew-core PR awaiting review (wharfy does not merge; brew audit is yours)"}}
+	res.Next = []output.NextDo{
+		{Reason: "track the review (merge is the maintainer's call)", Do: "open " + prURL},
+		{Reason: "check overall state", Do: "wharfy status"},
+	}
+	return res
 }
 
 // publishContainer は container チャネル(ghcr OCI・マルチアーキ・11B)。goreleaser の

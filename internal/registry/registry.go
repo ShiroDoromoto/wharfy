@@ -68,6 +68,7 @@ var Channels = []ChannelRef{
 	{Name: "goinstall", Kind: "owned"},
 	{Name: "script", Kind: "owned"},
 	{Name: "winget", Kind: "gated"},
+	{Name: "homebrew-core", Kind: "gated"},
 }
 
 // Names は登録コマンド名の集合。drift テストや next: 参照健全性の照合に使う。

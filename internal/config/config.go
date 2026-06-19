@@ -105,16 +105,17 @@ var (
 
 // channelKind は各チャネルの種別。gated は審査制(winget / *-core)。それ以外は owned。
 var channelKind = map[string]string{
-	"homebrew":  "owned",
-	"scoop":     "owned",
-	"apt":       "owned",
-	"rpm":       "owned",
-	"releases":  "owned",
-	"script":    "owned",
-	"container": "owned",
-	"aur":       "owned",
-	"goinstall": "owned",
-	"winget":    "gated",
+	"homebrew":      "owned",
+	"scoop":         "owned",
+	"apt":           "owned",
+	"rpm":           "owned",
+	"releases":      "owned",
+	"script":        "owned",
+	"container":     "owned",
+	"aur":           "owned",
+	"goinstall":     "owned",
+	"winget":        "gated",
+	"homebrew-core": "gated", // 中央キュレーション repo(Homebrew/homebrew-core)への gated PR
 }
 
 // Kind はチャネル名から種別を返す。未知は owned 扱い(既定)。

@@ -107,6 +107,10 @@
     {
       "name": "winget",
       "kind": "gated"
+    },
+    {
+      "name": "homebrew-core",
+      "kind": "gated"
     }
   ]
 }

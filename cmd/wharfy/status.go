@@ -131,15 +131,17 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	case "rpm":
 		return assessRpm(ctx, cs, ch.Target, cfg.Project, recordedVer)
 	case "winget":
-		return assessWinget(ctx, cs, st.Publish["winget"])
+		return assessGatedPR(ctx, cs, st.Publish["winget"], "winget")
+	case "homebrew-core":
+		return assessGatedPR(ctx, cs, st.Publish["homebrew-core"], "homebrew-core")
 	default:
 		return recordedOnly(cs, recordedVer, "not assessed yet (no probe for this channel)"), nil
 	}
 }
 
-// assessWinget は gated の申請状態を見せる(none/prepared/pr_open/merged/...・11A)。
+// assessGatedPR は gated チャネル(winget / *-core)の申請状態を見せる(none/pr_open/merged/...・11A)。
 // 記録した PR URL があれば GitHub API で実状態を引いて更新する(probe 失敗時は記録にフォールバック)。
-func assessWinget(ctx context.Context, cs statusChannel, rec state.PublishRecord) (statusChannel, *output.Warning) {
+func assessGatedPR(ctx context.Context, cs statusChannel, rec state.PublishRecord, label string) (statusChannel, *output.Warning) {
 	if rec.Version == "" {
 		cs.Source = state.SourceRecorded
 		cs.State = "none"
@@ -156,7 +158,7 @@ func assessWinget(ctx context.Context, cs statusChannel, rec state.PublishRecord
 	if rec.PR != "" {
 		live, err := (&channel.WingetProbe{Token: os.Getenv("GITHUB_TOKEN"), API: wingetProbeBase}).ProbePR(ctx, rec.PR)
 		if err != nil {
-			warn = probeFailedWarning("winget PR", err)
+			warn = probeFailedWarning(label+" PR", err)
 		} else {
 			cs.State = live // 実状態で上書き(記録より新しいことがある)
 			cs.Source = state.SourceProbed
@@ -164,7 +166,7 @@ func assessWinget(ctx context.Context, cs statusChannel, rec state.PublishRecord
 	}
 	cs.Published = cs.State == "merged"
 	if cs.State == "pr_open" {
-		warn = &output.Warning{Code: output.WarnGatedPending, Message: "winget PR awaiting review: " + rec.PR}
+		warn = &output.Warning{Code: output.WarnGatedPending, Message: label + " PR awaiting review: " + rec.PR}
 	}
 	return cs, warn
 }
