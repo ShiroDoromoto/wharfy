@@ -88,6 +88,7 @@ type glFormatOverride struct {
 
 type glRelease struct {
 	GitHub     glRepository  `yaml:"github"`
+	Mode       string        `yaml:"mode,omitempty"` // replace=既存 Release のアセットを置換(再実行を冪等に)
 	ExtraFiles []glExtraFile `yaml:"extra_files,omitempty"`
 }
 
@@ -156,7 +157,7 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 	// script チャネルは install.sh を同じ release に extra_files で同梱するため release を要する。
 	if HasChannel(cfg, "releases") || HasChannel(cfg, "script") {
 		if owner, name, ok := splitOwnerRepo(cfg.Github); ok {
-			rel := &glRelease{GitHub: glRepository{Owner: owner, Name: name}}
+			rel := &glRelease{GitHub: glRepository{Owner: owner, Name: name}, Mode: "replace"}
 			if HasChannel(cfg, "script") {
 				rel.ExtraFiles = []glExtraFile{{Glob: InstallScriptRelPath}}
 			}
