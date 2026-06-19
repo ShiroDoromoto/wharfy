@@ -59,3 +59,18 @@ func TestCoreFormulaPath(t *testing.T) {
 		t.Errorf("CoreFormulaPath = %q, want Formula/w/wharfy.rb", got)
 	}
 }
+
+// source-build formula は main パッケージのパスを go build に渡す(root 以外の main で必須)。
+func TestGenerateCoreFormulaMainPath(t *testing.T) {
+	f := GenerateCoreFormula(CoreFormulaInput{
+		Project: "wharfy", Main: "./cmd/wharfy", Version: "0.1.0",
+		SourceURL: "https://example/v0.1.0.tar.gz", SourceSHA: "abc",
+	})
+	if !strings.Contains(f, `*std_go_args(ldflags: "-s -w -X main.version=#{version}"), "./cmd/wharfy"`) {
+		t.Errorf("formula must build the main package path:\n%s", f)
+	}
+	// Main 未指定なら "." (root)。
+	if g := GenerateCoreFormula(CoreFormulaInput{Project: "x", Version: "1", SourceURL: "u", SourceSHA: "s"}); !strings.Contains(g, `, "."`) {
+		t.Errorf("default main should be root \".\":\n%s", g)
+	}
+}

@@ -42,6 +42,7 @@ type CoreSubmitter interface {
 type CoreFormulaInput struct {
 	Project     string
 	Binary      string // 既定: Project
+	Main        string // main パッケージのパス(例 ./cmd/wharfy)。空なら "." (リポジトリ root)
 	Description string
 	Homepage    string
 	License     string
@@ -61,6 +62,10 @@ func GenerateCoreFormula(in CoreFormulaInput) string {
 	if sha == "" {
 		sha = "<computed on --yes>"
 	}
+	mainPkg := in.Main
+	if mainPkg == "" {
+		mainPkg = "."
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "class %s < Formula\n", className(in.Project))
 	if in.Description != "" {
@@ -76,7 +81,7 @@ func GenerateCoreFormula(in CoreFormulaInput) string {
 	}
 	b.WriteString("\n  depends_on \"go\" => :build\n\n")
 	b.WriteString("  def install\n")
-	b.WriteString("    system \"go\", \"build\", *std_go_args(ldflags: \"-s -w -X main.version=#{version}\")\n")
+	fmt.Fprintf(&b, "    system \"go\", \"build\", *std_go_args(ldflags: \"-s -w -X main.version=#{version}\"), %q\n", mainPkg)
 	b.WriteString("  end\n\n")
 	b.WriteString("  test do\n")
 	fmt.Fprintf(&b, "    assert_match version.to_s, shell_output(\"#{bin}/%s version\")\n", binary)

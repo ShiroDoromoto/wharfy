@@ -433,7 +433,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			return channel.PlanItem{}, nil, serr
 		}
 		formula := channel.GenerateCoreFormula(channel.CoreFormulaInput{
-			Project: cfg.Project, Binary: cfg.Project, Description: in.Description, Homepage: cfg.Homepage,
+			Project: cfg.Project, Binary: cfg.Project, Main: cfg.Main, Description: in.Description, Homepage: cfg.Homepage,
 			License: cfg.License, Version: version, SourceURL: sourceTarballURL(ghOwner, ghRepo, version), SourceSHA: sha})
 		prURL, err := newCoreSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, channel.CoreInput{
 			Central: central, Project: cfg.Project, Version: version,
@@ -797,7 +797,7 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 	srcURL := sourceTarballURL(ghOwner, ghRepo, version)
 	mkFormula := func(sha string) string {
 		return channel.GenerateCoreFormula(channel.CoreFormulaInput{
-			Project: cfg.Project, Binary: cfg.Project, Description: in.Description,
+			Project: cfg.Project, Binary: cfg.Project, Main: cfg.Main, Description: in.Description,
 			Homepage: cfg.Homepage, License: cfg.License, Version: version,
 			SourceURL: srcURL, SourceSHA: sha,
 		})
