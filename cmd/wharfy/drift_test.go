@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,11 +22,15 @@ var updateGolden = flag.Bool("update", false, "update golden snapshot files in t
 
 const fixedTestVersion = "v0.0.0-test (0000000, 2026-06-18)"
 
-// schemaDir / testdataDir はパッケージ(cmd/wharfy)からリポジトリ root を辿る。
-const (
-	schemaDir   = "../../schemas"
-	testdataDir = "testdata"
-)
+// testdataDir はパッケージ(cmd/wharfy)からの相対(golden は chdir しないテストで使う)。
+const testdataDir = "testdata"
+
+// schemaDir はリポジトリ root の schemas/ を**絶対パス**で返す。
+// 一部のテストは temp dir へ chdir するため、cwd 相対だとスキーマを見失う(この関数で回避)。
+func schemaDir() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "schemas")
+}
 
 // TestCobraMatchesRegistry: cobra 登録コマンドと registry が双方向で一致する。
 // 「cobra にあるが registry にない」「registry にあるが cobra にない」をどちらも落とす。
@@ -136,7 +141,7 @@ func mustLookup(t *testing.T, name string) registry.Command {
 func validateAgainst(t *testing.T, schemaID string, v any) {
 	t.Helper()
 	c := jsonschema.NewCompiler()
-	files, err := filepath.Glob(filepath.Join(schemaDir, "*.json"))
+	files, err := filepath.Glob(filepath.Join(schemaDir(), "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

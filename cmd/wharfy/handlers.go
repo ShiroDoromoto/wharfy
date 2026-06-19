@@ -18,6 +18,8 @@ var handlers = map[string]handler{
 	"config":  runConfig,
 	"build":   runBuild,
 	"publish": runPublish,
+	"sign":    runSign,
+	"verify":  runVerify,
 }
 
 // dispatch は registry エントリに対応する本体を選んで実行する。
