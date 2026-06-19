@@ -31,8 +31,21 @@ type glConfig struct {
 	Dist        string      `yaml:"dist"`
 	Builds      []glBuild   `yaml:"builds"`
 	Archives    []glArchive `yaml:"archives"`
+	NFPMs       []glNFPM    `yaml:"nfpms,omitempty"`
 	Brews       []glBrew    `yaml:"brews,omitempty"`
 	Release     *glRelease  `yaml:"release,omitempty"`
+}
+
+// glNFPM は deb/rpm 生成(apt/rpm チャネル)。nfpm 経由でビルド成果物からパッケージを作る。
+type glNFPM struct {
+	ID          string   `yaml:"id"`
+	PackageName string   `yaml:"package_name"`
+	Builds      []string `yaml:"builds"`
+	Homepage    string   `yaml:"homepage,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	License     string   `yaml:"license,omitempty"`
+	Maintainer  string   `yaml:"maintainer"`
+	Formats     []string `yaml:"formats"`
 }
 
 // DistDir はビルド成果物の出力先(.wharfy 配下＝利用者 root を汚さない・03)。
@@ -137,6 +150,20 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 		}
 	}
 
+	// nfpms: apt(deb)/rpm が有効な時だけ。1 エントリで該当 formats を生成する。
+	if formats := pkgFormats(cfg); len(formats) > 0 {
+		gl.NFPMs = []glNFPM{{
+			ID:          cfg.Project,
+			PackageName: cfg.Project,
+			Builds:      []string{cfg.Project},
+			Homepage:    cfg.Homepage,
+			Description: in.Description,
+			License:     cfg.License,
+			Maintainer:  maintainer(cfg),
+			Formats:     formats,
+		}}
+	}
+
 	// release: github(owner/repo)が解決できる時だけ。最終フォールバック列(03)。
 	// script チャネルは install.sh を同じ release に extra_files で同梱するため release を要する。
 	if HasChannel(cfg, "releases") || HasChannel(cfg, "script") {
@@ -237,6 +264,26 @@ func channelTargetOf(cfg Config, name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// pkgFormats は有効な linux パッケージ形式(apt→deb / rpm→rpm)を返す。
+func pkgFormats(cfg Config) []string {
+	var f []string
+	if HasChannel(cfg, "apt") {
+		f = append(f, "deb")
+	}
+	if HasChannel(cfg, "rpm") {
+		f = append(f, "rpm")
+	}
+	return f
+}
+
+// maintainer は nfpm が要求する maintainer を github owner から組む(deb は必須)。
+func maintainer(cfg Config) string {
+	if owner, _, ok := splitOwnerRepo(cfg.Github); ok {
+		return fmt.Sprintf("%s <%s@users.noreply.github.com>", owner, owner)
+	}
+	return "wharfy <noreply@wharfy.local>"
 }
 
 func splitOwnerRepo(s string) (owner, name string, ok bool) {

@@ -74,6 +74,14 @@
       "kind": "owned"
     },
     {
+      "name": "apt",
+      "kind": "owned"
+    },
+    {
+      "name": "rpm",
+      "kind": "owned"
+    },
+    {
       "name": "goinstall",
       "kind": "owned"
     },

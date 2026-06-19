@@ -175,6 +175,15 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if mod, err := r.ModulePath(r.Root); err == nil && mod != "" {
 			return mod
 		}
+	case "apt":
+		// 発行先は self-host の hosted repo(明示必須)。未設定なら空＝publish で skip 案内。
+		if in.Apt != nil {
+			return in.Apt.Repo
+		}
+	case "rpm":
+		if in.Rpm != nil {
+			return in.Rpm.Repo
+		}
 	}
 	return ""
 }

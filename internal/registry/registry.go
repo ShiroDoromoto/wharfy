@@ -60,6 +60,8 @@ var StateReaders = []string{"status", "config"}
 var Channels = []ChannelRef{
 	{Name: "homebrew", Kind: "owned"},
 	{Name: "scoop", Kind: "owned"},
+	{Name: "apt", Kind: "owned"},
+	{Name: "rpm", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
 	{Name: "script", Kind: "owned"},
 }

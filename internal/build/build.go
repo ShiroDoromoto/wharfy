@@ -43,6 +43,12 @@ type Releaser interface {
 	Release(ctx context.Context, root, configPath string) ([]Artifact, error)
 }
 
+// Packager は deb/rpm パッケージ生成境界(apt/rpm チャネル)。GitHub には触れず
+// ローカルに nfpm パッケージを作り、その成果物(os/arch/path/sha256)を返す。
+type Packager interface {
+	Packages(ctx context.Context, root, configPath string) ([]Artifact, error)
+}
+
 // UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
 type UnavailableError struct {
 	Bin string
@@ -106,6 +112,13 @@ func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath strin
 func (b *GoReleaserBuilder) Release(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	return b.runAndParse(ctx, root, configPath, "Archive",
 		"release", "--clean", "--skip=homebrew", "--config", configPath)
+}
+
+// Packages は nfpm の deb/rpm をローカルに作る。--skip=publish で GitHub には上げない
+// (apt/rpm の発行先は hosted repo)。実タグの版でパッケージ化するため --snapshot は使わない。
+func (b *GoReleaserBuilder) Packages(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	return b.runAndParse(ctx, root, configPath, "Linux Package",
+		"release", "--clean", "--skip=publish", "--config", configPath)
 }
 
 func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, typ string, args ...string) ([]Artifact, error) {

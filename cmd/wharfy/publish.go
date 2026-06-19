@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,9 +26,12 @@ import (
 var (
 	newArchiver = func(distDir string) build.Archiver { return build.NewGoReleaserBuilder(distDir) }
 	newReleaser = func(distDir string) build.Releaser { return build.NewGoReleaserBuilder(distDir) }
+	newPackager = func(distDir string) build.Packager { return build.NewGoReleaserBuilder(distDir) }
 	newTapStore = func(owner, repo, token string) channel.TapStore {
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
+	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
+	uploadPackage = httpUploadPackage
 	// goinstallProxy / scriptProbeURL はテストで実体照合先を httptest に差し替える点(空＝既定)。
 	goinstallProxy = ""
 	scriptProbeURL = ""
@@ -72,6 +81,10 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
 	case "scoop":
 		return publishScoop(ctx, c, root, cfg, in, version, tagMissing)
+	case "apt":
+		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "apt", ".deb")
+	case "rpm":
+		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "rpm", ".rpm")
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
@@ -113,6 +126,158 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 		func(archs []build.Artifact) channel.Publisher {
 			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
 		})
+}
+
+// publishLinuxPkg は apt(deb)/rpm チャネル。nfpm で deb/rpm を生成し、hosted repo へ
+// multipart POST でアップロードする(PACKAGE_REPO_TOKEN。GitHub には触れない・03/07)。
+// repo 未設定は skip して案内(channel_skipped)。プロバイダ依存のため `-F package=@` 形を既定。
+func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, ext string) output.Result {
+	repo := channelTargetByName(cfg, chName)
+	if repo == "" {
+		item := channel.PlanItem{Channel: chName, Kind: channel.KindOwned, Action: channel.ActionSkip,
+			Reason: chName + ".repo not set — hosted repo URL is required"}
+		res := publishResult(c, chName+" skipped — no hosted repo configured", true, []channel.PlanItem{item})
+		res.Warnings = []output.Warning{{Code: output.WarnChannelSkipped, Message: chName + " skipped — set " + chName + ".repo and PACKAGE_REPO_TOKEN"}}
+		res.Next = []output.NextDo{{Reason: "configure the hosted repo", Do: "set " + chName + ".repo in wharfy.yaml ; export PACKAGE_REPO_TOKEN=…"}}
+		return res
+	}
+
+	names := expectedPackages(cfg, version, ext)
+	item := channel.PlanItem{
+		Channel: chName, Kind: channel.KindOwned, OwnedArtifact: repo,
+		Action: channel.ActionCreate, Diff: packageDiff(names, repo),
+	}
+	reqs := pkgRequirements(tagMissing)
+
+	if !flagYes {
+		msg := "plan: upload " + strconv.Itoa(len(names)) + " " + ext[1:] + " package(s) → " + repo
+		if tagMissing {
+			msg += " (preview @ " + version + "; no git tag yet)"
+		}
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, chName)
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	token := os.Getenv("PACKAGE_REPO_TOKEN")
+	if token == "" {
+		res := output.New(c.Name, "cannot publish without a token", false)
+		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "PACKAGE_REPO_TOKEN required to upload to the hosted repo", Hint: "export PACKAGE_REPO_TOKEN=…"}}
+		res.Next = []output.NextDo{{Reason: "set the token then retry", Do: "export PACKAGE_REPO_TOKEN=… ; wharfy publish " + chName + " --yes"}}
+		return res
+	}
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	pkgs, perr := newPackager(config.DistDir).Packages(ctx, root, configPath)
+	if perr != nil {
+		return buildErrorResult(c, perr)
+	}
+	uploaded := 0
+	for _, p := range pkgs {
+		if filepath.Ext(p.Path) != ext {
+			continue
+		}
+		full := p.Path
+		if !filepath.IsAbs(full) {
+			full = filepath.Join(root, p.Path)
+		}
+		if uerr := uploadPackage(ctx, repo, token, full); uerr != nil {
+			res := output.New(c.Name, "publish failed", false)
+			res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: uerr.Error(), Hint: "check PACKAGE_REPO_TOKEN scope and the repo URL"}}
+			res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
+			return res
+		}
+		uploaded++
+	}
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		st.Publish[chName] = state.PublishRecord{Version: version, Target: repo, At: nowUTC().Format(time.RFC3339)}
+		_ = state.Save(root, st)
+	}
+	item.Action = channel.ActionUpdate
+	res := publishResult(c, "published "+strconv.Itoa(uploaded)+" "+ext[1:]+" package(s) → "+repo, true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Next = []output.NextDo{{Reason: "install from the channel and run it", Do: "wharfy verify"}}
+	return res
+}
+
+// expectedPackages は生成される deb/rpm のファイル名(linux × goarch)。dry-run で見せる。
+func expectedPackages(cfg config.Config, version, ext string) []string {
+	goarch := config.DefaultGOARCH
+	if cfg.Build != nil && len(cfg.Build.GOARCH) > 0 {
+		goarch = cfg.Build.GOARCH
+	}
+	var out []string
+	for _, arch := range goarch {
+		out = append(out, fmt.Sprintf("%s_%s_linux_%s%s", cfg.Project, version, arch, ext))
+	}
+	return out
+}
+
+func packageDiff(names []string, repo string) string {
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString("+ " + n + "\n")
+	}
+	b.WriteString("→ " + repo + "\n")
+	return b.String()
+}
+
+// pkgRequirements は apt/rpm の前提(GitHub ではなく PACKAGE_REPO_TOKEN)。
+func pkgRequirements(tagMissing bool) []requirement {
+	return []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+		{Requirement: "PACKAGE_REPO_TOKEN", Met: os.Getenv("PACKAGE_REPO_TOKEN") != "", Hint: "export PACKAGE_REPO_TOKEN=… (hosted repo upload)"},
+	}
+}
+
+// httpUploadPackage は hosted repo へ multipart POST する(field "package"=ファイル、
+// 認証は basic auth で username=token。build.example.yaml の curl -F package=@ -u token: 準拠)。
+func httpUploadPackage(ctx context.Context, repoURL, token, filePath string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	part, err := w.CreateFormFile("package", filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, repoURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.SetBasicAuth(token, "")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upload %s: %s: %s", filepath.Base(filePath), resp.Status, string(b[:min(len(b), 200)]))
+	}
+	return nil
 }
 
 // publishViaRelease は「archive をアップロードして所有リポジトリに manifest/formula を書く」

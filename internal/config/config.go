@@ -23,6 +23,13 @@ type File struct {
 	Homebrew    *HomebrewInput `yaml:"homebrew"`
 	Scoop       *ScoopInput    `yaml:"scoop"`
 	Goinstall   *GoinstallIn   `yaml:"goinstall"`
+	Apt         *RepoInput     `yaml:"apt"`
+	Rpm         *RepoInput     `yaml:"rpm"`
+}
+
+// RepoInput は hosted パッケージリポジトリの設定(apt/rpm 共通)。Repo は self-host の URL。
+type RepoInput struct {
+	Repo string `yaml:"repo"`
 }
 
 type BuildInput struct {
