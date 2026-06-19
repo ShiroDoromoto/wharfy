@@ -15,6 +15,7 @@ type handler func(ctx context.Context, c registry.Command, args []string) output
 // agent は別形(agent.json)なので root.go 側で特別扱いし、ここには載せない。
 var handlers = map[string]handler{
 	"version": runVersion,
+	"config":  runConfig,
 }
 
 // dispatch は registry エントリに対応する本体を選んで実行する。
