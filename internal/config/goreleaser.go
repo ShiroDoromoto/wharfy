@@ -28,11 +28,16 @@ const GoReleaserFileName = "goreleaser.yaml"
 type glConfig struct {
 	Version     int         `yaml:"version"`
 	ProjectName string      `yaml:"project_name"`
+	Dist        string      `yaml:"dist"`
 	Builds      []glBuild   `yaml:"builds"`
 	Archives    []glArchive `yaml:"archives"`
 	Brews       []glBrew    `yaml:"brews,omitempty"`
 	Release     *glRelease  `yaml:"release,omitempty"`
 }
+
+// DistDir はビルド成果物の出力先(.wharfy 配下＝利用者 root を汚さない・03)。
+// 生成設定の dist と Builder の参照先を一致させる単一定数。
+const DistDir = WharfyDirName + "/dist"
 
 type glBuild struct {
 	ID      string   `yaml:"id"`
@@ -88,6 +93,7 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 	gl := glConfig{
 		Version:     2,
 		ProjectName: cfg.Project,
+		Dist:        DistDir,
 		Builds: []glBuild{{
 			ID:      cfg.Project,
 			Main:    cfg.Main,

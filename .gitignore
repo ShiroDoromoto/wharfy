@@ -34,3 +34,6 @@ go.work.sum
 # Personal working directory
 .prompt/
 doc/wip/
+
+# wharfy generated config / build output / local state (dogfooding)
+.wharfy/

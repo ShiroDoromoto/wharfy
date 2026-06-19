@@ -16,6 +16,7 @@ type handler func(ctx context.Context, c registry.Command, args []string) output
 var handlers = map[string]handler{
 	"version": runVersion,
 	"config":  runConfig,
+	"build":   runBuild,
 }
 
 // dispatch は registry エントリに対応する本体を選んで実行する。
