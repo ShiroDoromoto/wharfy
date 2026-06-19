@@ -47,7 +47,11 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	}
 
 	if !flagYes {
-		res := output.New(c.Name, "plan: upload the github release → "+orUnresolved(cfg.Github, "(github unresolved)"), true)
+		target := cfg.Github
+		if target == "" {
+			target = "(github unresolved)"
+		}
+		res := output.New(c.Name, "plan: upload the github release → "+target, true)
 		res.Data = releaseData{Applied: false, Target: cfg.Github}
 		var next []output.NextDo
 		for _, r := range reqs {
