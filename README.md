@@ -75,8 +75,12 @@ not duplicate it (a generated map can't go stale; a hand-written table can).
 ## Channels
 
 Owned (wharfy publishes directly): `homebrew`, `scoop`, `apt`, `rpm`, `container` (ghcr,
-multi-arch), `aur`, `releases` (GitHub Releases), `script` (`curl | sh`), `goinstall`.
+multi-arch), `aur`, `script` (`curl | sh`), `goinstall`.
 Gated (wharfy prepares a PR and tracks it, never merges): `winget`, `homebrew-core`.
+
+The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
+`publish` — direct download and `curl | sh` install come from there, and the owned channels
+above reuse it. (`wharfy publish` only accepts the channels listed here.)
 
 Run `wharfy agent --json` for the live set and each channel's kind.
 
@@ -84,6 +88,21 @@ Each channel needs its own prerequisites (a token, a hosted repo, docker, an AUR
 wharfy tells you what's missing: `publish --dry-run` lists a `requires` block, and unconfigured
 channels are skipped (not failed) in a batch. Owned tap/bucket repos are created for you on
 `--yes` (a `tap_will_be_created` warning previews it).
+
+`apt`/`rpm` need a hosted package repo (a deb/rpm server is more than a git repo: it serves
+index metadata, and `apt`/`rpm` upload and serve from different hosts). Set it in `wharfy.yaml`
+the low-friction way — a managed service via `provider`, where one user namespace yields both
+the upload and delivery URLs:
+
+```yaml
+apt: { provider: fury, user: <name> }   # delivery: https://apt.fury.io/<name>/, upload: push.fury.io
+rpm: { provider: fury, user: <name> }   # delivery: https://yum.fury.io/<name>/
+```
+
+Or give raw URLs for any host — `{ repo: <delivery-url>, push: <upload-url> }` (omit `push` when
+upload and delivery share a host). The upload token is read from `PACKAGE_REPO_TOKEN` (env only,
+never written to `wharfy.yaml` or generated files). When `repo` is unset, `publish` skips the
+channel and its `next:` block walks you through the hosting options.
 
 Gated channels also have *external* acceptance criteria that wharfy can't satisfy for you, and
 some are **strict**. `homebrew-core` requires a notable, established project **and** a formula

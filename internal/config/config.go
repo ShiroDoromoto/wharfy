@@ -40,9 +40,16 @@ type WingetIn struct {
 	Identifier string `yaml:"identifier"`
 }
 
-// RepoInput は hosted パッケージリポジトリの設定(apt/rpm 共通)。Repo は self-host の URL。
+// RepoInput は hosted パッケージリポジトリの設定(apt/rpm 共通)。
+// 配信(probe/install)と push(アップロード)が別ホストなホスト型サービス(fury.io 等)に対応する。
+//   - Provider+User を指定すると push/配信 URL をプロバイダ規則から自動導出する(手間最小)。
+//   - 生 URL で書く場合は Repo(配信) と Push(アップロード) を指定する。
+//     Push 省略時は Repo にフォールバック(push=配信が同一の汎用ホスト用・後方互換)。
 type RepoInput struct {
-	Repo string `yaml:"repo"`
+	Repo     string `yaml:"repo"`     // 配信 URL(probe/install)。provider 指定時は自動導出
+	Push     string `yaml:"push"`     // アップロード URL。空なら Repo にフォールバック
+	Provider string `yaml:"provider"` // "fury" 等。User から push/配信を導出する
+	User     string `yaml:"user"`     // provider の名前空間(fury のユーザー名)
 }
 
 // ContainerInput は OCI イメージの設定。Image は既定 ghcr.io/<owner>/<project> を上書き。
@@ -83,10 +90,13 @@ type Config struct {
 }
 
 // ResolvedChannel は解決済みチャネル 1 つ(名前・種別・発行先)。
+// Target は配信先(probe/install)。PushTarget はアップロード先で、配信と push が別ホストな
+// apt/rpm(fury.io 等)でのみ使う。Target と同一なら省略(omitempty)。
 type ResolvedChannel struct {
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Target string `json:"target,omitempty"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Target     string `json:"target,omitempty"`
+	PushTarget string `json:"push_target,omitempty"`
 }
 
 // Build は解決後のビルド対象 os/arch。

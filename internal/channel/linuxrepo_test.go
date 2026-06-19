@@ -35,6 +35,57 @@ func TestAptProbe(t *testing.T) {
 	}
 }
 
+// flat repo(Gemfury 等): <repo>/Packages 直下にメタデータ。過去版も全て載るので最新を返す。
+// "widget" の prefix である "widget-extra" に誤マッチしないことも確認する。
+func TestAptProbeFlatRepoLatest(t *testing.T) {
+	packages := "Package: widget\nVersion: 0.11.0\nArchitecture: arm64\n\n" +
+		"Package: widget-extra\nVersion: 9.9.9\nArchitecture: amd64\n\n" +
+		"Package: widget\nVersion: 0.12.0\nArchitecture: amd64\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/Packages" { // flat レイアウトのみ提供(dists は無い)
+			_, _ = w.Write([]byte(packages))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	rs, err := (&AptProbe{Repo: srv.URL, HTTP: srv.Client()}).Probe(context.Background(), "widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rs.Found || rs.Version != "0.12.0" {
+		t.Errorf("flat apt probe = %+v, want latest 0.12.0 (not 0.11.0, not widget-extra)", rs)
+	}
+}
+
+// rpm の primary に複数版が載るとき最新を返す。
+func TestRpmProbeMultiVersionLatest(t *testing.T) {
+	repomd := `<?xml version="1.0"?><repomd><data type="primary"><location href="repodata/primary.xml.gz"/></data></repomd>`
+	primary := `<?xml version="1.0"?><metadata>` +
+		`<package><name>widget</name><version ver="0.11.0"/></package>` +
+		`<package><name>widget</name><version ver="0.12.0"/></package></metadata>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repodata/repomd.xml":
+			_, _ = w.Write([]byte(repomd))
+		case "/repodata/primary.xml.gz":
+			_, _ = w.Write(gz(primary))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	rs, err := (&RpmProbe{Repo: srv.URL, HTTP: srv.Client()}).Probe(context.Background(), "widget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rs.Found || rs.Version != "0.12.0" {
+		t.Errorf("rpm probe = %+v, want latest 0.12.0", rs)
+	}
+}
+
 func gz(s string) []byte {
 	var b bytes.Buffer
 	w := gzip.NewWriter(&b)

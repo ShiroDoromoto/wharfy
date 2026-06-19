@@ -218,3 +218,67 @@ func kindOf(cfg Config, name string) string {
 	}
 	return ""
 }
+
+func pushTargetOf(cfg Config, name string) string {
+	for _, c := range cfg.Channels {
+		if c.Name == name {
+			return c.PushTarget
+		}
+	}
+	return ""
+}
+
+func TestResolveRepoURLs(t *testing.T) {
+	cases := []struct {
+		name        string
+		channel     string
+		in          *RepoInput
+		wantDeliver string
+		wantPush    string
+	}{
+		{"nil → both empty", "apt", nil, "", ""},
+		{"fury apt → apt+push hosts", "apt", &RepoInput{Provider: "fury", User: "shiro"},
+			"https://apt.fury.io/shiro/", "https://push.fury.io/shiro/"},
+		{"fury rpm → yum+push hosts", "rpm", &RepoInput{Provider: "fury", User: "shiro"},
+			"https://yum.fury.io/shiro/", "https://push.fury.io/shiro/"},
+		{"fury without user → falls back to raw (empty)", "apt", &RepoInput{Provider: "fury"}, "", ""},
+		{"raw repo only → push falls back to repo", "apt", &RepoInput{Repo: "https://r.example.com/a/"},
+			"https://r.example.com/a/", "https://r.example.com/a/"},
+		{"raw repo+push → distinct", "apt", &RepoInput{Repo: "https://deliver/", Push: "https://upload/"},
+			"https://deliver/", "https://upload/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deliver, push := resolveRepoURLs(tc.channel, tc.in)
+			if deliver != tc.wantDeliver || push != tc.wantPush {
+				t.Errorf("resolveRepoURLs(%q) = (%q, %q), want (%q, %q)",
+					tc.channel, deliver, push, tc.wantDeliver, tc.wantPush)
+			}
+		})
+	}
+}
+
+// fury provider 指定が Resolve を通して Target(配信)/PushTarget(アップロード) に反映されること。
+func TestResolveChannelsFuryProvider(t *testing.T) {
+	r := stubResolver("https://github.com/acme/mytool.git", []string{"./cmd/mytool"}, "github.com/acme/mytool")
+	cfg, err := r.Resolve(File{
+		Channels: []string{"apt", "rpm"},
+		Apt:      &RepoInput{Provider: "fury", User: "shiro"},
+		Rpm:      &RepoInput{Provider: "fury", User: "shiro"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := targetOf(cfg, "apt"); got != "https://apt.fury.io/shiro/" {
+		t.Errorf("apt target = %q", got)
+	}
+	if got := pushTargetOf(cfg, "apt"); got != "https://push.fury.io/shiro/" {
+		t.Errorf("apt push_target = %q", got)
+	}
+	if got := targetOf(cfg, "rpm"); got != "https://yum.fury.io/shiro/" {
+		t.Errorf("rpm target = %q", got)
+	}
+	if got := pushTargetOf(cfg, "rpm"); got != "https://push.fury.io/shiro/" {
+		t.Errorf("rpm push_target = %q", got)
+	}
+}

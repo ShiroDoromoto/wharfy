@@ -365,16 +365,20 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		return item, nil, nil
 
 	case "apt", "rpm":
-		repo := channelTargetByName(cfg, ch)
+		repo := channelTargetByName(cfg, ch)        // 配信(probe/install/記録)
+		pushURL := channelPushTargetByName(cfg, ch) // アップロード先(fury は別ホスト)
+		if pushURL == "" {
+			return skip(ch + " has no hosted repo configured")
+		}
 		if repo == "" {
-			return skip(ch + ".repo not set")
+			repo = pushURL
 		}
 		token := os.Getenv("PACKAGE_REPO_TOKEN")
 		if token == "" {
 			return skip("PACKAGE_REPO_TOKEN not set")
 		}
 		ext := map[string]string{"apt": ".deb", "rpm": ".rpm"}[ch]
-		if _, err := uploadLinuxPackages(ctx, archs, ext, repo, token); err != nil {
+		if _, err := uploadLinuxPackages(ctx, archs, ext, pushURL, token); err != nil {
 			return channel.PlanItem{}, nil, err
 		}
 		st.Publish[ch] = state.PublishRecord{Version: version, Target: repo, At: now}
@@ -981,14 +985,18 @@ func containerRequirements(tagMissing bool) []requirement {
 // multipart POST でアップロードする(PACKAGE_REPO_TOKEN。GitHub には触れない・03/07)。
 // repo 未設定は skip して案内(channel_skipped)。プロバイダ依存のため `-F package=@` 形を既定。
 func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, ext string) output.Result {
-	repo := channelTargetByName(cfg, chName)
-	if repo == "" {
+	repo := channelTargetByName(cfg, chName)        // 配信 URL(probe/install/表示)
+	pushURL := channelPushTargetByName(cfg, chName) // アップロード先(fury は別ホスト)
+	if pushURL == "" {
 		item := channel.PlanItem{Channel: chName, Kind: channel.KindOwned, Action: channel.ActionSkip,
-			Reason: chName + ".repo not set — hosted repo URL is required"}
+			Reason: chName + " has no hosted repo configured"}
 		res := publishResult(c, chName+" skipped — no hosted repo configured", true, []channel.PlanItem{item})
-		res.Warnings = []output.Warning{{Code: output.WarnChannelSkipped, Message: chName + " skipped — set " + chName + ".repo and PACKAGE_REPO_TOKEN"}}
-		res.Next = []output.NextDo{{Reason: "configure the hosted repo", Do: "set " + chName + ".repo in wharfy.yaml ; export PACKAGE_REPO_TOKEN=…"}}
+		res.Warnings = []output.Warning{{Code: output.WarnChannelSkipped, Message: chName + " skipped — choose a host (see next:)"}}
+		res.Next = pkgHostingGuide(chName)
 		return res
+	}
+	if repo == "" {
+		repo = pushURL // 生 push のみ指定された場合は表示・記録に流用
 	}
 
 	names := expectedPackages(cfg, version, ext)
@@ -1037,7 +1045,7 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 		if !filepath.IsAbs(full) {
 			full = filepath.Join(root, p.Path)
 		}
-		if uerr := uploadPackage(ctx, repo, token, full); uerr != nil {
+		if uerr := uploadPackage(ctx, pushURL, token, full); uerr != nil {
 			res := output.New(c.Name, "publish failed", false)
 			res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: uerr.Error(), Hint: "check PACKAGE_REPO_TOKEN scope and the repo URL"}}
 			res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
@@ -1057,6 +1065,25 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
 	res.Next = []output.NextDo{{Reason: "install from the channel and run it", Do: "wharfy verify"}}
 	return res
+}
+
+// pkgHostingGuide は apt/rpm の repo 未設定時に「どこにホストするか」を判断軸つきで案内する。
+// 配布者はここで必ず選択を迫られるため、推奨順(fury → GitHub Pages → Releases)と設定例を示す。
+func pkgHostingGuide(chName string) []output.NextDo {
+	return []output.NextDo{
+		{
+			Reason: "recommended: fury.io — free for public, no bandwidth cap, signup once",
+			Do:     "set '" + chName + ": {provider: fury, user: <name>}' in wharfy.yaml ; export PACKAGE_REPO_TOKEN=… ; wharfy publish " + chName + " --yes",
+		},
+		{
+			Reason: "alternative: any hosted apt/rpm service — give delivery + upload URLs",
+			Do:     "set '" + chName + ": {repo: <deliver-url>, push: <upload-url>}' in wharfy.yaml ; export PACKAGE_REPO_TOKEN=…",
+		},
+		{
+			Reason: "no extra account (GitHub only) but 100GB/mo cap — GitHub Pages provider not yet implemented",
+			Do:     "or attach the .deb/.rpm to GitHub Releases for manual install (no apt/rpm repo)",
+		},
+	}
 }
 
 // expectedPackages は生成される deb/rpm のファイル名(linux × goarch)。dry-run で見せる。
@@ -1313,6 +1340,20 @@ func joinModuleMain(mod, main string) string {
 func channelTargetByName(cfg config.Config, name string) string {
 	for _, ch := range cfg.Channels {
 		if ch.Name == name {
+			return ch.Target
+		}
+	}
+	return ""
+}
+
+// channelPushTargetByName は apt/rpm のアップロード先(push)URL を返す。配信と push が別ホストな
+// fury.io 等のため Target とは別に持つ。未設定(分離なし)なら Target にフォールバックする。
+func channelPushTargetByName(cfg config.Config, name string) string {
+	for _, ch := range cfg.Channels {
+		if ch.Name == name {
+			if ch.PushTarget != "" {
+				return ch.PushTarget
+			}
 			return ch.Target
 		}
 	}

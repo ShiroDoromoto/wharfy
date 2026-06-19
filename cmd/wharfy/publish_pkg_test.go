@@ -116,6 +116,62 @@ func TestPublishAptApply(t *testing.T) {
 	}
 }
 
+// provider: fury — upload は push.fury.io へ、記録(状態)は配信 URL(apt.fury.io)になる。
+func TestPublishAptApplyFury(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [apt]\napt:\n  provider: fury\n  user: shiro\n")
+	tagScratch(t, root, "v0.4.0")
+	chdir(t, root)
+	t.Setenv("PACKAGE_REPO_TOKEN", "tok")
+
+	deb := filepath.Join(".wharfy", "dist", "demo_0.4.0_linux_amd64.deb")
+	defer swapPackager(fakePackager{arts: []build.Artifact{
+		{OS: "linux", Arch: "amd64", Path: deb, SHA256: "aa"},
+	}})()
+	var got []string
+	defer swapUploader(func(_ context.Context, repo, token, path string) error {
+		got = append(got, repo+"|"+token+"|"+filepath.Base(path))
+		return nil
+	})()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"apt"})
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	// upload は push ホストへ。
+	if len(got) != 1 || got[0] != "https://push.fury.io/shiro/|tok|demo_0.4.0_linux_amd64.deb" {
+		t.Errorf("upload should go to push host: %v", got)
+	}
+	// 記録は配信 URL(probe/install 用)。
+	st, _ := state.Load(root, "demo")
+	if rec := st.Publish["apt"]; rec.Target != "https://apt.fury.io/shiro/" {
+		t.Errorf("recorded target should be delivery URL, got %q", rec.Target)
+	}
+}
+
+// repo 未設定 → skip 時に「どこにホストするか」の選択ガイド(fury 推奨)を next: で案内する。
+func TestPublishAptSkipGuide(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [apt]\n")
+	chdir(t, root)
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"apt"})
+	if !res.OK || !hasWarning(res, "channel_skipped") {
+		t.Fatalf("expected ok skip with channel_skipped: %+v", res)
+	}
+	var sawFury bool
+	for _, n := range res.Next {
+		if strings.Contains(n.Do, "provider: fury") {
+			sawFury = true
+		}
+	}
+	if !sawFury {
+		t.Errorf("guide should recommend fury provider: %+v", res.Next)
+	}
+}
+
 // httpUploadPackage: multipart POST + basic auth を実サーバ(httptest)で確認。
 func TestHTTPUploadPackage(t *testing.T) {
 	tmp := t.TempDir()

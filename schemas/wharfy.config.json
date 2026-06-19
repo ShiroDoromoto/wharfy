@@ -78,14 +78,20 @@
     "apt": {
       "type": "object",
       "properties": {
-        "repo": { "type": "string", "format": "uri", "description": "self-host の hosted repo。apt 有効時は必須。" }
+        "provider": { "type": "string", "enum": ["fury"], "description": "ホスト型サービス。指定すると user から push/配信 URL を自動導出する。" },
+        "user": { "type": "string", "description": "provider の名前空間(fury のユーザー名)。provider 指定時に必須。" },
+        "repo": { "type": "string", "format": "uri", "description": "配信(probe/install)URL。provider 未指定時に使用。" },
+        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック(push=配信が同一の汎用ホスト用)。" }
       },
       "additionalProperties": false
     },
     "rpm": {
       "type": "object",
       "properties": {
-        "repo": { "type": "string", "format": "uri", "description": "yum/dnf 共通の hosted repo。rpm 有効時は必須。" }
+        "provider": { "type": "string", "enum": ["fury"], "description": "ホスト型サービス。指定すると user から push/配信 URL を自動導出する。" },
+        "user": { "type": "string", "description": "provider の名前空間(fury のユーザー名)。provider 指定時に必須。" },
+        "repo": { "type": "string", "format": "uri", "description": "yum/dnf 共通の配信(probe/install)URL。provider 未指定時に使用。" },
+        "push": { "type": "string", "format": "uri", "description": "アップロード URL。空なら repo にフォールバック。" }
       },
       "additionalProperties": false
     },

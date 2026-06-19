@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -24,30 +25,60 @@ type AptProbe struct {
 
 var aptVersionRe = regexp.MustCompile(`(?m)^Version:\s*(\S+)`)
 
-// Probe は <repo>/dists/<suite>/main/binary-amd64/Packages を引き、pkg の Version を返す。
+// Probe は apt メタデータ(Debian Packages)から pkg の最新版を返す。
+// Gemfury 等の flat repo(<repo>/Packages)を優先し、無ければ正式レイアウト
+// (<repo>/dists/<suite>/main/binary-amd64/Packages)にフォールバックする。
+// flat repo は過去版も全て載るため、マッチするスタンザの中で最も高い版を返す。
 func (p *AptProbe) Probe(ctx context.Context, pkg string) (RemoteState, error) {
 	suite := p.Suite
 	if suite == "" {
 		suite = "stable"
 	}
-	url := strings.TrimRight(p.Repo, "/") + "/dists/" + suite + "/main/binary-amd64/Packages"
-	body, ok, err := httpGet(ctx, p.HTTP, url)
-	if err != nil {
-		return RemoteState{}, err
+	root := strings.TrimRight(p.Repo, "/")
+	var body []byte
+	for _, url := range []string{
+		root + "/Packages", // flat repo(Gemfury 等)
+		root + "/dists/" + suite + "/main/binary-amd64/Packages", // 正式レイアウト
+	} {
+		b, ok, err := httpGet(ctx, p.HTTP, url)
+		if err != nil {
+			return RemoteState{}, err
+		}
+		if ok {
+			body = b
+			break
+		}
 	}
-	if !ok {
+	if body == nil {
 		return RemoteState{Found: false}, nil
 	}
-	// Packages は空行区切りのスタンザ。Package: <pkg> のスタンザの Version を取る。
+	// Packages は空行区切りのスタンザ。Package: <pkg> のスタンザの Version を集め、最新を返す。
+	latest := ""
 	for _, stanza := range strings.Split(string(body), "\n\n") {
-		if !strings.Contains(stanza, "Package: "+pkg) {
+		if !stanzaIsPackage(stanza, pkg) {
 			continue
 		}
 		if m := aptVersionRe.FindStringSubmatch(stanza); m != nil {
-			return RemoteState{Version: stripPkgrel(m[1]), Found: true}, nil
+			if v := stripPkgrel(m[1]); latest == "" || compareDotted(v, latest) > 0 {
+				latest = v
+			}
 		}
 	}
-	return RemoteState{Found: false}, nil
+	if latest == "" {
+		return RemoteState{Found: false}, nil
+	}
+	return RemoteState{Version: latest, Found: true}, nil
+}
+
+// stanzaIsPackage は Packages のスタンザが Package: <pkg> 行(完全一致)を持つか判定する。
+// strings.Contains だと "crofty" が "crofty-extra" に誤マッチするため行単位で照合する。
+func stanzaIsPackage(stanza, pkg string) bool {
+	for _, line := range strings.Split(stanza, "\n") {
+		if rest, ok := strings.CutPrefix(line, "Package:"); ok {
+			return strings.TrimSpace(rest) == pkg
+		}
+	}
+	return false
 }
 
 // RpmProbe は repomd.xml → primary.xml(.gz) を辿り、package の版を読む。
@@ -109,12 +140,17 @@ func (p *RpmProbe) Probe(ctx context.Context, pkg string) (RemoteState, error) {
 	if err := xml.Unmarshal(raw, &primary); err != nil {
 		return RemoteState{}, err
 	}
+	// primary は過去版も載りうる(flat repo)。マッチするうち最も高い版を返す。
+	latest := ""
 	for _, p := range primary.Packages {
-		if p.Name == pkg {
-			return RemoteState{Version: p.Version.Ver, Found: true}, nil
+		if p.Name == pkg && (latest == "" || compareDotted(p.Version.Ver, latest) > 0) {
+			latest = p.Version.Ver
 		}
 	}
-	return RemoteState{Found: false}, nil
+	if latest == "" {
+		return RemoteState{Found: false}, nil
+	}
+	return RemoteState{Version: latest, Found: true}, nil
 }
 
 // httpGet は GET し、200 の本文を返す。404/410 は ok=false(エラーではない)。
@@ -149,4 +185,40 @@ func gunzip(b []byte) ([]byte, error) {
 	}
 	defer r.Close()
 	return io.ReadAll(r)
+}
+
+// compareDotted はドット区切りの数値部を順に比べ -1/0/1 を返す(state.compareVersions と同方針)。
+// 数値化できない部分は文字列比較にフォールバックする。flat repo の複数版から最新を選ぶのに使う。
+func compareDotted(a, b string) int {
+	pa := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	pb := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		sa, sb := dottedPart(pa, i), dottedPart(pb, i)
+		na, ea := strconv.Atoi(sa)
+		nb, eb := strconv.Atoi(sb)
+		if ea == nil && eb == nil {
+			if na != nb {
+				if na < nb {
+					return -1
+				}
+				return 1
+			}
+			continue
+		}
+		if sa != sb {
+			return strings.Compare(sa, sb)
+		}
+	}
+	return 0
+}
+
+func dottedPart(p []string, i int) string {
+	if i < len(p) {
+		return p[i]
+	}
+	return "0"
 }

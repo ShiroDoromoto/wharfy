@@ -137,13 +137,44 @@ func (r *Resolver) resolveChannels(in File, owner, github, project string) []Res
 	}
 	out := make([]ResolvedChannel, 0, len(names))
 	for _, name := range names {
-		out = append(out, ResolvedChannel{
-			Name:   name,
-			Kind:   Kind(name),
-			Target: r.channelTarget(name, in, owner, github, project),
-		})
+		ch := ResolvedChannel{Name: name, Kind: Kind(name)}
+		switch name {
+		case "apt":
+			ch.Target, ch.PushTarget = resolveRepoURLs(name, in.Apt)
+		case "rpm":
+			ch.Target, ch.PushTarget = resolveRepoURLs(name, in.Rpm)
+		default:
+			ch.Target = r.channelTarget(name, in, owner, github, project)
+		}
+		out = append(out, ch)
 	}
 	return out
+}
+
+// fury.io(Gemfury)の URL 規則。push と配信が別ホストで、配信は apt/rpm でホストが異なる。
+const (
+	furyPushHost = "https://push.fury.io"
+	furyAptHost  = "https://apt.fury.io"
+	furyYumHost  = "https://yum.fury.io"
+)
+
+// resolveRepoURLs は apt/rpm の配信(probe/install)とアップロード(push)URL を解決する。
+//   - Provider+User 指定: プロバイダ規則から自動導出(fury のみ実装。手間最小の推奨経路)。
+//   - 生 URL 指定: deliver=Repo、push=Push(空なら Repo にフォールバック=push と配信が同一の汎用ホスト)。
+//
+// in が nil(未設定)なら両方空 → publish で skip 案内になる。
+func resolveRepoURLs(channel string, in *RepoInput) (deliver, push string) {
+	if in == nil {
+		return "", ""
+	}
+	if in.Provider == "fury" && in.User != "" {
+		host := furyAptHost
+		if channel == "rpm" {
+			host = furyYumHost
+		}
+		return host + "/" + in.User + "/", furyPushHost + "/" + in.User + "/"
+	}
+	return in.Repo, firstNonEmpty(in.Push, in.Repo)
 }
 
 // channelTarget は自前 tap/bucket 等の発行先を既定生成する(ADR-8: プロジェクトごと命名)。
@@ -175,15 +206,7 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if mod, err := r.ModulePath(r.Root); err == nil && mod != "" {
 			return mod
 		}
-	case "apt":
-		// 発行先は self-host の hosted repo(明示必須)。未設定なら空＝publish で skip 案内。
-		if in.Apt != nil {
-			return in.Apt.Repo
-		}
-	case "rpm":
-		if in.Rpm != nil {
-			return in.Rpm.Repo
-		}
+	// apt/rpm は配信/push を分けるため resolveChannels が resolveRepoURLs で解決する(ここには来ない)。
 	case "container":
 		// OCI イメージ名。既定 ghcr.io/<owner>/<project>(ghcr は小文字必須)。
 		if in.Container != nil && in.Container.Image != "" {

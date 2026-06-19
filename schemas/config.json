@@ -59,7 +59,8 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "kind": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind" },
-        "target": { "type": "string", "description": "解決済みの発行先(自前 tap/bucket 等)。" }
+        "target": { "type": "string", "description": "解決済みの発行先(自前 tap/bucket 等)。apt/rpm では配信(probe/install)URL。" },
+        "push_target": { "type": "string", "description": "apt/rpm のアップロード先(push)URL。配信と別ホスト(fury.io 等)のときのみ。" }
       },
       "required": ["name", "kind"],
       "additionalProperties": false
