@@ -49,7 +49,7 @@ var Commands = []Command{
 	{Name: "sign", Summary: "sign & notarize what can be signed", Next: []string{"publish"}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}},
 	{Name: "verify", Summary: "install from each channel and run it"},
-	{Name: "version", Summary: "print the version (the git tag is the single source)", Next: []string{"agent"}},
+	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},
 }
 
 // StateReaders は状態の読み口になるコマンド名(02 agent の state_readers)。

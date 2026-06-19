@@ -58,7 +58,7 @@
     },
     {
       "name": "version",
-      "summary": "print the version (the git tag is the single source)",
+      "summary": "print wharfy's own version (not your project's)",
       "next": [
         "agent"
       ]
