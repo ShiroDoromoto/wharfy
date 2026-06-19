@@ -36,6 +36,13 @@ type Archiver interface {
 	Archives(ctx context.Context, root, configPath string) ([]Artifact, error)
 }
 
+// Releaser は実リリース境界。アーカイブを GitHub Releases へ**アップロード**し、
+// その実アーカイブ(=配布される実体)の sha256 を返す。homebrew formula はこの実
+// checksum と実 URL を参照する必要があるため、snapshot(Archives)とは別経路にする。
+type Releaser interface {
+	Release(ctx context.Context, root, configPath string) ([]Artifact, error)
+}
+
 // UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
 type UnavailableError struct {
 	Bin string
@@ -87,10 +94,18 @@ func (b *GoReleaserBuilder) Build(ctx context.Context, root, configPath string) 
 
 // Archives は release-snapshot でアーカイブ(.tar.gz/.zip)まで作り、Archive 成果物を返す。
 // homebrew formula 等は archive の sha256 を要するため、build(バイナリのみ)とは別経路で作る。
-// --snapshot は tag 無し・dirty でも通り、発行はしない(ローカル生成のみ)。
+// --snapshot は tag 無し・dirty でも通り、発行はしない(ローカル生成のみ＝preview 用)。
 func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	return b.runAndParse(ctx, root, configPath, "Archive",
 		"release", "--snapshot", "--clean", "--config", configPath)
+}
+
+// Release は**実リリース**。クリーンな tag ＋ GITHUB_TOKEN が要る。アーカイブを
+// GitHub Releases へアップロードし、その実アーカイブの Archive 成果物(実 sha256)を返す。
+// formula push は wharfy が所有するので --skip=homebrew で goreleaser には書かせない(03)。
+func (b *GoReleaserBuilder) Release(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	return b.runAndParse(ctx, root, configPath, "Archive",
+		"release", "--clean", "--skip=homebrew", "--config", configPath)
 }
 
 func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, typ string, args ...string) ([]Artifact, error) {

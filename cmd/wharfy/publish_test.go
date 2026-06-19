@@ -8,6 +8,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
+	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
 const publishSchemaID = "https://wharfy.io/schemas/v1/publish.json"
@@ -18,6 +19,11 @@ type fakeArchiver struct {
 }
 
 func (f fakeArchiver) Archives(context.Context, string, string) ([]build.Artifact, error) {
+	return f.arts, f.err
+}
+
+// fakeArchiver は Releaser も満たす(apply 経路の実リリースを差し替える)。
+func (f fakeArchiver) Release(context.Context, string, string) ([]build.Artifact, error) {
 	return f.arts, f.err
 }
 
@@ -115,7 +121,7 @@ func TestPublishApplyWiring(t *testing.T) {
 	tagScratch(t, root, "v1.2.3")
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
-	defer swapArchiver(fakeArchiver{arts: sampleArchiveArtifacts()})()
+	defer swapReleaser(fakeArchiver{arts: sampleArchiveArtifacts()})() // 実リリースを fake 化
 	store := channel.NewInMemoryTapStore()
 	defer swapTapStore(store)()
 	flagYes = true
@@ -135,6 +141,14 @@ func TestPublishApplyWiring(t *testing.T) {
 	if !hasNextDo(res, "wharfy verify") {
 		t.Errorf("apply should guide to verify: %+v", res.Next)
 	}
+	// archive アップロード(releases)と formula(homebrew)の両方を記録する。
+	st, _ := state.Load(root, "demo")
+	if _, ok := st.Publish["homebrew"]; !ok {
+		t.Error("homebrew publish should be recorded")
+	}
+	if _, ok := st.Publish["releases"]; !ok {
+		t.Error("releases (archive upload) should be recorded")
+	}
 }
 
 // TestPublishApplyNeedsTag: tag が無いまま --yes は tag_missing で停止。
@@ -142,7 +156,7 @@ func TestPublishApplyNeedsTag(t *testing.T) {
 	root := scratchModule(t)
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
-	defer swapArchiver(fakeArchiver{arts: sampleArchiveArtifacts()})()
+	defer swapReleaser(fakeArchiver{arts: sampleArchiveArtifacts()})()
 	defer swapTapStore(channel.NewInMemoryTapStore())()
 	flagYes = true
 	defer func() { flagYes = false }()
@@ -159,6 +173,12 @@ func swapArchiver(a build.Archiver) func() {
 	prev := newArchiver
 	newArchiver = func(string) build.Archiver { return a }
 	return func() { newArchiver = prev }
+}
+
+func swapReleaser(r build.Releaser) func() {
+	prev := newReleaser
+	newReleaser = func(string) build.Releaser { return r }
+	return func() { newReleaser = prev }
 }
 
 func swapTapStore(s channel.TapStore) func() {

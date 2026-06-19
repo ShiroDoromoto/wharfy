@@ -19,6 +19,7 @@ import (
 // 差し替え点(テストで fake 化＝末端は差し替え可能・01)。
 var (
 	newArchiver = func(distDir string) build.Archiver { return build.NewGoReleaserBuilder(distDir) }
+	newReleaser = func(distDir string) build.Releaser { return build.NewGoReleaserBuilder(distDir) }
 	newTapStore = func(owner, repo, token string) channel.TapStore {
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
@@ -86,7 +87,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 
 	version, tagMissing := publishVersion(root)
 
-	// archive(formula の sha256 用)を release-snapshot で生成。生成設定は .wharfy/ に書く(03)。
+	// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない・03)。
 	glYAML, err := config.GenerateGoReleaser(cfg, in)
 	if err != nil {
 		return internalError(c, err)
@@ -95,29 +96,55 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	if err != nil {
 		return internalError(c, err)
 	}
-	archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
-	if aerr != nil {
-		return buildErrorResult(c, aerr) // builder_unavailable / build_failed を流用
-	}
 
-	hb := &channel.Homebrew{
-		Project: cfg.Project,
-		Tap:     tap,
-		Store:   newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN")),
-		Input: channel.FormulaInput{
-			Project:     cfg.Project,
-			Description: in.Description,
-			Homepage:    cfg.Homepage,
-			License:     cfg.License,
-			Version:     version,
-			Archives:    formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
-		},
-	}
+	ctx2 := publishCtx{cfg: cfg, in: in, tap: tap, tapOwner: tapOwner, tapRepo: tapRepo, ghOwner: ghOwner, ghRepo: ghRepo, version: version}
 
 	if !flagYes {
-		return publishDryRun(c, hb, ctx, tagMissing)
+		// preview: snapshot でローカルに archive を作り(アップロードしない)、暫定 sha で差分を見せる。
+		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		if aerr != nil {
+			return buildErrorResult(c, aerr)
+		}
+		return publishDryRun(c, ctx2.homebrew(archs), ctx, tagMissing)
 	}
-	return publishApply(c, hb, ctx, root, cfg, tap, version, tagMissing)
+
+	// apply: 高コストな実リリースの前に前提を確認する(tag / token)。
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	// 実リリース: archive を GitHub Releases へアップロードし、実 sha256 を得る(--skip=homebrew)。
+	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	if rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+	return publishApply(c, ctx2.homebrew(archs), ctx, root, cfg, tap, version)
+}
+
+// publishCtx は publish の解決済みコンテキスト(homebrew Publisher を archive から組む)。
+type publishCtx struct {
+	tap, tapOwner, tapRepo, ghOwner, ghRepo string
+	version                                 string
+	cfg                                     config.Config
+	in                                      config.File
+}
+
+func (p publishCtx) homebrew(archs []build.Artifact) *channel.Homebrew {
+	return &channel.Homebrew{
+		Project: p.cfg.Project,
+		Tap:     p.tap,
+		Store:   newTapStore(p.tapOwner, p.tapRepo, os.Getenv("GITHUB_TOKEN")),
+		Input: channel.FormulaInput{
+			Project:     p.cfg.Project,
+			Description: p.in.Description,
+			Homepage:    p.cfg.Homepage,
+			License:     p.cfg.License,
+			Version:     p.version,
+			Archives:    formulaArchives(archs, p.ghOwner, p.ghRepo, p.cfg.Project, p.version),
+		},
+	}
 }
 
 // publishDryRun は plan をプレビューする(書かない)。
@@ -163,21 +190,24 @@ func dryRunNext(item channel.PlanItem, reqs []requirement) []output.NextDo {
 	return next
 }
 
-// publishApply は実際に tap に書く(--yes)。tag/token が要る。
-func publishApply(c registry.Command, hb *channel.Homebrew, ctx context.Context, root string, cfg config.Config, tap, version string, tagMissing bool) output.Result {
-	if tagMissing {
-		res := output.New(c.Name, "cannot publish without a tag", false)
-		res.Errors = []output.Problem{{Code: output.ErrTagMissing, Message: "no git tag found; the tag is the version", Hint: "git tag vX.Y.Z && git push --tags, then retry"}}
-		res.Next = []output.NextDo{{Reason: "tag the release", Do: "git tag v" + version}}
-		return res
-	}
-	if os.Getenv("GITHUB_TOKEN") == "" {
-		res := output.New(c.Name, "cannot publish without a token", false)
-		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "GITHUB_TOKEN required to write the tap", Hint: "export GITHUB_TOKEN=…"}}
-		res.Next = []output.NextDo{{Reason: "set the token then retry", Do: "export GITHUB_TOKEN=… ; wharfy publish homebrew --yes"}}
-		return res
-	}
+// tagMissingResult / tokenMissingResult は実 apply の前提不足(09)。実リリース前に弾く。
+func tagMissingResult(c registry.Command, version string) output.Result {
+	res := output.New(c.Name, "cannot publish without a tag", false)
+	res.Errors = []output.Problem{{Code: output.ErrTagMissing, Message: "no git tag found; the tag is the version", Hint: "git tag vX.Y.Z && git push --tags, then retry"}}
+	res.Next = []output.NextDo{{Reason: "tag the release", Do: "git tag v" + version + " && git push --tags"}}
+	return res
+}
 
+func tokenMissingResult(c registry.Command) output.Result {
+	res := output.New(c.Name, "cannot publish without a token", false)
+	res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "GITHUB_TOKEN required to upload the release and write the tap", Hint: "export GITHUB_TOKEN=…"}}
+	res.Next = []output.NextDo{{Reason: "set the token then retry", Do: "export GITHUB_TOKEN=… ; wharfy publish homebrew --yes"}}
+	return res
+}
+
+// publishApply は実 archive 反映後に formula を tap に書く(--yes)。前提(tag/token)は確認済み。
+// archive は既に GitHub Releases へアップロード済み(Releaser.Release)。formula は実 checksum を持つ。
+func publishApply(c registry.Command, hb *channel.Homebrew, ctx context.Context, root string, cfg config.Config, tap, version string) output.Result {
 	item, pub, err := hb.Publish(ctx)
 	if err != nil {
 		res := output.New(c.Name, "publish failed", false)
@@ -190,9 +220,10 @@ func publishApply(c registry.Command, hb *channel.Homebrew, ctx context.Context,
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
 		}
-		st.Publish["homebrew"] = state.PublishRecord{
-			Version: version, Target: tap, Commit: pub.Commit, At: nowUTC().Format(time.RFC3339),
-		}
+		now := nowUTC().Format(time.RFC3339)
+		// releases(archive アップロード)と homebrew(formula)の両方を記録する。
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
 		_ = state.Save(root, st)
 	}
 
