@@ -1,0 +1,43 @@
+name: ci
+
+# 受け入れゲート(design 08 §4)の自動化:
+#  - 全 --json 出力が schemas/ に valid (drift_test / config_test / publish_test / status_test)
+#  - registry 不整合・next: リンク切れ・コード不整合で落ちる (drift_test / codes_test)
+# テストは goreleaser/ネットワーク不要(Builder/Archiver/TapStore を fake 化済み)。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod   # go.mod の go ディレクティブ(=サポート下限)で検証
+          cache: true
+
+      - name: gofmt (must be clean)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (race)
+        run: go test -race ./...
