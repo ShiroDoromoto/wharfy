@@ -11,10 +11,11 @@ import (
 
 // 共通グローバルフラグ(設計 01 CLI 層)。全コマンドが受ける。
 var (
-	flagJSON    bool
-	flagDryRun  bool
-	flagYes     bool
-	flagNoProbe bool
+	flagJSON      bool
+	flagDryRun    bool
+	flagYes       bool
+	flagNoProbe   bool
+	flagAckReview bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -31,6 +32,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "show what would change; write nothing")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "apply changes to owned distribution (publish writes the tap)")
 	root.PersistentFlags().BoolVar(&flagNoProbe, "no-probe", false, "status: read records only; do not probe channel reality")
+	root.PersistentFlags().BoolVar(&flagAckReview, "acknowledge-review", false, "strict gated channels (e.g. homebrew-core): acknowledge you meet the acceptance criteria before opening a PR")
 
 	for _, c := range registry.Commands {
 		root.AddCommand(newCommand(c))

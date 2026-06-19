@@ -25,6 +25,7 @@ var expectedCodes = []string{
 	"builder_unavailable",
 	"channel_skipped",
 	"config_invalid",
+	"consent_required",
 	"darwin_unnotarized",
 	"drift_detected",
 	"gated_pending",

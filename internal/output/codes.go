@@ -33,6 +33,7 @@ const (
 	ErrTokenMissing       = "token_missing"        // その操作に必須のトークン未設定
 	ErrAuthFailed         = "auth_failed"          // トークン/鍵はあるが認証失敗
 	ErrTargetCreateFailed = "target_create_failed" // 自前 tap/bucket/repo 作成失敗
+	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
 	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗(04)
 	ErrNetworkError       = "network_error"        // 一時的なネットワーク失敗
@@ -75,6 +76,7 @@ var Catalog = []CatalogEntry{
 	{ErrTokenMissing, KindError, "その操作に必須のトークン未設定"},
 	{ErrAuthFailed, KindError, "トークン/鍵はあるが認証失敗"},
 	{ErrTargetCreateFailed, KindError, "自前 tap/bucket/repo 作成失敗"},
+	{ErrConsentRequired, KindError, "strict gated への申請に明示同意が必要(未同意)"},
 	{ErrPublishFailed, KindError, "チャネルへの発行失敗"},
 	{ErrProbeFailed, KindError, "実体照合に失敗"},
 	{ErrNetworkError, KindError, "一時的なネットワーク失敗"},

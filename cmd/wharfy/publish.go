@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -419,10 +421,20 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			&output.Warning{Code: output.WarnGatedPending, Message: "winget PR awaiting review: " + prURL}, nil
 
 	case "homebrew-core":
+		// strict gated: 明示同意が無ければ batch を止めず skip(誤申請でメンテナを煩わせない)。
+		if !flagAckReview {
+			return channel.PlanItem{Channel: "homebrew-core", Kind: channel.KindGated, Action: channel.ActionSkip,
+					Reason: "needs --acknowledge-review (strict review)"},
+				&output.Warning{Code: output.WarnChannelSkipped, Message: "homebrew-core skipped — needs --acknowledge-review (" + strictGated["homebrew-core"].criteria + ")"}, nil
+		}
 		central := channelTargetByName(cfg, "homebrew-core")
-		formula := channel.GenerateFormula(channel.FormulaInput{
-			Project: cfg.Project, Description: in.Description, Homepage: cfg.Homepage,
-			License: cfg.License, Version: version, Archives: formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version)})
+		sha, serr := sourceTarballSHA(ctx, sourceTarballURL(ghOwner, ghRepo, version))
+		if serr != nil {
+			return channel.PlanItem{}, nil, serr
+		}
+		formula := channel.GenerateCoreFormula(channel.CoreFormulaInput{
+			Project: cfg.Project, Binary: cfg.Project, Description: in.Description, Homepage: cfg.Homepage,
+			License: cfg.License, Version: version, SourceURL: sourceTarballURL(ghOwner, ghRepo, version), SourceSHA: sha})
 		prURL, err := newCoreSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, channel.CoreInput{
 			Central: central, Project: cfg.Project, Version: version,
 			FormulaFile: channel.CoreFormulaPath(cfg.Project), Formula: formula})
@@ -730,53 +742,93 @@ func manifestsDiff(files map[string]string) string {
 	return b.String()
 }
 
-// publishHomebrewCore は homebrew-core チャネル(gated・*-core・11A)。自前 tap と違い上流
-// (Homebrew/homebrew-core)のレビュー＆マージが要るので、formula を生成して fork PR を出し
-// 状態を追うだけ。マージはしない。受け入れ基準(brew audit 等)は利用者責務。書く前に formula を見せる。
+// strictGated はコミュニティ審査が厳しい gated チャネル(誤申請がメンテナ負荷になる)。
+// 申請前に基準提示＋明示同意(--acknowledge-review)を要求し、未同意では出さない。
+// winget は低ハードルの正規自己申請ルートなので含めない(現状維持)。
+var strictGated = map[string]struct{ criteria, etiquette string }{
+	"homebrew-core": {
+		criteria:  "homebrew-core requires a notable, established project AND a formula that passes `brew audit --new --strict`",
+		etiquette: "this opens a PR a Homebrew maintainer must review — submit only if you genuinely qualify",
+	},
+}
+
+// sourceTarballURL は tag のソース tarball(GitHub の自動 archive)を返す(core formula が参照)。
+func sourceTarballURL(ghOwner, ghRepo, version string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/v%s.tar.gz", ghOwner, ghRepo, version)
+}
+
+// sourceTarballSHA はソース tarball をダウンロードして sha256 を計算する(テストで差し替え)。
+var sourceTarballSHA = func(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch source tarball %s: %s", url, resp.Status)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, resp.Body); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// publishHomebrewCore は homebrew-core チャネル(strict gated・*-core・11A)。core は notability ＋
+// ソースビルド formula ＋ 厳格審査が要る。wharfy は **source-build formula** を生成して fork PR を
+// 組むが、(1) 受け入れ基準を提示し (2) --acknowledge-review が無ければ出さない(コミュニティ配慮)。
+// マージはしない。出すのはあくまで叩き台で brew audit 合格保証ではない。
 func publishHomebrewCore(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	central := channelTargetByName(cfg, "homebrew-core")
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
 	if central == "" || !ghOK {
 		item := channel.PlanItem{Channel: "homebrew-core", Kind: channel.KindGated, Action: channel.ActionSkip,
-			Reason: "github unresolved — formula needs the release repo"}
+			Reason: "github unresolved — formula needs the source repo"}
 		res := publishResult(c, "homebrew-core skipped — unresolved", true, []channel.PlanItem{item})
 		res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
 		return res
 	}
-
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
-	}
-	formulaFor := func(archs []build.Artifact) string {
-		return channel.GenerateFormula(channel.FormulaInput{
-			Project:     cfg.Project,
-			Description: in.Description,
-			Homepage:    cfg.Homepage,
-			License:     cfg.License,
-			Version:     version,
-			Archives:    formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+	crit := strictGated["homebrew-core"]
+	formulaFile := channel.CoreFormulaPath(cfg.Project)
+	srcURL := sourceTarballURL(ghOwner, ghRepo, version)
+	mkFormula := func(sha string) string {
+		return channel.GenerateCoreFormula(channel.CoreFormulaInput{
+			Project: cfg.Project, Binary: cfg.Project, Description: in.Description,
+			Homepage: cfg.Homepage, License: cfg.License, Version: version,
+			SourceURL: srcURL, SourceSHA: sha,
 		})
 	}
-	formulaFile := channel.CoreFormulaPath(cfg.Project)
-	reqs := applyRequirements(tagMissing)
+	// strict gated は tag/token に加え「明示同意(--acknowledge-review)」を要件に出す。
+	reqs := []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+		{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (fork + PR)"},
+		{Requirement: "acknowledge-review", Met: flagAckReview, Hint: "pass --acknowledge-review after confirming you meet the criteria"},
+	}
 
 	if !flagYes {
-		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
-		if aerr != nil {
-			return buildErrorResult(c, aerr)
-		}
 		item := channel.PlanItem{
 			Channel: "homebrew-core", Kind: channel.KindGated,
 			OwnedArtifact: central + " (PR from fork): " + formulaFile,
 			Action:        channel.ActionPrepare,
-			Diff:          channel.Diff("", formulaFor(archs)),
+			Diff:          channel.Diff("", mkFormula("")),
 		}
-		msg := "plan: prepare homebrew-core PR for " + cfg.Project
-		msg += previewNote(version, tagMissing, true)
+		msg := "plan: prepare homebrew-core PR for " + cfg.Project + previewNote(version, tagMissing, true)
 		res := output.New(c.Name, msg, true)
 		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
-		res.Next = dryRunNext(item, reqs, "homebrew-core")
+		// コミュニティ負荷の正直なゲート: 基準と作法を先に見せる。
+		res.Warnings = []output.Warning{{Code: output.WarnGatedPending, Message: crit.criteria + "; " + crit.etiquette}}
+		next := []output.NextDo{{Reason: "confirm it passes review locally first", Do: "brew audit --new --strict " + cfg.Project}}
+		for _, r := range reqs {
+			if !r.Met {
+				next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
+			}
+		}
+		// 申請コマンドは --acknowledge-review を含めて正確に示す(strict gated)。
+		res.Next = append(next, output.NextDo{Reason: "acknowledge the criteria and submit", Do: "wharfy publish homebrew-core --yes --acknowledge-review"})
 		return res
 	}
 
@@ -787,19 +839,33 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 	if token == "" {
 		return tokenMissingResult(c)
 	}
-	// release が済んでいれば再利用、無ければ実 release(archive を上げ実 sha を得る・formula が参照)。
-	archs, _, rerr := releaseArtifacts(ctx, root, configPath, version)
-	if rerr != nil {
-		return buildErrorResult(c, rerr)
+	// 明示同意が無ければ出さない(strict gated のフットガン防止・コミュニティ配慮)。
+	if !flagAckReview {
+		res := output.New(c.Name, "homebrew-core needs explicit acknowledgement", false)
+		res.Errors = []output.Problem{{Code: output.ErrConsentRequired, Message: crit.criteria,
+			Hint: crit.etiquette + ". Re-run with --acknowledge-review once `brew audit --new --strict` passes."}}
+		res.Next = []output.NextDo{
+			{Reason: "confirm it passes review locally", Do: "brew audit --new --strict " + cfg.Project},
+			{Reason: "acknowledge the criteria and submit", Do: "wharfy publish homebrew-core --yes --acknowledge-review"},
+		}
+		return res
+	}
+	// source-build formula は tag のソース tarball を参照する。その実 sha を計算する(release 不要)。
+	sha, err := sourceTarballSHA(ctx, srcURL)
+	if err != nil {
+		res := output.New(c.Name, "could not fetch the source tarball", false)
+		res.Errors = []output.Problem{{Code: output.ErrNetworkError, Message: err.Error(), Hint: "ensure the tag is pushed to GitHub, then retry"}}
+		res.Next = []output.NextDo{{Reason: "push the tag then retry", Do: "git push --tags ; wharfy publish homebrew-core --yes --acknowledge-review"}}
+		return res
 	}
 	prURL, serr := newCoreSubmitter(token).Submit(ctx, channel.CoreInput{
 		Central: central, Project: cfg.Project, Version: version,
-		FormulaFile: formulaFile, Formula: formulaFor(archs),
+		FormulaFile: formulaFile, Formula: mkFormula(sha),
 	})
 	if serr != nil {
 		res := output.New(c.Name, "homebrew-core submission failed", false)
 		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: serr.Error(), Hint: "check GITHUB_TOKEN scope (fork + PR)"}}
-		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish homebrew-core --yes"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish homebrew-core --yes --acknowledge-review"}}
 		return res
 	}
 
@@ -807,9 +873,7 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
 		}
-		now := nowUTC().Format(time.RFC3339)
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
-		st.Publish["homebrew-core"] = state.PublishRecord{Version: version, Target: central, State: "pr_open", PR: prURL, At: now}
+		st.Publish["homebrew-core"] = state.PublishRecord{Version: version, Target: central, State: "pr_open", PR: prURL, At: nowUTC().Format(time.RFC3339)}
 		_ = state.Save(root, st)
 	}
 
