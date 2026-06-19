@@ -13,6 +13,7 @@ import (
 var (
 	flagJSON   bool
 	flagDryRun bool
+	flagYes    bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -27,6 +28,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "machine-readable output (see schemas/)")
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "show what would change; write nothing")
+	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "apply changes to owned distribution (publish writes the tap)")
 
 	for _, c := range registry.Commands {
 		root.AddCommand(newCommand(c))

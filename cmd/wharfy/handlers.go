@@ -17,6 +17,7 @@ var handlers = map[string]handler{
 	"version": runVersion,
 	"config":  runConfig,
 	"build":   runBuild,
+	"publish": runPublish,
 }
 
 // dispatch は registry エントリに対応する本体を選んで実行する。

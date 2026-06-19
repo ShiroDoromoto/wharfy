@@ -31,6 +31,11 @@ type Builder interface {
 	Build(ctx context.Context, root, configPath string) ([]Artifact, error)
 }
 
+// Archiver はアーカイブ(.tar.gz/.zip)生成境界。formula 等が archive の sha256 を要するため分ける。
+type Archiver interface {
+	Archives(ctx context.Context, root, configPath string) ([]Artifact, error)
+}
+
 // UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
 type UnavailableError struct {
 	Bin string
@@ -75,15 +80,28 @@ func NewGoReleaserBuilder(distDir string) *GoReleaserBuilder {
 }
 
 func (b *GoReleaserBuilder) Build(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	// build = クロスビルドのみ(発行しない)。--snapshot で tag 無しでも通す。--clean で dist を掃除。
+	return b.runAndParse(ctx, root, configPath, "Binary",
+		"build", "--snapshot", "--clean", "--config", configPath)
+}
+
+// Archives は release-snapshot でアーカイブ(.tar.gz/.zip)まで作り、Archive 成果物を返す。
+// homebrew formula 等は archive の sha256 を要するため、build(バイナリのみ)とは別経路で作る。
+// --snapshot は tag 無し・dirty でも通り、発行はしない(ローカル生成のみ)。
+func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath string) ([]Artifact, error) {
+	return b.runAndParse(ctx, root, configPath, "Archive",
+		"release", "--snapshot", "--clean", "--config", configPath)
+}
+
+func (b *GoReleaserBuilder) runAndParse(ctx context.Context, root, configPath, typ string, args ...string) ([]Artifact, error) {
 	if _, err := b.LookPath(b.Bin); err != nil {
 		return nil, &UnavailableError{Bin: b.Bin, Err: err}
 	}
-	// build = クロスビルドのみ(発行しない)。--snapshot で tag 無しでも通す。--clean で dist を掃除。
-	out, err := b.Run(ctx, root, b.Bin, "build", "--snapshot", "--clean", "--config", configPath)
+	out, err := b.Run(ctx, root, b.Bin, args...)
 	if err != nil {
 		return nil, &FailedError{Err: err, Output: tail(out, 4000)}
 	}
-	return parseArtifacts(root, filepath.Join(root, b.DistDir, "artifacts.json"))
+	return parseArtifacts(root, filepath.Join(root, b.DistDir, "artifacts.json"), typ)
 }
 
 // glArtifact は GoReleaser の dist/artifacts.json の 1 エントリ(必要分のみ)。
@@ -94,9 +112,9 @@ type glArtifact struct {
 	Type string `json:"type"`
 }
 
-// parseArtifacts は artifacts.json を読み、Binary だけ抜き、各ファイルの sha256 を自前計算する。
-// GoReleaser のチェックサム形式に依存しないため、実ファイルから求める(robust)。
-func parseArtifacts(root, artifactsPath string) ([]Artifact, error) {
+// parseArtifacts は artifacts.json を読み、指定 type(Binary/Archive)だけ抜き、
+// 各ファイルの sha256 を自前計算する。GoReleaser のチェックサム形式に依存しない(robust)。
+func parseArtifacts(root, artifactsPath, typ string) ([]Artifact, error) {
 	b, err := os.ReadFile(artifactsPath)
 	if err != nil {
 		return nil, &FailedError{Err: fmt.Errorf("read %s: %w", artifactsPath, err)}
@@ -107,7 +125,7 @@ func parseArtifacts(root, artifactsPath string) ([]Artifact, error) {
 	}
 	var out []Artifact
 	for _, a := range raw {
-		if a.Type != "Binary" {
+		if a.Type != typ {
 			continue
 		}
 		full := a.Path
