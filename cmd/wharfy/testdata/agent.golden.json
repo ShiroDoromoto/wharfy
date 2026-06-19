@@ -70,6 +70,10 @@
       "kind": "owned"
     },
     {
+      "name": "scoop",
+      "kind": "owned"
+    },
+    {
       "name": "goinstall",
       "kind": "owned"
     },

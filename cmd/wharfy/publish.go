@@ -70,6 +70,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	switch ch {
 	case "homebrew":
 		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
+	case "scoop":
+		return publishScoop(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
@@ -85,28 +87,42 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	}
 }
 
-// publishHomebrew は homebrew チャネルの発行(差分プレビュー→実 release+formula)。
+// publishHomebrew / publishScoop は archive を要する owned チャネル。tap/bucket(自前リポジトリ)
+// に formula/manifest を書く。型は共通(publishViaRelease)で、Publisher の組み立てだけ差し替える。
 func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	tap, ok := homebrewTarget(cfg)
 	tapOwner, tapRepo, tapOK := splitOwnerName(tap)
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
 	if !ok || !tapOK || !ghOK {
-		item := channel.PlanItem{
-			Channel: "homebrew", Kind: channel.KindOwned, Action: channel.ActionSkip,
-			Reason: "homebrew tap/github unresolved — set 'github' or 'homebrew.tap' in wharfy.yaml",
-		}
-		res := publishResult(c, "homebrew skipped — tap unresolved", true, []channel.PlanItem{item})
-		res.Next = []output.NextDo{{Reason: "set github so the tap can be derived", Do: "wharfy config"}}
-		return res
+		return ownedSkip(c, "homebrew", "homebrew tap/github unresolved — set 'github' or 'homebrew.tap' in wharfy.yaml")
 	}
+	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "homebrew", tap,
+		func(archs []build.Artifact) channel.Publisher {
+			return homebrewPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
+		})
+}
 
+func publishScoop(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	bucket := channelTargetByName(cfg, "scoop")
+	bOwner, bRepo, bOK := splitOwnerName(bucket)
+	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
+	if bucket == "" || !bOK || !ghOK {
+		return ownedSkip(c, "scoop", "scoop bucket/github unresolved — set 'github' or 'scoop.bucket' in wharfy.yaml")
+	}
+	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "scoop", bucket,
+		func(archs []build.Artifact) channel.Publisher {
+			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
+		})
+}
+
+// publishViaRelease は「archive をアップロードして所有リポジトリに manifest/formula を書く」
+// owned チャネル共通の発行フロー(homebrew/scoop)。makePub が archive から Publisher を組む。
+func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, target string, makePub func([]build.Artifact) channel.Publisher) output.Result {
 	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く(03)。
 	configPath, err := writeGeneratedConfig(root, cfg, in, version)
 	if err != nil {
 		return internalError(c, err)
 	}
-
-	ctx2 := publishCtx{cfg: cfg, in: in, tap: tap, tapOwner: tapOwner, tapRepo: tapRepo, ghOwner: ghOwner, ghRepo: ghRepo, version: version}
 
 	if !flagYes {
 		// preview: snapshot でローカルに archive を作り(アップロードしない)、暫定 sha で差分を見せる。
@@ -114,7 +130,7 @@ func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg c
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
-		return publishDryRun(c, ctx2.homebrew(archs), ctx, tagMissing)
+		return ownedReleaseDryRun(ctx, c, makePub(archs), version, chName, tagMissing)
 	}
 
 	// apply: 高コストな実リリースの前に前提を確認する(tag / token)。
@@ -129,7 +145,14 @@ func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg c
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
-	return publishApply(c, ctx2.homebrew(archs), ctx, root, cfg, tap, version)
+	return ownedReleaseApply(ctx, c, makePub(archs), root, cfg.Project, chName, target, cfg.Github, version)
+}
+
+func ownedSkip(c registry.Command, chName, reason string) output.Result {
+	item := channel.PlanItem{Channel: chName, Kind: channel.KindOwned, Action: channel.ActionSkip, Reason: reason}
+	res := publishResult(c, chName+" skipped — unresolved target", true, []channel.PlanItem{item})
+	res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
+	return res
 }
 
 // publishScript は script チャネル(curl|sh インストーラ・03/07)。install.sh を生成し、
@@ -267,47 +290,56 @@ func channelTargetByName(cfg config.Config, name string) string {
 	return ""
 }
 
-// publishCtx は publish の解決済みコンテキスト(homebrew Publisher を archive から組む)。
-type publishCtx struct {
-	tap, tapOwner, tapRepo, ghOwner, ghRepo string
-	version                                 string
-	cfg                                     config.Config
-	in                                      config.File
-}
-
-func (p publishCtx) homebrew(archs []build.Artifact) *channel.Homebrew {
+// homebrewPublisher / scoopPublisher は archive から各 Publisher を組む。
+func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Homebrew {
 	return &channel.Homebrew{
-		Project: p.cfg.Project,
-		Tap:     p.tap,
-		Store:   newTapStore(p.tapOwner, p.tapRepo, os.Getenv("GITHUB_TOKEN")),
+		Project: cfg.Project,
+		Tap:     tap,
+		Store:   newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN")),
 		Input: channel.FormulaInput{
-			Project:     p.cfg.Project,
-			Description: p.in.Description,
-			Homepage:    p.cfg.Homepage,
-			License:     p.cfg.License,
-			Version:     p.version,
-			Archives:    formulaArchives(archs, p.ghOwner, p.ghRepo, p.cfg.Project, p.version),
+			Project:     cfg.Project,
+			Description: in.Description,
+			Homepage:    cfg.Homepage,
+			License:     cfg.License,
+			Version:     version,
+			Archives:    formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 		},
 	}
 }
 
-// publishDryRun は plan をプレビューする(書かない)。
-// requires で実 apply の前提条件(tag/token)とその充足状況を先に見せる。
-func publishDryRun(c registry.Command, hb *channel.Homebrew, ctx context.Context, tagMissing bool) output.Result {
-	item, err := hb.Plan(ctx)
+func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Scoop {
+	return &channel.Scoop{
+		Project: cfg.Project,
+		Bucket:  bucket,
+		Store:   newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN")),
+		Input: channel.ScoopInput{
+			Project:     cfg.Project,
+			Description: in.Description,
+			Homepage:    cfg.Homepage,
+			License:     cfg.License,
+			Version:     version,
+			Owner:       ghOwner,
+			Repo:        ghRepo,
+			Archives:    scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+		},
+	}
+}
+
+// ownedReleaseDryRun は plan をプレビューする(書かない)。requires で実 apply の前提条件を先出し。
+func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Publisher, version, chName string, tagMissing bool) output.Result {
+	item, err := pub.Plan(ctx)
 	if err != nil {
 		return probeFailedResult(c, err)
 	}
 	reqs := applyRequirements(tagMissing)
-
-	msg := "plan: " + item.Action + " " + hb.FormulaPath()
+	msg := "plan: " + item.Action + " " + item.OwnedArtifact
 	if tagMissing {
 		// 正準コードに合う warning が無いので、誤コードを付けず message で正直に注記する。
-		msg += " (preview @ " + hb.Input.Version + "; no git tag yet)"
+		msg += " (preview @ " + version + "; no git tag yet)"
 	}
 	res := output.New(c.Name, msg, true)
 	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
-	res.Next = dryRunNext(item, reqs, "homebrew")
+	res.Next = dryRunNext(item, reqs, chName)
 	return res
 }
 
@@ -364,33 +396,47 @@ func tokenMissingResult(c registry.Command) output.Result {
 	return res
 }
 
-// publishApply は実 archive 反映後に formula を tap に書く(--yes)。前提(tag/token)は確認済み。
-// archive は既に GitHub Releases へアップロード済み(Releaser.Release)。formula は実 checksum を持つ。
-func publishApply(c registry.Command, hb *channel.Homebrew, ctx context.Context, root string, cfg config.Config, tap, version string) output.Result {
-	item, pub, err := hb.Publish(ctx)
+// ownedReleaseApply は実 archive 反映後に formula/manifest を所有リポジトリに書く(--yes)。
+// 前提(tag/token)は確認済み。archive は既に GitHub Releases へアップロード済み(実 checksum)。
+func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publisher, root, project, chName, target, releaseTarget, version string) output.Result {
+	item, pubres, err := pub.Publish(ctx)
 	if err != nil {
 		res := output.New(c.Name, "publish failed", false)
-		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: err.Error(), Hint: "check token scope and tap permissions"}}
-		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish homebrew --yes"}}
+		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: err.Error(), Hint: "check token scope and repo permissions"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
 		return res
 	}
 
-	if st, err := state.Load(root, cfg.Project); err == nil {
+	if st, err := state.Load(root, project); err == nil {
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
 		}
 		now := nowUTC().Format(time.RFC3339)
-		// releases(archive アップロード)と homebrew(formula)の両方を記録する。
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
-		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
+		// releases(archive アップロード)とチャネル(formula/manifest)の両方を記録する。
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: releaseTarget, At: now}
+		st.Publish[chName] = state.PublishRecord{Version: version, Target: target, Commit: pubres.Commit, At: now}
 		_ = state.Save(root, st)
 	}
 
 	item.Action = channel.ActionUpdate // 反映済みの操作を明示(create/update いずれも書いた)
-	res := publishResult(c, "published "+hb.Project+" "+version+" → "+tap, true, []channel.PlanItem{item})
+	res := publishResult(c, "published "+project+" "+version+" → "+target, true, []channel.PlanItem{item})
 	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
-	res.Next = []output.NextDo{{Reason: "install from the tap and run it", Do: "wharfy verify"}}
+	res.Next = []output.NextDo{{Reason: "install from the channel and run it", Do: "wharfy verify"}}
 	return res
+}
+
+// scoopArchives は build の archive(windows)を Releases の zip URL 付き ScoopArch にする。
+func scoopArchives(archs []build.Artifact, ghOwner, ghRepo, project, version string) []channel.ScoopArch {
+	var out []channel.ScoopArch
+	for _, a := range archs {
+		if a.OS != "windows" {
+			continue
+		}
+		name := fmt.Sprintf("%s_%s_windows_%s.zip", project, version, a.Arch)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.ScoopArch{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	return out
 }
 
 // --- ヘルパ ---

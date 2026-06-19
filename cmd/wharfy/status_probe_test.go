@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
@@ -103,4 +104,33 @@ func swapScriptProbeURL(url string) func() {
 	prev := scriptProbeURL
 	scriptProbeURL = url
 	return func() { scriptProbeURL = prev }
+}
+
+// scoop: 記録 v1.2.0 vs bucket manifest v1.1.0 → drift(behind)。homebrew と同型。
+func TestStatusScoopDrift(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [scoop]\n")
+	chdir(t, root)
+
+	st, _ := state.Load(root, "demo")
+	st.Publish = map[string]state.PublishRecord{
+		"scoop": {Version: "1.2.0", Target: "acme/scoop-demo", At: "t"},
+	}
+	_ = state.Save(root, st)
+
+	store := channel.NewInMemoryTapStore()
+	store.Files["bucket/demo.json"] = `{"version":"1.1.0"}`
+	defer swapTapStore(store)()
+
+	out, err := buildStatus(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := findChannel(out.Channels, "scoop")
+	if sc == nil || sc.Source != state.SourceDrift || sc.Drift == nil || sc.Drift.Kind != state.DriftBehind {
+		t.Fatalf("scoop should be drift behind: %+v", sc)
+	}
+	if sc.Drift.Recorded != "1.2.0" || sc.Drift.Remote != "1.1.0" {
+		t.Errorf("scoop drift versions wrong: %+v", sc.Drift)
+	}
 }

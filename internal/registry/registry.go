@@ -59,6 +59,7 @@ var StateReaders = []string{"status", "config"}
 // homebrew で型を固めた後、低摩擦な goinstall / script から横展開中(08 §5)。
 var Channels = []ChannelRef{
 	{Name: "homebrew", Kind: "owned"},
+	{Name: "scoop", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
 	{Name: "script", Kind: "owned"},
 }

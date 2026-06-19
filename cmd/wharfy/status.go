@@ -114,6 +114,8 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	switch ch.Name {
 	case "homebrew":
 		return assessHomebrew(ctx, cs, ch, cfg.Project, recordedVer)
+	case "scoop":
+		return assessScoop(ctx, cs, ch, cfg.Project, recordedVer)
 	case "script":
 		return assessScript(ctx, cs, cfg, recordedVer)
 	case "goinstall":
@@ -171,6 +173,21 @@ func assessHomebrew(ctx context.Context, cs statusChannel, ch config.ResolvedCha
 		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
 	}
 	warn := reconcileInto(&cs, "homebrew", recordedVer, rs)
+	return cs, warn
+}
+
+// assessScoop は自前 bucket の manifest 版を照合する(homebrew と同型)。
+func assessScoop(ctx context.Context, cs statusChannel, ch config.ResolvedChannel, project, recordedVer string) (statusChannel, *output.Warning) {
+	bOwner, bRepo, ok := splitOwnerName(ch.Target)
+	if !ok {
+		return recordedOnly(cs, recordedVer, "bucket unresolved — set 'github' or 'scoop.bucket'"), nil
+	}
+	sc := &channel.Scoop{Project: project, Bucket: ch.Target, Store: newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN"))}
+	rs, err := sc.Probe(ctx)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
+	}
+	warn := reconcileInto(&cs, "scoop", recordedVer, rs)
 	return cs, warn
 }
 
