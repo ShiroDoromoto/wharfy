@@ -122,6 +122,8 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 		return assessScript(ctx, cs, cfg, recordedVer)
 	case "goinstall":
 		return assessGoinstall(ctx, cs, ch.Target, tag)
+	case "aur":
+		return assessAur(ctx, cs, ch.Target, recordedVer)
 	case "winget":
 		return assessWinget(cs, st.Publish["winget"])
 	default:
@@ -212,6 +214,20 @@ func assessScoop(ctx context.Context, cs statusChannel, ch config.ResolvedChanne
 		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
 	}
 	warn := reconcileInto(&cs, "scoop", recordedVer, rs)
+	return cs, warn
+}
+
+// assessAur は AUR RPC で pkg の版を引き、記録と照合する(homebrew と同型 drift)。
+func assessAur(ctx context.Context, cs statusChannel, pkg, recordedVer string) (statusChannel, *output.Warning) {
+	if pkg == "" {
+		return recordedOnly(cs, recordedVer, "aur package unresolved"), nil
+	}
+	probe := &channel.AurProbe{Base: aurRPCBase}
+	rs, err := probe.Probe(ctx, pkg)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning("aur:"+pkg, err)
+	}
+	warn := reconcileInto(&cs, "aur", recordedVer, rs)
 	return cs, warn
 }
 

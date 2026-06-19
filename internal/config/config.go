@@ -27,6 +27,12 @@ type File struct {
 	Rpm         *RepoInput      `yaml:"rpm"`
 	Container   *ContainerInput `yaml:"container"`
 	Winget      *WingetIn       `yaml:"winget"`
+	Aur         *AurIn          `yaml:"aur"`
+}
+
+// AurIn は AUR の設定。Package は既定 <project>-bin を上書き。
+type AurIn struct {
+	Package string `yaml:"package"`
 }
 
 // WingetIn は winget の設定。Identifier は既定 <Owner>.<Project> を上書き(PackageIdentifier)。

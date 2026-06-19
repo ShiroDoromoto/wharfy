@@ -63,6 +63,7 @@ var Channels = []ChannelRef{
 	{Name: "apt", Kind: "owned"},
 	{Name: "rpm", Kind: "owned"},
 	{Name: "container", Kind: "owned"},
+	{Name: "aur", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
 	{Name: "script", Kind: "owned"},
 	{Name: "winget", Kind: "gated"},

@@ -86,6 +86,10 @@
       "kind": "owned"
     },
     {
+      "name": "aur",
+      "kind": "owned"
+    },
+    {
       "name": "goinstall",
       "kind": "owned"
     },

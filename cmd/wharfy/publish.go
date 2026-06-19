@@ -34,13 +34,15 @@ var (
 		return channel.NewGitHubTapStore(owner, repo, token)
 	}
 	newWingetSubmitter = func(token string) channel.Submitter { return channel.NewGitHubWingetSubmitter(token) }
+	newAurPusher       = func(sshKey string) channel.AurPusher { return channel.NewGitAurPusher(sshKey) }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
 	dockerAvailable = func() bool { _, err := exec.LookPath("docker"); return err == nil }
-	// goinstallProxy / scriptProbeURL はテストで実体照合先を httptest に差し替える点(空＝既定)。
+	// goinstallProxy / scriptProbeURL / aurRPCBase はテストで実体照合先を httptest に差し替える(空＝既定)。
 	goinstallProxy = ""
 	scriptProbeURL = ""
+	aurRPCBase     = ""
 )
 
 // publishData は publish の固有ペイロード(schemas/publish.json data)。
@@ -95,6 +97,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishContainer(ctx, c, root, cfg, in, version, tagMissing)
 	case "winget":
 		return publishWinget(ctx, c, root, cfg, in, version, tagMissing)
+	case "aur":
+		return publishAur(ctx, c, root, cfg, in, version, tagMissing)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
@@ -136,6 +140,133 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 		func(archs []build.Artifact) channel.Publisher {
 			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
 		})
+}
+
+// publishAur は aur チャネル(owned・03)。-bin パッケージの PKGBUILD/.SRCINFO を生成し、
+// AUR の自前 git(ssh)へ push する(審査なし)。linux tarball の実 sha を参照する。
+func publishAur(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	pkg := channelTargetByName(cfg, "aur")
+	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
+	if pkg == "" || !ghOK {
+		item := channel.PlanItem{Channel: "aur", Kind: channel.KindOwned, Action: channel.ActionSkip,
+			Reason: "aur package/github unresolved — set 'github' or 'aur.package'"}
+		res := publishResult(c, "aur skipped — unresolved", true, []channel.PlanItem{item})
+		res.Next = []output.NextDo{{Reason: "check the resolved config", Do: "wharfy config"}}
+		return res
+	}
+
+	configPath, err := writeGeneratedConfig(root, cfg, in, version)
+	if err != nil {
+		return internalError(c, err)
+	}
+	buildInput := func(archs []build.Artifact) channel.AurInput {
+		return channel.AurInput{
+			Package:     pkg,
+			Project:     cfg.Project,
+			Version:     version,
+			License:     cfg.License,
+			Description: in.Description,
+			Homepage:    cfg.Homepage,
+			Maintainer:  aurMaintainer(ghOwner),
+			Sources:     aurSources(archs, ghOwner, ghRepo, cfg.Project, version),
+		}
+	}
+	reqs := aurRequirements(tagMissing)
+
+	if !flagYes {
+		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		if aerr != nil {
+			return buildErrorResult(c, aerr)
+		}
+		ai := buildInput(archs)
+		item := channel.PlanItem{
+			Channel: "aur", Kind: channel.KindOwned,
+			OwnedArtifact: "aur:" + pkg, Action: channel.ActionCreate,
+			Diff: channel.Diff("", channel.GeneratePKGBUILD(ai)),
+		}
+		msg := "plan: push PKGBUILD for " + pkg
+		if tagMissing {
+			msg += " (preview @ " + version + "; no git tag yet)"
+		}
+		res := output.New(c.Name, msg, true)
+		res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
+		res.Next = dryRunNext(item, reqs, "aur")
+		return res
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	sshKey := os.Getenv("AUR_SSH_KEY")
+	if sshKey == "" {
+		res := output.New(c.Name, "cannot publish without an AUR SSH key", false)
+		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "AUR_SSH_KEY required to push to AUR", Hint: "export AUR_SSH_KEY=\"$(cat ~/.ssh/aur)\""}}
+		res.Next = []output.NextDo{{Reason: "set the key then retry", Do: "export AUR_SSH_KEY=… ; wharfy publish aur --yes"}}
+		return res
+	}
+	// 実 release: linux tarball を GitHub Releases へ上げ、実 sha256 を得る。
+	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	if rerr != nil {
+		return buildErrorResult(c, rerr)
+	}
+	ai := buildInput(archs)
+	commit, perr := newAurPusher(sshKey).Push(ctx, pkg, ai.Files())
+	if perr != nil {
+		res := output.New(c.Name, "aur push failed", false)
+		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: perr.Error(), Hint: "check AUR_SSH_KEY and that the package exists/you are a maintainer"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish aur --yes"}}
+		return res
+	}
+	if st, err := state.Load(root, cfg.Project); err == nil {
+		if st.Publish == nil {
+			st.Publish = map[string]state.PublishRecord{}
+		}
+		now := nowUTC().Format(time.RFC3339)
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now}
+		_ = state.Save(root, st)
+	}
+	item := channel.PlanItem{Channel: "aur", Kind: channel.KindOwned, OwnedArtifact: "aur:" + pkg, Action: channel.ActionUpdate}
+	res := publishResult(c, "published "+pkg+" "+version+" → AUR", true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	res.Next = []output.NextDo{
+		{Reason: "users install with", Do: "yay -S " + pkg},
+		{Reason: "verify install works", Do: "wharfy verify"},
+	}
+	return res
+}
+
+// aurSources は linux archive を AUR の source(URL+sha256)にする。
+func aurSources(archs []build.Artifact, ghOwner, ghRepo, project, version string) []channel.AurSource {
+	var out []channel.AurSource
+	for _, a := range archs {
+		if a.OS != "linux" {
+			continue
+		}
+		name := fmt.Sprintf("%s_%s_linux_%s.tar.gz", project, version, a.Arch)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.AurSource{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	return out
+}
+
+func aurMaintainer(owner string) string {
+	if owner == "" {
+		return ""
+	}
+	return owner + " <" + owner + "@users.noreply.github.com>"
+}
+
+// aurRequirements は aur の前提(tag / GITHUB_TOKEN(release) / AUR_SSH_KEY(push))。
+func aurRequirements(tagMissing bool) []requirement {
+	return []requirement{
+		{Requirement: "git tag", Met: !tagMissing, Hint: "git tag vX.Y.Z && git push --tags (the tag is the version)"},
+		{Requirement: "GITHUB_TOKEN", Met: os.Getenv("GITHUB_TOKEN") != "", Hint: "export GITHUB_TOKEN=… (upload the release tarball)"},
+		{Requirement: "AUR_SSH_KEY", Met: os.Getenv("AUR_SSH_KEY") != "", Hint: "export AUR_SSH_KEY=\"$(cat ~/.ssh/aur)\""},
+	}
 }
 
 // publishWinget は winget チャネル(gated・11A)。manifest 3 種を生成し、microsoft/winget-pkgs を

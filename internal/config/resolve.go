@@ -200,6 +200,12 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if owner != "" {
 			return owner + "." + project
 		}
+	case "aur":
+		// AUR パッケージ名。既定 <project>-bin(ビルド済みバイナリ慣習)。
+		if in.Aur != nil && in.Aur.Package != "" {
+			return in.Aur.Package
+		}
+		return project + "-bin"
 	}
 	return ""
 }
