@@ -15,7 +15,7 @@ func containerConfig() Config {
 	}
 }
 
-func TestGenerateGoReleaserDockers(t *testing.T) {
+func TestGenerateGoReleaserDockersV2(t *testing.T) {
 	data, err := GenerateGoReleaser(containerConfig(), File{})
 	if err != nil {
 		t.Fatal(err)
@@ -24,24 +24,29 @@ func TestGenerateGoReleaserDockers(t *testing.T) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		t.Fatal(err)
 	}
-	dockers, ok := m["dockers"].([]any)
-	if !ok || len(dockers) != 2 {
-		t.Fatalf("want 2 per-arch dockers, got %v", m["dockers"])
+	// 旧形式(deprecated)は出さない。
+	if _, ok := m["dockers"]; ok {
+		t.Error("must not emit deprecated 'dockers'")
 	}
-	d0 := dockers[0].(map[string]any)
-	if d0["goarch"] != "amd64" || d0["dockerfile"] != ".wharfy/Dockerfile" {
-		t.Errorf("docker entry wrong: %+v", d0)
+	if _, ok := m["docker_manifests"]; ok {
+		t.Error("must not emit deprecated 'docker_manifests'")
 	}
-	if img := d0["image_templates"].([]any)[0]; img != "ghcr.io/acme/widget:{{ .Version }}-amd64" {
-		t.Errorf("image template wrong: %v", img)
+	dv2, ok := m["dockers_v2"].([]any)
+	if !ok || len(dv2) != 1 {
+		t.Fatalf("want 1 dockers_v2 entry, got %v", m["dockers_v2"])
 	}
-	mans := m["docker_manifests"].([]any)
-	if len(mans) != 2 {
-		t.Fatalf("want :version and :latest manifests, got %d", len(mans))
+	d := dv2[0].(map[string]any)
+	if d["images"].([]any)[0] != "ghcr.io/acme/widget" {
+		t.Errorf("images wrong: %v", d["images"])
 	}
-	names := []string{mans[0].(map[string]any)["name_template"].(string), mans[1].(map[string]any)["name_template"].(string)}
-	if names[0] != "ghcr.io/acme/widget:{{ .Version }}" || names[1] != "ghcr.io/acme/widget:latest" {
-		t.Errorf("manifest names wrong: %v", names)
+	if !equalAny(d["tags"], []string{"{{ .Version }}", "latest"}) {
+		t.Errorf("tags wrong: %v", d["tags"])
+	}
+	if !equalAny(d["platforms"], []string{"linux/amd64", "linux/arm64"}) {
+		t.Errorf("platforms wrong: %v", d["platforms"])
+	}
+	if d["dockerfile"] != ".wharfy/Dockerfile" {
+		t.Errorf("dockerfile wrong: %v", d["dockerfile"])
 	}
 }
 
@@ -51,8 +56,8 @@ func TestNoContainerNoDockers(t *testing.T) {
 	data, _ := GenerateGoReleaser(cfg, File{})
 	var m map[string]any
 	_ = yaml.Unmarshal(data, &m)
-	if _, ok := m["dockers"]; ok {
-		t.Errorf("no container → no dockers")
+	if _, ok := m["dockers_v2"]; ok {
+		t.Errorf("no container → no dockers_v2")
 	}
 }
 

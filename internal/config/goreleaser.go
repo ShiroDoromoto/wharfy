@@ -32,33 +32,27 @@ type glConfig struct {
 	Builds      []glBuild   `yaml:"builds"`
 	Archives    []glArchive `yaml:"archives"`
 	NFPMs       []glNFPM    `yaml:"nfpms,omitempty"`
-	Brews       []glBrew    `yaml:"brews,omitempty"`
 	Release     *glRelease  `yaml:"release,omitempty"`
 
-	Dockers         []glDocker         `yaml:"dockers,omitempty"`
-	DockerManifests []glDockerManifest `yaml:"docker_manifests,omitempty"`
+	DockersV2 []glDockerV2 `yaml:"dockers_v2,omitempty"`
 }
 
-// glDocker は per-arch の OCI イメージビルド。glDockerManifest は多アーキ束ね(manifest list)。
-type glDocker struct {
-	ID                 string   `yaml:"id"`
-	GOOS               string   `yaml:"goos"`
-	GOARCH             string   `yaml:"goarch"`
-	Dockerfile         string   `yaml:"dockerfile"`
-	ImageTemplates     []string `yaml:"image_templates"`
-	BuildFlagTemplates []string `yaml:"build_flag_templates,omitempty"`
-}
-
-type glDockerManifest struct {
-	NameTemplate   string   `yaml:"name_template"`
-	ImageTemplates []string `yaml:"image_templates"`
+// glDockerV2 は OCI マルチアーキイメージ(11B)。per-arch ビルド＋manifest list を 1 ブロックに
+// 統合した goreleaser の新形式(旧 dockers + docker_manifests を置換)。buildx で複数 platform
+// を一度にビルドし、images×tags に push する。
+type glDockerV2 struct {
+	ID         string   `yaml:"id"`
+	Images     []string `yaml:"images"`
+	Tags       []string `yaml:"tags"`
+	Platforms  []string `yaml:"platforms"`
+	Dockerfile string   `yaml:"dockerfile"`
 }
 
 // glNFPM は deb/rpm 生成(apt/rpm チャネル)。nfpm 経由でビルド成果物からパッケージを作る。
 type glNFPM struct {
 	ID          string   `yaml:"id"`
 	PackageName string   `yaml:"package_name"`
-	Builds      []string `yaml:"builds"`
+	IDs         []string `yaml:"ids"` // 含めるビルド id(旧 builds)
 	Homepage    string   `yaml:"homepage,omitempty"`
 	Description string   `yaml:"description,omitempty"`
 	License     string   `yaml:"license,omitempty"`
@@ -82,23 +76,14 @@ type glBuild struct {
 
 type glArchive struct {
 	ID              string             `yaml:"id"`
-	Builds          []string           `yaml:"builds"`
+	IDs             []string           `yaml:"ids"` // 含めるビルド id(旧 builds)
 	NameTemplate    string             `yaml:"name_template"`
 	FormatOverrides []glFormatOverride `yaml:"format_overrides,omitempty"`
 }
 
 type glFormatOverride struct {
-	GOOS   string `yaml:"goos"`
-	Format string `yaml:"format"`
-}
-
-type glBrew struct {
-	Name         string       `yaml:"name"`
-	Repository   glRepository `yaml:"repository"`
-	Homepage     string       `yaml:"homepage,omitempty"`
-	Description  string       `yaml:"description,omitempty"`
-	License      string       `yaml:"license,omitempty"`
-	Dependencies []string     `yaml:"dependencies,omitempty"`
+	GOOS    string   `yaml:"goos"`
+	Formats []string `yaml:"formats"` // 旧 format(単数)
 }
 
 type glRelease struct {
@@ -142,38 +127,23 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 		}},
 		Archives: []glArchive{{
 			ID:           cfg.Project,
-			Builds:       []string{cfg.Project},
+			IDs:          []string{cfg.Project},
 			NameTemplate: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}",
 			FormatOverrides: []glFormatOverride{
-				{GOOS: "windows", Format: "zip"},
+				{GOOS: "windows", Formats: []string{"zip"}},
 			},
 		}},
 	}
 
-	// homebrew: channels に在り、tap(owner/name)が解決できる時だけ生成する(03 所有物のみ)。
-	if tap, ok := channelTargetOf(cfg, "homebrew"); ok {
-		if owner, name, ok := splitOwnerRepo(tap); ok {
-			deps := []string(nil)
-			if in.Homebrew != nil {
-				deps = in.Homebrew.Dependencies
-			}
-			gl.Brews = []glBrew{{
-				Name:         cfg.Project,
-				Repository:   glRepository{Owner: owner, Name: name},
-				Homepage:     cfg.Homepage,
-				Description:  in.Description,
-				License:      cfg.License,
-				Dependencies: deps,
-			}}
-		}
-	}
+	// homebrew formula は wharfy が所有して直接書く(channel.GenerateFormula＋TapStore)。
+	// goreleaser の brews は deprecated かつ常に --skip=homebrew で未使用なので生成しない。
 
 	// nfpms: apt(deb)/rpm が有効な時だけ。1 エントリで該当 formats を生成する。
 	if formats := pkgFormats(cfg); len(formats) > 0 {
 		gl.NFPMs = []glNFPM{{
 			ID:          cfg.Project,
 			PackageName: cfg.Project,
-			Builds:      []string{cfg.Project},
+			IDs:         []string{cfg.Project},
 			Homepage:    cfg.Homepage,
 			Description: in.Description,
 			License:     cfg.License,
@@ -194,41 +164,33 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 		}
 	}
 
-	// container: ghcr のマルチアーキ OCI(linux amd64/arm64)。dockers ＋ docker_manifests を出す(11B)。
+	// container: ghcr のマルチアーキ OCI(linux amd64/arm64)。dockers_v2 1 ブロックで出す(11B)。
 	if HasChannel(cfg, "container") {
 		if image := containerImage(cfg); image != "" {
-			gl.Dockers, gl.DockerManifests = dockerBlocks(cfg, image)
+			gl.DockersV2 = []glDockerV2{dockerV2Block(cfg, image)}
 		}
 	}
 
 	return marshalGoReleaser(gl)
 }
 
-// dockerBlocks は image に対する per-arch dockers と :version/:latest の manifest list を組む。
-func dockerBlocks(cfg Config, image string) ([]glDocker, []glDockerManifest) {
+// dockerV2Block は image に対する dockers_v2 エントリ(全 platform ＋ :version/:latest)を組む。
+func dockerV2Block(cfg Config, image string) glDockerV2 {
 	arches := []string{"amd64", "arm64"}
 	if cfg.Build != nil && len(cfg.Build.GOARCH) > 0 {
 		arches = cfg.Build.GOARCH
 	}
-	var dockers []glDocker
-	var verImages []string
+	platforms := make([]string, 0, len(arches))
 	for _, arch := range arches {
-		tag := image + ":{{ .Version }}-" + arch
-		dockers = append(dockers, glDocker{
-			ID:                 cfg.Project + "-" + arch,
-			GOOS:               "linux",
-			GOARCH:             arch,
-			Dockerfile:         DockerfileRelPath,
-			ImageTemplates:     []string{tag},
-			BuildFlagTemplates: []string{"--platform=linux/" + arch},
-		})
-		verImages = append(verImages, tag)
+		platforms = append(platforms, "linux/"+arch)
 	}
-	manifests := []glDockerManifest{
-		{NameTemplate: image + ":{{ .Version }}", ImageTemplates: verImages},
-		{NameTemplate: image + ":latest", ImageTemplates: verImages},
+	return glDockerV2{
+		ID:         cfg.Project,
+		Images:     []string{image},
+		Tags:       []string{"{{ .Version }}", "latest"},
+		Platforms:  platforms,
+		Dockerfile: DockerfileRelPath,
 	}
-	return dockers, manifests
 }
 
 // containerImage は container の解決済みイメージ名(channels の target)。
@@ -317,15 +279,6 @@ func ldflags(in File) []string {
 		base = append(base, in.Build.LdflagsExtra...)
 	}
 	return base
-}
-
-func channelTargetOf(cfg Config, name string) (string, bool) {
-	for _, c := range cfg.Channels {
-		if c.Name == name {
-			return c.Target, c.Target != ""
-		}
-	}
-	return "", false
 }
 
 // pkgFormats は有効な linux パッケージ形式(apt→deb / rpm→rpm)を返す。

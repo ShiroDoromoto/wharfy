@@ -66,42 +66,21 @@ func TestGenerateGoReleaserCore(t *testing.T) {
 	assertContains(t, toStrings(b0["env"]), "CGO_ENABLED=0")
 }
 
-func TestGenerateGoReleaserBrew(t *testing.T) {
+// homebrew formula は wharfy が所有して直接書くので、goreleaser には brews を出さない
+// (deprecated かつ --skip=homebrew で未使用)。release ブロックは出す。
+func TestGenerateGoReleaserNoBrews(t *testing.T) {
 	data, err := GenerateGoReleaser(sampleConfig(), File{Description: "a tool"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := parseGen(t, data)
-	brews, ok := m["brews"].([]any)
-	if !ok || len(brews) != 1 {
-		t.Fatalf("expected 1 brew, got %v", m["brews"])
+	if _, ok := m["brews"]; ok {
+		t.Errorf("must not emit deprecated 'brews' (wharfy owns the formula)")
 	}
-	brew := brews[0].(map[string]any)
-	repo := brew["repository"].(map[string]any)
-	if repo["owner"] != "acme" || repo["name"] != "homebrew-mytool" {
-		t.Errorf("brew repository wrong: %+v", repo)
-	}
-	if brew["homepage"] != "https://github.com/acme/mytool" || brew["license"] != "MIT" || brew["description"] != "a tool" {
-		t.Errorf("brew metadata wrong: %+v", brew)
-	}
-
 	release := m["release"].(map[string]any)
 	gh := release["github"].(map[string]any)
 	if gh["owner"] != "acme" || gh["name"] != "mytool" {
 		t.Errorf("release github wrong: %+v", gh)
-	}
-}
-
-// homebrew が channels に無い / tap 未解決なら brews を出さない(03 所有物のみ)。
-func TestGenerateGoReleaserNoBrewWithoutTap(t *testing.T) {
-	cfg := sampleConfig()
-	cfg.Channels = []ResolvedChannel{{Name: "homebrew", Kind: "owned", Target: ""}} // tap 未解決
-	data, err := GenerateGoReleaser(cfg, File{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := parseGen(t, data)["brews"]; ok {
-		t.Errorf("brews should be omitted when tap is unresolved")
 	}
 }
 
