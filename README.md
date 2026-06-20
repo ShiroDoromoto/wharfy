@@ -85,7 +85,10 @@ Gated (wharfy prepares a PR and tracks it, never merges): `winget`, `homebrew-co
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels
-above reuse it. (`wharfy publish` only accepts the channels listed here.)
+above reuse it. (`wharfy publish` only accepts the channels listed here.) By default the
+`curl | sh` URL points at the latest GitHub Release asset; set `script: { base_url: … }` to
+advertise `install.sh` from your own domain or CDN instead (the install instructions and the
+`status` probe follow that URL).
 
 Run `wharfy agent --json` for the live set and each channel's kind.
 
