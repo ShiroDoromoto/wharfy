@@ -627,6 +627,41 @@ func aurRequirements(tagMissing bool) []requirement {
 
 // publishWinget は winget チャネル(gated・11A)。manifest 3 種を生成し、microsoft/winget-pkgs を
 // fork→branch→commit→PR まで組み立てる(マージはしない)。書く前に申請物を見せる。
+// openGatedPR は gated チャネル(winget / homebrew-core)に既存の OPEN な PR があるかを確認し、
+// あれば「重複 PR を出さない」ための Result を返す(無ければ nil = 提出してよい)。
+// 記録に PR URL があれば live(GitHub API)で状態を確かめ、open のときだけガードする。
+// 旧バージョンの PR が merge/close 済みなら、新バージョンの PR は出してよい。
+// probe 不能のときは記録の state にフォールバックし、pr_open のときだけ安全側でガードする。
+func openGatedPR(ctx context.Context, c registry.Command, root, project, chName string) *output.Result {
+	st, err := state.Load(root, project)
+	if err != nil {
+		return nil
+	}
+	rec, ok := st.Publish[chName]
+	if !ok || rec.PR == "" {
+		return nil // 記録なし → 初回提出
+	}
+	live, perr := (&channel.WingetProbe{Token: os.Getenv("GITHUB_TOKEN"), API: wingetProbeBase}).ProbePR(ctx, rec.PR)
+	switch {
+	case perr == nil && live != "pr_open":
+		return nil // merged/closed → 新しい PR を出してよい
+	case perr != nil && rec.State != "pr_open":
+		return nil // probe 不能かつ記録も open でない → ガードしない(提出を許可)
+	}
+	// open(または probe 不能で記録が open)→ 重複 PR を出さない。
+	res := output.New(c.Name, chName+" PR already open — not opening a duplicate: "+rec.PR, true)
+	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{{
+		Channel: chName, Kind: channel.KindGated, Action: channel.ActionSkip,
+		Reason: "an earlier PR (" + rec.Version + ") is still under review",
+	}}}
+	res.Warnings = []output.Warning{{Code: output.WarnGatedPending, Message: chName + " PR awaiting review: " + rec.PR + " — merge or close it before submitting a new version"}}
+	res.Next = []output.NextDo{
+		{Reason: "track the open review (merge is the reviewer's call)", Do: "open " + rec.PR},
+		{Reason: "check overall state", Do: "wharfy status"},
+	}
+	return &res
+}
+
 func publishWinget(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	identifier := channelTargetByName(cfg, "winget")
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
@@ -680,6 +715,10 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return tokenMissingResult(c)
+	}
+	// 既存の OPEN な PR があれば二重に出さない(前回審査が未完了のとき)。
+	if guard := openGatedPR(ctx, c, root, cfg.Project, "winget"); guard != nil {
+		return *guard
 	}
 	// 実 release: windows zip を GitHub Releases へ上げ、実 sha256 を得る(installer が参照)。
 	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
@@ -854,6 +893,10 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 			{Reason: "acknowledge the criteria and submit", Do: "wharfy publish homebrew-core --yes --acknowledge-review"},
 		}
 		return res
+	}
+	// 既存の OPEN な PR があれば二重に出さない(前回審査が未完了のとき)。
+	if guard := openGatedPR(ctx, c, root, cfg.Project, "homebrew-core"); guard != nil {
+		return *guard
 	}
 	// source-build formula は tag のソース tarball を参照する。その実 sha を計算する(release 不要)。
 	sha, err := sourceTarballSHA(ctx, srcURL)

@@ -88,6 +88,77 @@ func TestPublishWingetApply(t *testing.T) {
 	}
 }
 
+// gated 重複 PR ガード: 既存 PR が OPEN なら新規提出しない(前回審査が未完了のケース)。
+func TestPublishWingetSkipsWhenPROpen(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [winget]\n")
+	tagScratch(t, root, "v0.7.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	st, _ := state.Load(root, "demo")
+	st.Publish = map[string]state.PublishRecord{
+		"winget": {Version: "0.6.0", Target: "acme.demo", State: "pr_open", PR: "https://github.com/microsoft/winget-pkgs/pull/99", At: "t"},
+	}
+	_ = state.Save(root, st)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"state":"open","merged":false}`))
+	}))
+	defer srv.Close()
+	defer swapWingetProbeBase(srv.URL)()
+	sub := &fakeSubmitter{url: "https://github.com/microsoft/winget-pkgs/pull/100"}
+	defer swapWingetSubmitter(sub)()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"winget"})
+	if sub.called {
+		t.Errorf("must NOT open a second PR while one is open")
+	}
+	if !res.OK || !hasWarning(res, "gated_pending") {
+		t.Errorf("should skip with gated_pending: %+v", res)
+	}
+	if !hasNextDo(res, "open https://github.com/microsoft/winget-pkgs/pull/99") {
+		t.Errorf("should point to the existing open PR: %+v", res.Next)
+	}
+	// 既存記録は上書きしない(元の PR を保つ)。
+	st2, _ := state.Load(root, "demo")
+	if st2.Publish["winget"].PR != "https://github.com/microsoft/winget-pkgs/pull/99" {
+		t.Errorf("record should keep the existing PR: %+v", st2.Publish["winget"])
+	}
+}
+
+// 既存 PR が merged/closed なら、新バージョンの PR は出してよい。
+func TestPublishWingetSubmitsWhenPRClosed(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [winget]\n")
+	tagScratch(t, root, "v0.7.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	st, _ := state.Load(root, "demo")
+	st.Publish = map[string]state.PublishRecord{
+		"winget": {Version: "0.6.0", Target: "acme.demo", State: "pr_open", PR: "https://github.com/microsoft/winget-pkgs/pull/99", At: "t"},
+	}
+	_ = state.Save(root, st)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"state":"closed","merged":true}`))
+	}))
+	defer srv.Close()
+	defer swapWingetProbeBase(srv.URL)()
+	defer swapReleaser(fakeArchiver{arts: sampleArchiveArtifacts()})()
+	sub := &fakeSubmitter{url: "https://github.com/microsoft/winget-pkgs/pull/100"}
+	defer swapWingetSubmitter(sub)()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"winget"})
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	if !sub.called {
+		t.Errorf("merged/closed prior PR → should open a new PR")
+	}
+}
+
 func swapWingetProbeBase(url string) func() {
 	prev := wingetProbeBase
 	wingetProbeBase = url
