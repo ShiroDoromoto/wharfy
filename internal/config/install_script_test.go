@@ -47,6 +47,19 @@ func TestInstallURL(t *testing.T) {
 	}
 }
 
+// base_url を配線した script チャネルがあれば InstallURL はその vanity URL を返す。
+func TestInstallURLBaseURL(t *testing.T) {
+	cfg := scriptConfig()
+	for i, ch := range cfg.Channels {
+		if ch.Name == "script" {
+			cfg.Channels[i].Target = "https://cdn.example.com/wharfy/install.sh"
+		}
+	}
+	if got := InstallURL(cfg); got != "https://cdn.example.com/wharfy/install.sh" {
+		t.Errorf("InstallURL with base_url = %q, want the vanity URL", got)
+	}
+}
+
 func TestWriteInstallScriptNonDestructive(t *testing.T) {
 	root := t.TempDir()
 	path, err := WriteInstallScript(root, "#!/bin/sh\n")

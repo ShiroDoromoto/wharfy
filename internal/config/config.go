@@ -28,6 +28,14 @@ type File struct {
 	Container   *ContainerInput `yaml:"container"`
 	Winget      *WingetIn       `yaml:"winget"`
 	Aur         *AurIn          `yaml:"aur"`
+	Script      *ScriptInput    `yaml:"script"`
+}
+
+// ScriptInput は curl|sh インストーラ install.sh の設定。
+// BaseURL は install.sh の公開 URL ベース(vanity ドメイン / CDN 等)。
+// 既定(空)は GitHub Releases の latest アセット。利用者案内・status・probe がここを見る。
+type ScriptInput struct {
+	BaseURL string `yaml:"base_url"`
 }
 
 // AurIn は AUR の設定。Package は既定 <project>-bin を上書き。

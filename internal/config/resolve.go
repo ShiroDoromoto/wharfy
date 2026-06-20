@@ -206,6 +206,12 @@ func (r *Resolver) channelTarget(name string, in File, owner, github, project st
 		if mod, err := r.ModulePath(r.Root); err == nil && mod != "" {
 			return mod
 		}
+	case "script":
+		// base_url 指定時は vanity URL の install.sh を発行先にする。
+		// 未指定なら空のまま → InstallURL が GitHub Releases の latest を既定にする(後方互換)。
+		if in.Script != nil && in.Script.BaseURL != "" {
+			return strings.TrimRight(in.Script.BaseURL, "/") + "/" + InstallScriptName
+		}
 	// apt/rpm は配信/push を分けるため resolveChannels が resolveRepoURLs で解決する(ここには来ない)。
 	case "container":
 		// OCI イメージ名。既定 ghcr.io/<owner>/<project>(ghcr は小文字必須)。

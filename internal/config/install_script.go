@@ -80,11 +80,26 @@ func HasChannel(cfg Config, name string) bool {
 	return false
 }
 
-// InstallURL は install.sh の公開 URL(latest)。利用者案内に使う。
+// InstallURL は install.sh の公開 URL。利用者案内・status・probe が使う。
+// script.base_url 指定時は解決済みの script チャネル Target(vanity URL)を、
+// 未指定なら GitHub Releases の latest アセットを返す(後方互換)。
 func InstallURL(cfg Config) string {
+	if t := resolvedTarget(cfg, "script"); t != "" {
+		return t
+	}
 	owner, repo, ok := splitOwnerRepo(cfg.Github)
 	if !ok {
 		return ""
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/releases/latest/download/%s", owner, repo, InstallScriptName)
+}
+
+// resolvedTarget は解決済み cfg.Channels から指定チャネルの Target を引く(無ければ空)。
+func resolvedTarget(cfg Config, name string) string {
+	for _, ch := range cfg.Channels {
+		if ch.Name == name {
+			return ch.Target
+		}
+	}
+	return ""
 }

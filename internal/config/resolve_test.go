@@ -93,6 +93,40 @@ func TestResolveReleasesTargetIsGithub(t *testing.T) {
 	}
 }
 
+// script.base_url 指定時、script チャネルの Target は <base_url>/install.sh になる。
+func TestResolveScriptBaseURL(t *testing.T) {
+	r := stubResolver("https://github.com/acme/widget-demo.git", []string{"./cmd/widget"}, "github.com/acme/widget-demo")
+	cfg, err := r.Resolve(File{
+		Project:  "widget",
+		Channels: []string{"script"},
+		Script:   &ScriptInput{BaseURL: "https://cdn.example.com/wharfy/"}, // 末尾スラッシュは正規化される
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := targetOf(cfg, "script"); got != "https://cdn.example.com/wharfy/install.sh" {
+		t.Errorf("script target = %q, want https://cdn.example.com/wharfy/install.sh", got)
+	}
+	if got := InstallURL(cfg); got != "https://cdn.example.com/wharfy/install.sh" {
+		t.Errorf("InstallURL = %q, want the vanity URL", got)
+	}
+}
+
+// base_url 未指定なら script Target は空のまま、InstallURL は GitHub Releases latest にフォールバック。
+func TestResolveScriptNoBaseURL(t *testing.T) {
+	r := stubResolver("https://github.com/acme/widget-demo.git", []string{"./cmd/widget"}, "github.com/acme/widget-demo")
+	cfg, err := r.Resolve(File{Project: "widget", Channels: []string{"script"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := targetOf(cfg, "script"); got != "" {
+		t.Errorf("script target = %q, want empty (no base_url)", got)
+	}
+	if got := InstallURL(cfg); got != "https://github.com/acme/widget-demo/releases/latest/download/install.sh" {
+		t.Errorf("InstallURL = %q, want GitHub Releases latest", got)
+	}
+}
+
 func TestResolvePrefersCmdProject(t *testing.T) {
 	// ./cmd/<project> が候補にあれば、複数 main でもそれを選ぶ(曖昧扱いしない)。
 	r := stubResolver("https://github.com/acme/mytool.git",
