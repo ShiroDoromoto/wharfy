@@ -38,22 +38,22 @@ arch=$(uname -m)
 case "$arch" in
   x86_64|amd64) arch=amd64 ;;
   arm64|aarch64) arch=arm64 ;;
-  *) echo "wharfy install: unsupported arch: $arch" >&2; exit 1 ;;
+  *) echo "${PROJECT}: unsupported arch: $arch" >&2; exit 1 ;;
 esac
 case "$os" in
   darwin|linux) ;;
-  *) echo "wharfy install: unsupported os: $os" >&2; exit 1 ;;
+  *) echo "${PROJECT}: unsupported os: $os" >&2; exit 1 ;;
 esac
 
 asset="${PROJECT}_${VERSION}_${os}_${arch}.tar.gz"
 url="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${asset}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-echo "wharfy install: downloading ${url}"
+echo "${PROJECT}: downloading ${url}"
 curl -fsSL "$url" | tar -xz -C "$tmp"
 mkdir -p "${PREFIX}/bin"
 install -m 0755 "${tmp}/${BINARY}" "${PREFIX}/bin/${BINARY}"
-echo "wharfy install: installed ${BINARY} ${VERSION} to ${PREFIX}/bin"
+echo "${PROJECT}: installed ${BINARY} ${VERSION} to ${PREFIX}/bin"
 `, cfg.Project, owner, repo, version)
 }
 
