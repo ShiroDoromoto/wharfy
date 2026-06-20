@@ -94,5 +94,5 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	res := output.New(c.Name, "released "+cfg.Project+" "+version+": "+strconv.Itoa(len(archs))+" artifact(s) → "+cfg.Github, true)
 	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs}
 	res.Next = nextFromSpec(c) // publish
-	return res
+	return withInitNudge(res)
 }

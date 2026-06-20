@@ -20,6 +20,7 @@ const (
 	WarnGatedPending      = "gated_pending"       // gated チャネルが審査待ち
 	WarnGoinstallOnlyGo   = "goinstall_only_go"   // goinstall 指定だが Go ターゲットでない
 	WarnTapWillBeCreated  = "tap_will_be_created" // 自前 tap/bucket が未作成で作る予定
+	WarnInitMissing       = "init_missing"        // AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -34,6 +35,7 @@ const (
 	ErrAuthFailed         = "auth_failed"          // トークン/鍵はあるが認証失敗
 	ErrKeychainFailed     = "keychain_failed"      // OS keychain への保存/読み出しに失敗(ロック/権限)
 	ErrTargetCreateFailed = "target_create_failed" // 自前 tap/bucket/repo 作成失敗
+	ErrInitWriteFailed    = "init_write_failed"    // init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)
 	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
 	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗(04)
@@ -67,6 +69,7 @@ var Catalog = []CatalogEntry{
 	{WarnGatedPending, KindWarning, "gated チャネルが審査待ち"},
 	{WarnGoinstallOnlyGo, KindWarning, "goinstall 指定だが Go ターゲットでない"},
 	{WarnTapWillBeCreated, KindWarning, "自前 tap/bucket が未作成で作る予定"},
+	{WarnInitMissing, KindWarning, "AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},
@@ -78,6 +81,7 @@ var Catalog = []CatalogEntry{
 	{ErrAuthFailed, KindError, "トークン/鍵はあるが認証失敗"},
 	{ErrKeychainFailed, KindError, "OS keychain への保存/読み出しに失敗(ロック/権限)"},
 	{ErrTargetCreateFailed, KindError, "自前 tap/bucket/repo 作成失敗"},
+	{ErrInitWriteFailed, KindError, "init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)"},
 	{ErrConsentRequired, KindError, "strict gated への申請に明示同意が必要(未同意)"},
 	{ErrPublishFailed, KindError, "チャネルへの発行失敗"},
 	{ErrProbeFailed, KindError, "実体照合に失敗"},

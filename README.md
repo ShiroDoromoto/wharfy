@@ -51,6 +51,11 @@ channels: [homebrew, releases, script, goinstall]
 # add owned channels that need infra explicitly: scoop, apt, rpm, container, aur, winget
 ```
 
+Once, so future agents don't reinvent your release: `wharfy init --yes` writes a small managed
+block to `AGENTS.md` and `CLAUDE.md` telling agents to run `wharfy agent` instead of guessing
+release steps. Without `--yes` it previews; on a file you already have, it appends one block
+(re-running just refreshes it — idempotent).
+
 Then drive — start by asking the tool what it can do:
 
 ```sh

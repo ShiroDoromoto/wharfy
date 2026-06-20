@@ -38,6 +38,13 @@
       ]
     },
     {
+      "name": "init",
+      "summary": "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)",
+      "next": [
+        "agent"
+      ]
+    },
+    {
       "name": "build",
       "summary": "cross-compile for every os/arch",
       "next": [

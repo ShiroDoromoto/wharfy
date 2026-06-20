@@ -270,7 +270,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	res.Data = publishData{Applied: true, Plan: items}
 	res.Warnings = warns
 	res.Next = []output.NextDo{{Reason: "verify installs work", Do: "wharfy verify"}}
-	return res
+	return withInitNudge(res)
 }
 
 // planChannelSummary は一括 preview 用の軽量 plan(発行先＋操作。差分は出さない)。
