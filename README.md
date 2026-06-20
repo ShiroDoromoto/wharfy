@@ -81,7 +81,8 @@ not duplicate it (a generated map can't go stale; a hand-written table can).
 
 Owned (wharfy publishes directly): `homebrew`, `scoop`, `apt`, `rpm`, `container` (ghcr,
 multi-arch), `aur`, `script` (`curl | sh`), `goinstall`.
-Gated (wharfy prepares a PR and tracks it, never merges): `winget`, `homebrew-core`.
+Gated (wharfy prepares a PR and tracks it, never merges — and won't open a second PR while
+an earlier one is still under review): `winget`, `homebrew-core`.
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels
