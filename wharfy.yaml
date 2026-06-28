@@ -1,6 +1,6 @@
 # wharfy.yaml — 最小宣言（未指定値は wharfy が推測する）
 # channels を明示すると既定列を上書きするため、既存 owned を全て列挙したうえで
-# apt / rpm / winget を追加する。
+# apt / rpm を追加する。
 channels:
   - homebrew
   - scoop
@@ -9,7 +9,6 @@ channels:
   - goinstall
   - apt
   - rpm
-  - winget
 
 # apt/rpm は fury.io(Gemfury)のホスト型 repo に push する。provider+user で
 # push(push.fury.io)/配信(apt.fury.io・yum.fury.io)URL を自動導出する。
