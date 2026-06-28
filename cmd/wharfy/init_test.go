@@ -12,6 +12,16 @@ import (
 
 // init の振る舞い: 無ければ作る / あれば確認の上ブロック追記 / 2回目は冪等 / プレビューは書かない。
 
+// 管理ブロックに「マージ≠配布」作法(自動配布禁止・配布はゲート)が含まれること(責務2)。
+func TestManagedBlockGatingDiscipline(t *testing.T) {
+	block := managedBlock()
+	for _, want := range []string{"never auto-distribute", "wharfy release", "wharfy publish", "unattended"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("managed block missing gating discipline %q\n---\n%s", want, block)
+		}
+	}
+}
+
 // withTempDir は temp dir に chdir し、init のグローバルフラグを毎回リセットする。
 func withTempDir(t *testing.T) string {
 	t.Helper()
