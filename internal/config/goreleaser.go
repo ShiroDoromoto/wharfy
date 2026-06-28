@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -311,12 +310,12 @@ func pkgFormats(cfg Config) []string {
 func nfpmOverrides(cfg Config, in File) map[string]glNFPMOverride {
 	out := map[string]glNFPMOverride{}
 	if HasChannel(cfg, "apt") {
-		if ov, ok := repoOverride(in.Apt); ok {
+		if ov, ok := repoOverride(chApt, in.Apt, in.RuntimeDeps); ok {
 			out["deb"] = ov
 		}
 	}
 	if HasChannel(cfg, "rpm") {
-		if ov, ok := repoOverride(in.Rpm); ok {
+		if ov, ok := repoOverride(chRpm, in.Rpm, in.RuntimeDeps); ok {
 			out["rpm"] = ov
 		}
 	}
@@ -326,31 +325,15 @@ func nfpmOverrides(cfg Config, in File) map[string]glNFPMOverride {
 	return out
 }
 
-// repoOverride は RepoInput の依存 3 区分を 1 フォーマットの override に変換する(決定的に sort)。
-// 全区分が空なら ok=false(その format の override を出さない)。
-func repoOverride(in *RepoInput) (glNFPMOverride, bool) {
-	if in == nil {
-		return glNFPMOverride{}, false
-	}
-	ov := glNFPMOverride{
-		Depends:    sortedStrings(in.Depends),
-		Recommends: sortedStrings(in.Recommends),
-		Suggests:   sortedStrings(in.Suggests),
-	}
+// repoOverride は per-channel 宣言と横断 runtime_deps をマージした依存 3 区分を 1 フォーマットの
+// override に変換する(決定的に sort)。全区分が空なら ok=false(その format の override を出さない)。
+func repoOverride(channel string, repo *RepoInput, deps []RuntimeDep) (glNFPMOverride, bool) {
+	depends, recommends, suggests := repoDeps(channel, repo, deps)
+	ov := glNFPMOverride{Depends: depends, Recommends: recommends, Suggests: suggests}
 	if len(ov.Depends) == 0 && len(ov.Recommends) == 0 && len(ov.Suggests) == 0 {
 		return glNFPMOverride{}, false
 	}
 	return ov, true
-}
-
-// sortedStrings は入力を壊さず sort したコピーを返す(空なら nil で omitempty に乗せる)。
-func sortedStrings(ss []string) []string {
-	if len(ss) == 0 {
-		return nil
-	}
-	out := append([]string(nil), ss...)
-	sort.Strings(out)
-	return out
 }
 
 // maintainer は nfpm が要求する maintainer を github owner から組む(deb は必須)。

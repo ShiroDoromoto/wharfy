@@ -47,6 +47,32 @@ func TestGenerateSRCINFO(t *testing.T) {
 	}
 }
 
+func TestAurDependsEmitted(t *testing.T) {
+	in := aurInput()
+	in.Depends = []string{"ffmpeg>=6.0", "git"}
+	in.OptDepends = []string{"fzf"}
+	p := GeneratePKGBUILD(in)
+	if want := "depends=('ffmpeg>=6.0' 'git')"; !strings.Contains(p, want) {
+		t.Errorf("PKGBUILD missing %q\n---\n%s", want, p)
+	}
+	if want := "optdepends=('fzf')"; !strings.Contains(p, want) {
+		t.Errorf("PKGBUILD missing %q\n---\n%s", want, p)
+	}
+	s := GenerateSRCINFO(in)
+	for _, want := range []string{"\tdepends = ffmpeg>=6.0", "\tdepends = git", "\toptdepends = fzf"} {
+		if !strings.Contains(s, want) {
+			t.Errorf(".SRCINFO missing %q\n---\n%s", want, s)
+		}
+	}
+}
+
+func TestAurDependsOmittedWhenEmpty(t *testing.T) {
+	p := GeneratePKGBUILD(aurInput())
+	if strings.Contains(p, "depends=") {
+		t.Errorf("no deps → no depends/optdepends line\n%s", p)
+	}
+}
+
 func TestAurFiles(t *testing.T) {
 	f := aurInput().Files()
 	if _, ok := f["PKGBUILD"]; !ok {

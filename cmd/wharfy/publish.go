@@ -402,8 +402,10 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if sshKey == "" {
 			return skip("AUR_SSH_KEY not set")
 		}
+		aurDeps, aurOpt := config.AurDeps(in)
 		ai := channel.AurInput{Package: pkg, Project: cfg.Project, Version: version, License: cfg.License,
 			Description: in.Description, Homepage: cfg.Homepage, Maintainer: aurMaintainer(ghOwner),
+			Depends: aurDeps, OptDepends: aurOpt,
 			Sources: aurSources(archs, ghOwner, ghRepo, cfg.Project, version)}
 		commit, err := newAurPusher(sshKey).Push(ctx, pkg, ai.Files())
 		if err != nil {
@@ -517,6 +519,7 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 	if err != nil {
 		return internalError(c, err)
 	}
+	aurDeps, aurOpt := config.AurDeps(in)
 	buildInput := func(archs []build.Artifact) channel.AurInput {
 		return channel.AurInput{
 			Package:     pkg,
@@ -526,6 +529,8 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 			Description: in.Description,
 			Homepage:    cfg.Homepage,
 			Maintainer:  aurMaintainer(ghOwner),
+			Depends:     aurDeps,
+			OptDepends:  aurOpt,
 			Sources:     aurSources(archs, ghOwner, ghRepo, cfg.Project, version),
 		}
 	}
@@ -1407,21 +1412,12 @@ func channelPushTargetByName(cfg config.Config, name string) string {
 	return ""
 }
 
-// homebrewDeps / scoopDeps は wharfy.yaml の宣言した owned チャネルのランタイム依存を返す
-// (契約に出ない生成入力なので解決後 Config ではなく File から直接引く)。in が nil なら空。
-func homebrewDeps(in config.File) []string {
-	if in.Homebrew == nil {
-		return nil
-	}
-	return in.Homebrew.Dependencies
-}
+// homebrewDeps / scoopDeps は owned チャネルのランタイム依存を返す。横断 runtime_deps と
+// per-channel 宣言(homebrew.dependencies 等)をマージした結果(契約外の生成入力なので解決後
+// Config ではなく File から射影する)。射影規則は config パッケージに集約。
+func homebrewDeps(in config.File) []string { return config.HomebrewDeps(in) }
 
-func scoopDeps(in config.File) []string {
-	if in.Scoop == nil {
-		return nil
-	}
-	return in.Scoop.Dependencies
-}
+func scoopDeps(in config.File) []string { return config.ScoopDeps(in) }
 
 // homebrewPublisher / scoopPublisher は archive から各 Publisher を組む。
 func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Homebrew {

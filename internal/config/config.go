@@ -19,6 +19,7 @@ type File struct {
 	Description string          `yaml:"description"`
 	License     string          `yaml:"license"`
 	Channels    []string        `yaml:"channels"`
+	RuntimeDeps []RuntimeDep    `yaml:"runtime_deps"`
 	Build       *BuildInput     `yaml:"build"`
 	Homebrew    *HomebrewInput  `yaml:"homebrew"`
 	Scoop       *ScoopInput     `yaml:"scoop"`
@@ -29,6 +30,21 @@ type File struct {
 	Winget      *WingetIn       `yaml:"winget"`
 	Aur         *AurIn          `yaml:"aur"`
 	Script      *ScriptInput    `yaml:"script"`
+}
+
+// RuntimeDep は横断ランタイム依存(B: 実行時に呼ぶ外部ツール)の宣言。1 ツール 1 エントリで、
+// 全 owned パッケージチャネル(homebrew/scoop/apt/rpm/aur)へ射影する(設計
+// design-runtime-deps-first-class-and-gated-distribution.md)。
+//   - Min: 最小バージョン。apt/rpm/aur は制約として反映、homebrew/scoop は名前のみに縮退。
+//   - Required: 既定 true。false なら推奨/任意側へ(apt/rpm の Recommends・aur の optdepends)。
+//     必須/任意を区別しない homebrew/scoop では required=false は出さない(As で明示時を除く)。
+//   - As: チャネル別オーバーライド。値は wharfy が解釈せず逐語(verbatim)で出力する逃げ道。
+//     名前がディストロで違う場合や、チャネル固有記法を書きたい場合に使う。
+type RuntimeDep struct {
+	Name     string            `yaml:"name"`
+	Min      string            `yaml:"min"`
+	Required *bool             `yaml:"required"` // nil=既定 true
+	As       map[string]string `yaml:"as"`
 }
 
 // ScriptInput は curl|sh インストーラ install.sh の設定。

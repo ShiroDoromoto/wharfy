@@ -34,6 +34,26 @@
       "uniqueItems": true,
       "description": "省略時: [homebrew, scoop, releases, script, goinstall]（追加設定不要な owned 列。goinstall は Go ターゲット時のみ）。apt/rpm/container/aur/winget は外部インフラ・鍵・審査が要るため明示 opt-in。"
     },
+    "runtime_deps": {
+      "type": "array",
+      "description": "横断ランタイム依存(実行時に呼ぶ外部ツール)。1 宣言で全 owned パッケージチャネル(homebrew/scoop/apt/rpm/aur)へ射影する。自バイナリが直接呼ぶ 1 階層目だけ書けばよい(その先は各パッケージマネージャが推移解決する)。go.mod 依存はバイナリに焼き込まれるため対象外。",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "description": "依存ツール名(多くのチャネルで共通の論理名)。" },
+          "min": { "type": "string", "description": "最小バージョン。apt `x (>= m)` / rpm `x >= m` / aur `x>=m` に反映。homebrew/scoop は制約を表現できず名前のみに縮退(仕様)。" },
+          "required": { "type": "boolean", "default": true, "description": "false なら推奨/任意へ(apt/rpm の Recommends・aur の optdepends)。homebrew/scoop は必須/任意を区別しないため required=false は出さない(as で明示した場合を除く)。" },
+          "as": {
+            "type": "object",
+            "description": "チャネル別オーバーライド。値は wharfy が解釈せず逐語(verbatim)で出力する逃げ道。名前がディストロで違う場合や、チャネル固有記法を書きたい場合に使う。",
+            "additionalProperties": { "type": "string" },
+            "propertyNames": { "enum": ["homebrew", "scoop", "apt", "rpm", "aur"] }
+          }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
     "build": {
       "type": "object",
       "properties": {

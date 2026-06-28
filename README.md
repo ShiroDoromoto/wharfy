@@ -119,8 +119,32 @@ transcript) and `publish` then loads it from the keychain when the env var is un
 
 ### Runtime dependencies
 
-If your binary shells out to another tool at runtime, declare it so "the usual install" pulls
-it in too. Each owned package channel emits it in that channel's native form:
+If your binary shells out to another tool at runtime (the package manager installs it for you —
+your binary doesn't bundle it; go.mod deps are baked into the binary and need no declaration),
+declare it so "the usual install" pulls it in too. Declare only the **first hop** your binary
+calls directly — each tool's own deps resolve transitively.
+
+Prefer the cross-channel `runtime_deps`: declare once, projected to all owned package channels
+(homebrew / scoop / apt / rpm / aur):
+
+```yaml
+runtime_deps:
+  - name: ffmpeg                 # same name everywhere → one line
+    min: "6.0"                   # apt `(>= 6.0)` / rpm `>= 6.0` / aur `>=6.0`; brew & scoop degrade to name only
+  - name: fzf
+    required: false              # → apt/rpm recommends, aur optdepends; brew/scoop omit optional deps
+  - name: rg
+    as: { apt: ripgrep, homebrew: "node => :recommended" }  # per-channel verbatim override (names differ / channel-native syntax)
+```
+
+wharfy can't know a distro's real package name, so it does **not** absorb naming differences:
+the common case is the same name everywhere (one line); when a name differs or you need
+channel-native syntax, the `as` value is emitted **verbatim** for that channel — so the worst
+case equals hand-writing the dependency line yourself (no lock-in). `min` degrades to name-only
+on homebrew/scoop (they can't express version constraints — that's expected, not an error);
+`wharfy verify` is the real check that the dep actually installs.
+
+Per-channel fields still work and merge (union) with `runtime_deps` for back-compat:
 
 ```yaml
 homebrew: { dependencies: [git] }                       # → depends_on "git"

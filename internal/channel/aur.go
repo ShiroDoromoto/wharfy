@@ -32,6 +32,8 @@ type AurInput struct {
 	Description string
 	Homepage    string
 	Maintainer  string
+	Depends     []string // 必須ランタイム依存(depends=(...))。空なら出さない
+	OptDepends  []string // 任意ランタイム依存(optdepends=(...))。空なら出さない
 	Sources     []AurSource
 }
 
@@ -74,6 +76,12 @@ func GeneratePKGBUILD(in AurInput) string {
 	fmt.Fprintf(&b, "license=('%s')\n", aurLicense(in.License))
 	fmt.Fprintf(&b, "provides=('%s')\n", in.Project)
 	fmt.Fprintf(&b, "conflicts=('%s')\n", in.Project)
+	if deps := sortedDeps(in.Depends); len(deps) > 0 {
+		fmt.Fprintf(&b, "depends=(%s)\n", quoteJoin(deps))
+	}
+	if opt := sortedDeps(in.OptDepends); len(opt) > 0 {
+		fmt.Fprintf(&b, "optdepends=(%s)\n", quoteJoin(opt))
+	}
 	for _, s := range srcs {
 		a := aurArch(s.Arch)
 		fmt.Fprintf(&b, "source_%s=(\"%s-%s-%s.tar.gz::%s\")\n", a, in.Package, in.Version, a, s.URL)
@@ -97,6 +105,12 @@ func GenerateSRCINFO(in AurInput) string {
 	}
 	fmt.Fprintf(&b, "\tprovides = %s\n", in.Project)
 	fmt.Fprintf(&b, "\tconflicts = %s\n", in.Project)
+	for _, dep := range sortedDeps(in.Depends) {
+		fmt.Fprintf(&b, "\tdepends = %s\n", dep)
+	}
+	for _, dep := range sortedDeps(in.OptDepends) {
+		fmt.Fprintf(&b, "\toptdepends = %s\n", dep)
+	}
 	for _, s := range in.sortedSources() {
 		a := aurArch(s.Arch)
 		fmt.Fprintf(&b, "\tsource_%s = %s-%s-%s.tar.gz::%s\n", a, in.Package, in.Version, a, s.URL)
@@ -112,6 +126,15 @@ func (in AurInput) Files() map[string]string {
 		"PKGBUILD": GeneratePKGBUILD(in),
 		".SRCINFO": GenerateSRCINFO(in),
 	}
+}
+
+// quoteJoin は依存名を PKGBUILD の配列リテラル('a' 'b')に整える。
+func quoteJoin(items []string) string {
+	q := make([]string, len(items))
+	for i, s := range items {
+		q[i] = "'" + s + "'"
+	}
+	return strings.Join(q, " ")
 }
 
 func aurLicense(l string) string {

@@ -132,6 +132,29 @@ func TestNFPMOverridesOmitted(t *testing.T) {
 	}
 }
 
+func TestNFPMOverrides_RuntimeDepsMerge(t *testing.T) {
+	cfg := pkgConfig("apt", "rpm")
+	in := File{
+		Apt: &RepoInput{Depends: []string{"git"}},
+		RuntimeDeps: []RuntimeDep{
+			{Name: "ffmpeg", Min: "6.0"},          // 必須 → 両 format の depends に版付き
+			{Name: "fzf", Required: boolp(false)}, // 任意 → recommends
+		},
+	}
+	ov := nfpmOverridesOf(t, cfg, in)
+	deb, _ := ov["deb"].(map[string]any)
+	if got := strSlice(deb["depends"]); len(got) != 2 || got[0] != "ffmpeg (>= 6.0)" || got[1] != "git" {
+		t.Errorf("deb.depends = %v (want [ffmpeg (>= 6.0) git])", deb["depends"])
+	}
+	if got := strSlice(deb["recommends"]); len(got) != 1 || got[0] != "fzf" {
+		t.Errorf("deb.recommends = %v (want [fzf])", deb["recommends"])
+	}
+	rpm, _ := ov["rpm"].(map[string]any)
+	if got := strSlice(rpm["depends"]); len(got) != 1 || got[0] != "ffmpeg >= 6.0" {
+		t.Errorf("rpm.depends = %v (want [ffmpeg >= 6.0]; rpm version syntax)", rpm["depends"])
+	}
+}
+
 func TestResolveAptRpmTarget(t *testing.T) {
 	r := stubResolver("https://github.com/acme/widget-demo.git", []string{"./cmd/widget"}, "github.com/acme/widget-demo")
 	cfg, err := r.Resolve(File{
