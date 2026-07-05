@@ -37,3 +37,8 @@ doc/wip/
 
 # wharfy generated config / build output / local state (dogfooding)
 .wharfy/
+
+# Agent guidance managed locally by wharfy/amenbo (not distributed)
+AGENTS.md
+CLAUDE.md
+.amenbo
