@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 
 	"github.com/ShiroDoromoto/wharfy/internal/config"
@@ -41,13 +40,18 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 		return res
 	}
 
-	var ambiguous *config.AmbiguousMainError
-	if errors.As(rerr, &ambiguous) {
-		res := output.New(c.Name, "cannot resolve 'main' (ambiguous)", false)
+	// main を解決できない(複数 main で曖昧、または検出コマンド `go list` が失敗)。
+	// 実効設定は cfg に載っているので internal で潰さず、data + coded problem +
+	// 次の一手(main を明示)を見せる。status が同じ Resolve のエラーを飲み込んで動くのに対し、
+	// config は黙らず「main だけ未解決」と正直に見せる(07 黙って間違えない)。
+	// go list 失敗の真因は rerr に stderr つきで包まれている(resolve.go execError)ので、
+	// 利用者が見ていた不透明な "exit status 1" ではなく実メッセージが Message に出る。
+	if rerr != nil {
+		res := output.New(c.Name, "cannot resolve 'main'", false)
 		res.Data = cfg // 部分解決した実効設定(config.json は data 必須・main は任意)
 		res.Errors = []output.Problem{{
 			Code:    output.ErrMainAmbiguous,
-			Message: ambiguous.Error(),
+			Message: rerr.Error(),
 			Hint:    "set 'main' in wharfy.yaml to the build target package (e.g. ./cmd/" + cfg.Project + ")",
 		}}
 		res.Next = []output.NextDo{{
@@ -55,9 +59,6 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 			Do:     "echo 'main: ./cmd/" + cfg.Project + "' >> wharfy.yaml ; wharfy config",
 		}}
 		return res
-	}
-	if rerr != nil {
-		return internalError(c, rerr)
 	}
 
 	res := output.New(c.Name, "resolved config for "+cfg.Project, true)

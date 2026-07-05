@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/config"
@@ -47,6 +50,51 @@ func TestConfigAmbiguousValidatesSchema(t *testing.T) {
 	}}
 	res.Next = []output.NextDo{{Reason: "set the build target", Do: "wharfy config"}}
 	validateAgainst(t, configSchemaID, res)
+}
+
+// TestConfigMainDetectFailureNotInternal: go module でない dir で `wharfy config` を走らせると
+// 内部の `go list ./...` が非ゼロ終了する。以前はこれが不透明な internal / "exit status 1" として
+// 表面化していた(利用者報告)。今は internal で潰さず、実効設定 + main_ambiguous + 真因つき
+// メッセージ + 次の一手を見せる(status が同じ Resolve を飲み込んで動くのと同じ堅さ)。
+func TestConfigMainDetectFailureNotInternal(t *testing.T) {
+	withTempDir(t) // go.mod も wharfy.yaml も無い空 dir → go list ./... が失敗する
+
+	res := runConfig(context.Background(), mustLookup(t, "config"), nil)
+
+	if res.OK {
+		t.Fatal("expected ok=false when main cannot be resolved")
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("expected a coded problem")
+	}
+	if got := res.Errors[0].Code; got == output.ErrInternal {
+		t.Fatalf("main detection failure must not surface as internal: %+v", res.Errors[0])
+	}
+	if res.Errors[0].Code != output.ErrMainAmbiguous {
+		t.Errorf("code = %q, want %q", res.Errors[0].Code, output.ErrMainAmbiguous)
+	}
+	// 不透明な "exit status 1" ではなく go list の真因が message に残ること。
+	if msg := res.Errors[0].Message; !strings.Contains(msg, "go list") {
+		t.Errorf("message lost the failing command context: %q", msg)
+	}
+	// best-effort の実効設定を data に載せて見せること(config.json は data 必須)。
+	if res.Data == nil {
+		t.Error("expected effective config in data even when main is unresolved")
+	}
+	validateAgainst(t, configSchemaID, res)
+}
+
+// TestExecuteNonZeroOnNotOK: envelope コマンドが ok=false を返すと Execute は errNotOK を返し、
+// main がこれを非ゼロ終了に変える(利用者指摘の「ok:false なのに exit 0」直し)。
+func TestExecuteNonZeroOnNotOK(t *testing.T) {
+	withTempDir(t) // config が main 未解決で ok=false になる dir
+
+	root := newRootCmd()
+	root.SetArgs([]string{"config"})
+	err := root.Execute()
+	if !errors.Is(err, errNotOK) {
+		t.Fatalf("expected errNotOK from ok=false command, got %v", err)
+	}
 }
 
 // TestConfigInvalidValidatesSchema: wharfy.yaml 不正時も data(推測の実効設定)を載せ、

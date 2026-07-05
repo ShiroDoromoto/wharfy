@@ -2,7 +2,9 @@ package config
 
 import (
 	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +169,55 @@ func TestResolveMainZeroCandidates(t *testing.T) {
 	var amb *AmbiguousMainError
 	if !errors.As(err, &amb) || len(amb.Candidates) != 0 {
 		t.Fatalf("expected zero-candidate AmbiguousMainError, got %v", err)
+	}
+}
+
+// TestResolveMainDetectError: main 検出コマンド(go list)が失敗しても、Resolve は
+// 部分解決した実効設定を返し、エラーは AmbiguousMainError ではなく生の I/O エラーを伝える。
+// config 層はこれを internal で潰さず main 未解決として見せる(利用者の "exit status 1" 直し)。
+func TestResolveMainDetectError(t *testing.T) {
+	r := stubResolver("https://github.com/acme/mytool.git", nil, "github.com/acme/mytool")
+	r.MainPkgs = func(string) ([]string, error) {
+		return nil, errors.New("go list ./...: exit status 1: directory prefix . does not contain main module")
+	}
+	cfg, err := r.Resolve(File{})
+	if err == nil {
+		t.Fatal("expected error from failing MainPkgs")
+	}
+	var amb *AmbiguousMainError
+	if errors.As(err, &amb) {
+		t.Fatalf("go list failure should not masquerade as AmbiguousMainError: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 1: directory prefix") {
+		t.Errorf("error lost the real detail: %v", err)
+	}
+	// 実効設定は依然使える(project + channels は解決済み・main だけ空)。
+	if cfg.Project != "mytool" || len(cfg.Channels) == 0 {
+		t.Errorf("partial config not usable: %+v", cfg)
+	}
+	if cfg.Main != "" {
+		t.Errorf("main should be empty when detection failed, got %q", cfg.Main)
+	}
+}
+
+// TestExecErrorSurfacesStderr: exec.ExitError の .Error() は "exit status 1" しか返さないが、
+// execError は捨てられる Stderr と実行内容を合成して真因を残す(不透明エラー直しの要)。
+func TestExecErrorSurfacesStderr(t *testing.T) {
+	// 失敗して stderr に書くコマンドを実際に走らせ、本物の *exec.ExitError を得る。
+	cmd := exec.Command("sh", "-c", "echo boom >&2; exit 1")
+	_, err := cmd.Output()
+	if _, ok := err.(*exec.ExitError); !ok {
+		t.Fatalf("setup: expected *exec.ExitError, got %T (%v)", err, err)
+	}
+	wrapped := execError("go list ./...", err)
+	if !strings.Contains(wrapped.Error(), "go list ./...") {
+		t.Errorf("missing command context: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "boom") {
+		t.Errorf("stderr not surfaced: %v", wrapped)
+	}
+	if !errors.Is(wrapped, err) {
+		t.Errorf("wrapped error should still unwrap to the exec error")
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -8,6 +9,11 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
+
+// errNotOK は Result.OK=false のとき RunE から返す番兵。プロセスを非ゼロ終了させるためだけの
+// もので、追加メッセージは出さない(envelope は Emit 済み)。main が握って exit(1) する。
+// これで --json の ok:false が終了コードにも一致する(利用者が指摘した「ok:false なのに exit 0」直し)。
+var errNotOK = errors.New("command reported ok=false")
 
 // 共通グローバルフラグ(設計 01 CLI 層)。全コマンドが受ける。
 var (
@@ -59,6 +65,9 @@ func newCommand(c registry.Command) *cobra.Command {
 			}
 			res := dispatch(cmd.Context(), c, args)
 			output.Emit(res, flagJSON)
+			if !res.OK {
+				return errNotOK
+			}
 			return nil
 		},
 	}

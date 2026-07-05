@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -266,10 +267,23 @@ func (r *Resolver) moduleLast() string {
 
 // --- 既定の外部 I/O 実装(末端) ---
 
+// execError は外部コマンドの失敗を、実行内容と捕捉した stderr つきで包む。
+// exec.ExitError の .Error() は "exit status 1" しか返さず、真因は捨てられる Stderr に埋もれる。
+// 呼び出し側(config 等)が文脈を失ったまま internal error として見せてしまうのを防ぐ。
+func execError(what string, err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
+			return fmt.Errorf("%s: %w: %s", what, err, stderr)
+		}
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
 func gitOriginURL(root string) (string, error) {
 	out, err := exec.Command("git", "-C", root, "remote", "get-url", "origin").Output()
 	if err != nil {
-		return "", err
+		return "", execError("git remote get-url origin", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -281,7 +295,7 @@ func goListMainPkgs(root string) ([]string, error) {
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, execError("go list ./...", err)
 	}
 	mod, _ := readModulePath(root)
 	var pkgs []string
