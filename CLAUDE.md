@@ -11,7 +11,7 @@ but **never auto-distribute**: distribution is an explicit, human/AI-gated step
 Do not wire CI to run release/publish unattended.
 <!-- wharfy:end -->
 
-<!-- amenbo:begin (managed) -->
+<!-- amenbo:begin (managed v2) -->
 # amenbo — guide for AI agents
 
 This block is managed by amenbo; do not edit between the markers (your own content outside
