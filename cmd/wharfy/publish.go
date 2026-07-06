@@ -43,6 +43,8 @@ var (
 	newReleaseStore = func(owner, repo, token string) channel.ReleaseStore {
 		return channel.NewGitHubReleaseStore(owner, repo, token)
 	}
+	// newPrebuiltContainerizer は BYO-binary の buildx コンテナ生成(依頼① #3・テストで差し替え)。
+	newPrebuiltContainerizer = func() *build.PrebuiltContainerizer { return build.NewPrebuiltContainerizer() }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
@@ -581,7 +583,8 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 		return res
 	}
 	// 実 release: linux tarball を GitHub Releases へ上げ、実 sha256 を得る。
-	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	// BYO-binary(依頼①)は GoReleaser を通さず、記録済み成果物の再利用 or ネイティブ upload。
+	archs, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version)
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
@@ -996,12 +999,19 @@ func publishContainer(ctx context.Context, c registry.Command, root string, cfg 
 		return res
 	}
 
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
-	}
-	if _, cerr := newContainerizer(config.DistDir).Containers(ctx, root, configPath); cerr != nil {
-		return buildErrorResult(c, cerr)
+	// BYO-binary(依頼① #3): buildx で持ち込みバイナリからマルチアーキ OCI を build+push。
+	if cfg.Prebuilt {
+		if cerr := newPrebuiltContainerizer().PushMultiArch(ctx, root, config.DistDir, image, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in)); cerr != nil {
+			return buildErrorResult(c, cerr)
+		}
+	} else {
+		configPath, err := writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
+		if _, cerr := newContainerizer(config.DistDir).Containers(ctx, root, configPath); cerr != nil {
+			return buildErrorResult(c, cerr)
+		}
 	}
 	if st, err := state.Load(root, cfg.Project); err == nil {
 		if st.Publish == nil {
@@ -1092,13 +1102,24 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 		return res
 	}
 
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
-	}
-	pkgs, perr := newPackager(config.DistDir).Packages(ctx, root, configPath)
-	if perr != nil {
-		return buildErrorResult(c, perr)
+	// BYO-binary(依頼① #3): 持ち込みバイナリから nfpm で deb/rpm を作る(GoReleaser を通さない)。
+	var pkgs []build.Artifact
+	if cfg.Prebuilt {
+		p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
+		if perr != nil {
+			return buildErrorResult(c, perr)
+		}
+		pkgs = p
+	} else {
+		configPath, err := writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
+		p, perr := newPackager(config.DistDir).Packages(ctx, root, configPath)
+		if perr != nil {
+			return buildErrorResult(c, perr)
+		}
+		pkgs = p
 	}
 	uploaded := 0
 	for _, p := range pkgs {
@@ -1148,6 +1169,37 @@ func pkgHostingGuide(chName string) []output.NextDo {
 			Do:     "or attach the .deb/.rpm to GitHub Releases for manual install (no apt/rpm repo)",
 		},
 	}
+}
+
+// prebuiltPackageSpec は BYO-binary の deb/rpm 生成指定を cfg/in から組む(#3)。
+func prebuiltPackageSpec(cfg config.Config, in config.File, chName, ext, version string) build.PackageSpec {
+	format := "deb"
+	if chName == "rpm" {
+		format = "rpm"
+	}
+	depends, recommends, suggests := config.RepoDeps(chName, in)
+	return build.PackageSpec{
+		Format:      format,
+		Ext:         ext,
+		Name:        cfg.Project,
+		BinaryName:  prebuiltBinaryName(cfg, in),
+		Version:     version,
+		Maintainer:  pkgMaintainer(cfg),
+		Description: in.Description,
+		Homepage:    cfg.Homepage,
+		License:     cfg.License,
+		Depends:     depends,
+		Recommends:  recommends,
+		Suggests:    suggests,
+	}
+}
+
+// pkgMaintainer は deb が必須とする maintainer を github owner から組む(config.maintainer と同形)。
+func pkgMaintainer(cfg config.Config) string {
+	if owner, _, ok := splitOwnerName(cfg.Github); ok {
+		return fmt.Sprintf("%s <%s@users.noreply.github.com>", owner, owner)
+	}
+	return "wharfy <noreply@wharfy.local>"
 }
 
 // expectedPackages は生成される deb/rpm のファイル名(linux × goarch)。dry-run で見せる。

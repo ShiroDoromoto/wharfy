@@ -105,6 +105,16 @@ func AurDeps(in File) (depends, optdepends []string) {
 	return dedupeSorted(req), dedupeSorted(opt)
 }
 
+// RepoDeps は apt/rpm(nfpm)向けのランタイム依存 3 区分を返す公開ヘルパ(BYO-binary の
+// ネイティブ nfpm 生成が使う・依頼① #3)。channel は "apt"|"rpm"。
+func RepoDeps(channel string, in File) (depends, recommends, suggests []string) {
+	repo := in.Apt
+	if channel == chRpm {
+		repo = in.Rpm
+	}
+	return repoDeps(channel, repo, in.RuntimeDeps)
+}
+
 // repoDeps は apt/rpm(nfpm)の 1 フォーマット向けに、per-channel 宣言と横断 runtime_deps を
 // マージした Depends/Recommends/Suggests を返す。channel は chApt|chRpm。
 func repoDeps(channel string, repo *RepoInput, deps []RuntimeDep) (depends, recommends, suggests []string) {
