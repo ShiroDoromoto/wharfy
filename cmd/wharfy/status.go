@@ -132,7 +132,7 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	case "cask":
 		return assessCask(ctx, cs, ch, caskToken(cfg, in), recordedVer)
 	case "scoop":
-		return assessScoop(ctx, cs, ch, cfg.Project, recordedVer)
+		return assessScoop(ctx, cs, ch, cfg.Project, scoopToken(cfg, in), recordedVer)
 	case "script":
 		return assessScript(ctx, cs, cfg, recordedVer)
 	case "goinstall":
@@ -254,12 +254,12 @@ func assessCask(ctx context.Context, cs statusChannel, ch config.ResolvedChannel
 }
 
 // assessScoop は自前 bucket の manifest 版を照合する(homebrew と同型)。
-func assessScoop(ctx context.Context, cs statusChannel, ch config.ResolvedChannel, project, recordedVer string) (statusChannel, *output.Warning) {
+func assessScoop(ctx context.Context, cs statusChannel, ch config.ResolvedChannel, project, token, recordedVer string) (statusChannel, *output.Warning) {
 	bOwner, bRepo, ok := splitOwnerName(ch.Target)
 	if !ok {
 		return recordedOnly(cs, recordedVer, "bucket unresolved — set 'github' or 'scoop.bucket'"), nil
 	}
-	sc := &channel.Scoop{Project: project, Bucket: ch.Target, Store: newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN"))}
+	sc := &channel.Scoop{Project: project, Token: token, Bucket: ch.Target, Store: newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN"))}
 	rs, err := sc.Probe(ctx)
 	if err != nil {
 		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)

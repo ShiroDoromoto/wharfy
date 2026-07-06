@@ -307,7 +307,7 @@ func planChannelSummary(ch string, cfg config.Config, in config.File) channel.Pl
 	case "cask":
 		it.OwnedArtifact = orUnresolved(target, "Casks/"+caskToken(cfg, in)+".rb")
 	case "scoop":
-		it.OwnedArtifact = orUnresolved(target, "bucket/"+cfg.Project+".json")
+		it.OwnedArtifact = orUnresolved(target, "bucket/"+scoopToken(cfg, in)+".json")
 	case "apt", "rpm":
 		if target == "" {
 			it.Action, it.Reason = channel.ActionSkip, ch+".repo not set"
@@ -461,7 +461,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 	case "winget":
 		identifier := channelTargetByName(cfg, "winget")
 		wi := channel.WingetInput{Identifier: identifier, Project: cfg.Project, Version: version, License: cfg.License,
-			Description: in.Description, Homepage: cfg.Homepage, Installers: wingetInstallers(archs, ghOwner, ghRepo, cfg.Project, version)}
+			Description: in.Description, Homepage: cfg.Homepage, Installers: wingetInstallersFor(cfg, archs, ghOwner, ghRepo, version)}
 		prURL, err := newWingetSubmitter(os.Getenv("GITHUB_TOKEN")).Submit(ctx, wi, channel.GenerateWingetManifests(wi))
 		if err != nil {
 			return channel.PlanItem{}, nil, err
@@ -723,9 +723,15 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 		return res
 	}
 
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
+	// BYO-bundle(GUI・依頼③)は goreleaser を通さない(main が無く生成不可)。configPath は
+	// 非 bundle の release/preview 経路だけが使う。
+	var configPath string
+	if !cfg.Bundle {
+		var err error
+		configPath, err = writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
 	}
 	buildInput := func(archs []build.Artifact) channel.WingetInput {
 		return channel.WingetInput{
@@ -735,7 +741,7 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 			License:     cfg.License,
 			Description: in.Description,
 			Homepage:    cfg.Homepage,
-			Installers:  wingetInstallers(archs, ghOwner, ghRepo, cfg.Project, version),
+			Installers:  wingetInstallersFor(cfg, archs, ghOwner, ghRepo, version),
 		}
 	}
 	reqs := applyRequirements(tagMissing)
@@ -771,7 +777,14 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 		return *guard
 	}
 	// 実 release: windows zip を GitHub Releases へ上げ、実 sha256 を得る(installer が参照)。
-	archs, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	// BYO-bundle(GUI・依頼③)は再 archive せず持ち込み zip をそのまま上げる。
+	var archs []build.Artifact
+	var rerr error
+	if cfg.Bundle {
+		archs, rerr = bundleRelease(ctx, root, cfg, version, in)
+	} else {
+		archs, rerr = newReleaser(config.DistDir).Release(ctx, root, configPath)
+	}
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
@@ -818,6 +831,30 @@ func wingetInstallers(archs []build.Artifact, ghOwner, ghRepo, project, version 
 		out = append(out, channel.WingetInstaller{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
+}
+
+// wingetBundleInstallers は BYO-bundle(GUI・依頼③)の windows zip(ポータブル: 中に <App>.exe)を
+// installer にする。アセット名は持ち込みファイル名そのまま(release と一致)。exe/msi インストーラ種別は
+// InstallerType が異なるため現状スコープ外(ポータブル zip を主経路にする)。
+func wingetBundleInstallers(archs []build.Artifact, ghOwner, ghRepo, version string) []channel.WingetInstaller {
+	var out []channel.WingetInstaller
+	for _, a := range archs {
+		if a.OS != "windows" || a.Kind != "zip" {
+			continue
+		}
+		name := filepath.Base(a.Path)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.WingetInstaller{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	return out
+}
+
+// wingetInstallersFor は build/bundle モードに応じて winget installer リストを選ぶ。
+func wingetInstallersFor(cfg config.Config, archs []build.Artifact, ghOwner, ghRepo, version string) []channel.WingetInstaller {
+	if cfg.Bundle {
+		return wingetBundleInstallers(archs, ghOwner, ghRepo, version)
+	}
+	return wingetInstallers(archs, ghOwner, ghRepo, cfg.Project, version)
 }
 
 // manifestsDiff は申請する manifest 3 種をファイル名つきで連結して見せる。
@@ -1333,9 +1370,14 @@ func httpUploadPackage(ctx context.Context, repoURL, token, filePath string) err
 // owned チャネル共通の発行フロー(homebrew/scoop)。makePub が archive から Publisher を組む。
 func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, target string, makePub func([]build.Artifact) channel.Publisher) output.Result {
 	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く(03)。
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
+	// BYO-bundle(GUI・依頼③)は goreleaser を通さない(main が無く生成不可)ため configPath は空。
+	var configPath string
+	if !cfg.Bundle {
+		var err error
+		configPath, err = writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
 	}
 
 	if !flagYes {
@@ -1374,7 +1416,9 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 		archs []build.Artifact
 		err   error
 	)
-	if cfg.Prebuilt {
+	if cfg.Bundle {
+		archs, err = bundleRelease(ctx, root, cfg, version, in)
+	} else if cfg.Prebuilt {
 		archs, err = prebuiltRelease(ctx, root, cfg, in, version)
 	} else {
 		archs, err = newReleaser(config.DistDir).Release(ctx, root, configPath)
@@ -1390,6 +1434,10 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 // BYO-binary では持ち込みバイナリをそのまま archive 化する(実 sha になる)。それ以外は
 // GoReleaser の snapshot でローカル生成する。
 func previewArchives(ctx context.Context, root string, cfg config.Config, in config.File, configPath, version string) ([]build.Artifact, error) {
+	if cfg.Bundle {
+		// BYO-bundle は再 archive しない — 持ち込みバンドルを検証して実 sha 付き成果物にする(依頼③)。
+		return build.ValidateBundles(root, toBundles(in))
+	}
 	if cfg.Prebuilt {
 		return build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
 	}
@@ -1591,22 +1639,54 @@ func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo
 }
 
 func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Scoop {
+	input := channel.ScoopInput{
+		Project:      cfg.Project,
+		Description:  in.Description,
+		Homepage:     cfg.Homepage,
+		License:      cfg.License,
+		Version:      version,
+		Dependencies: scoopDeps(in),
+		Owner:        ghOwner,
+		Repo:         ghRepo,
+		Archives:     scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
+	}
+	if cfg.Bundle {
+		// GUI: 持ち込み windows zip(ポータブル)を参照する app manifest(<project>-app)にする(依頼③)。
+		input.App = true
+		input.AppName = caskDisplayName(cfg, in)          // 表示名は cask と共有
+		input.ExeName = caskDisplayName(cfg, in) + ".exe" // zip 内の <App>.exe
+		input.Archives = scoopBundleArchives(archs, ghOwner, ghRepo, version)
+	}
 	return &channel.Scoop{
 		Project: cfg.Project,
+		Token:   scoopToken(cfg, in),
 		Bucket:  bucket,
 		Store:   newTapStore(bOwner, bRepo, os.Getenv("GITHUB_TOKEN")),
-		Input: channel.ScoopInput{
-			Project:      cfg.Project,
-			Description:  in.Description,
-			Homepage:     cfg.Homepage,
-			License:      cfg.License,
-			Version:      version,
-			Dependencies: scoopDeps(in),
-			Owner:        ghOwner,
-			Repo:         ghRepo,
-			Archives:     scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
-		},
+		Input:   input,
 	}
+}
+
+// scoopToken は scoop manifest の名前。GUI(bundle)は <project>-app、CLI は <project>(依頼③)。
+func scoopToken(cfg config.Config, in config.File) string {
+	if cfg.Bundle {
+		return caskToken(cfg, in) // cask と同じ <project>-app 規約を共有
+	}
+	return cfg.Project
+}
+
+// scoopBundleArchives は BYO-bundle の windows zip(ポータブル)を ScoopArch にする(URL は
+// 持ち込みファイル名そのまま・依頼③)。
+func scoopBundleArchives(archs []build.Artifact, ghOwner, ghRepo, version string) []channel.ScoopArch {
+	var out []channel.ScoopArch
+	for _, a := range archs {
+		if a.OS != "windows" || a.Kind != "zip" {
+			continue
+		}
+		name := filepath.Base(a.Path)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.ScoopArch{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	return out
 }
 
 // caskToken は cask の識別子/ファイル名。明示 token 優先、既定は <project>-app(依頼書 §4 の命名規約:

@@ -84,12 +84,19 @@ Owned (wharfy publishes directly): `homebrew`, `cask` (GUI apps), `scoop`, `apt`
 Gated (wharfy prepares a PR and tracks it, never merges — and won't open a second PR while
 an earlier one is still under review): `winget`, `homebrew-core`.
 
-For a GUI app you ship a built, signed bundle (`.dmg`/`.zip`) instead of compiling — declare
-`bundle:` (BYO-bundle, the GUI counterpart of `prebuilt:`) and wharfy uploads it to the Release
-and writes a Homebrew **Cask** to the *same tap* as your Formula (`cask` defaults to token
-`<project>-app`, tap `<owner>/homebrew-<project>`), so `wharfy status` lists CLI Formula and GUI
-Cask together. wharfy never re-signs; a non-notarized bundle gets a Gatekeeper `caveats` note in
-the cask.
+For a GUI app you ship built, signed bundles instead of compiling — declare `bundle:` (BYO-bundle,
+the GUI counterpart of `prebuilt:`) with your `.dmg`/`.zip`/`.AppImage`/`.deb`/`.rpm`, and wharfy
+uploads them to the Release and drives the GUI channels (defaults to `[cask, releases]`):
+
+- **macOS** — Homebrew **Cask** to the *same tap* as your Formula (`cask` defaults to token
+  `<project>-app`, tap `<owner>/homebrew-<project>`), so `wharfy status` lists CLI Formula and GUI
+  Cask together.
+- **Linux** — **AppImage** is a direct-download Release asset; `.deb`/`.rpm` go to the *same*
+  hosted apt/rpm repo as the CLI under the bundler's own `<project>-app` package name.
+- **Windows** — **Scoop** app manifest (`<project>-app`, portable zip with a Start-menu shortcut)
+  and **winget** (gated PR, portable-zip installer).
+
+wharfy never re-signs; a non-notarized macOS bundle gets a Gatekeeper `caveats` note in the cask.
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels

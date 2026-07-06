@@ -117,3 +117,36 @@ func TestScoopPublishAndProbe(t *testing.T) {
 		t.Errorf("probe = %+v, want found 1.2.3", rs)
 	}
 }
+
+// TestGenerateScoopAppManifest: GUI(App=true)は portable zip を参照し、top-level bin ＋ shortcuts を
+// 出す。per-arch bin と autoupdate は出さない(持ち込み zip・命名任意・依頼③)。
+func TestGenerateScoopAppManifest(t *testing.T) {
+	in := scoopInput()
+	in.App = true
+	in.AppName = "Widget"
+	in.ExeName = "Widget.exe"
+	in.Owner, in.Repo = "acme", "widget-demo" // それでも autoupdate は出さない
+	s := GenerateScoopManifest(in)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatalf("manifest not valid JSON: %v\n%s", err, s)
+	}
+	if m["bin"] != "Widget.exe" {
+		t.Errorf("app manifest should have top-level bin: %v", m["bin"])
+	}
+	sc, ok := m["shortcuts"].([]any)
+	if !ok || len(sc) != 1 {
+		t.Fatalf("app manifest should have one shortcut: %v", m["shortcuts"])
+	}
+	pair := sc[0].([]any)
+	if pair[0] != "Widget.exe" || pair[1] != "Widget" {
+		t.Errorf("shortcut wrong: %v", pair)
+	}
+	a64 := m["architecture"].(map[string]any)["64bit"].(map[string]any)
+	if _, hasBin := a64["bin"]; hasBin {
+		t.Errorf("app manifest should not set per-arch bin: %v", a64)
+	}
+	if _, hasAuto := m["autoupdate"]; hasAuto {
+		t.Errorf("app manifest should omit autoupdate: %v", m)
+	}
+}

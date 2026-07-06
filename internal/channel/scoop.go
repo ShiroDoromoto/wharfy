@@ -19,6 +19,10 @@ type ScoopArch struct {
 }
 
 // ScoopInput は manifest 生成の入力。
+//   - App: 非空なら GUI app manifest(依頼③)。ポータブル zip を参照し、bin と shortcuts を
+//     top-level に出す(Start メニュー登録)。空なら従来の CLI bin manifest。
+//   - AppName: shortcut のラベル(表示名 "<App>")。
+//   - ExeName: zip 内の実行ファイル名(既定 <Binary>.exe)。
 type ScoopInput struct {
 	Project      string
 	Binary       string // 既定: Project。bin は <Binary>.exe
@@ -29,11 +33,16 @@ type ScoopInput struct {
 	Dependencies []string // ランタイム依存(manifest の "depends")。空なら出さない
 	Owner, Repo  string   // autoupdate URL の Releases リポジトリ
 	Archives     []ScoopArch
+	App          bool   // GUI app manifest にする(依頼③)
+	AppName      string // shortcut ラベル(表示名)
+	ExeName      string // zip 内 exe 名(既定 <Binary>.exe)
 }
 
 // Scoop は scoop チャネルの Publisher。Bucket は "owner/scoop-<project>"。
+// Token は manifest ファイル名(既定 Project、GUI は <project>-app・依頼③)。
 type Scoop struct {
 	Project string
+	Token   string
 	Bucket  string
 	Input   ScoopInput
 	Store   TapStore
@@ -42,8 +51,16 @@ type Scoop struct {
 func (s *Scoop) Name() string { return "scoop" }
 func (s *Scoop) Kind() string { return KindOwned }
 
+// manifestName は manifest のファイル名(Token 優先・既定 Project)。
+func (s *Scoop) manifestName() string {
+	if s.Token != "" {
+		return s.Token
+	}
+	return s.Project
+}
+
 // ManifestPath は bucket 内の manifest の場所(所有対象＝この path だけを書く)。
-func (s *Scoop) ManifestPath() string { return "bucket/" + s.Project + ".json" }
+func (s *Scoop) ManifestPath() string { return "bucket/" + s.manifestName() + ".json" }
 
 func (s *Scoop) ownedArtifact() string { return s.Bucket + ":" + s.ManifestPath() }
 
@@ -113,6 +130,8 @@ type scoopManifest struct {
 	License      string                    `json:"license,omitempty"`
 	Depends      []string                  `json:"depends,omitempty"`
 	Architecture map[string]scoopArchEntry `json:"architecture"`
+	Bin          string                    `json:"bin,omitempty"`       // GUI app: top-level bin(portable exe)
+	Shortcuts    [][]string                `json:"shortcuts,omitempty"` // GUI app: Start メニュー登録
 	Checkver     string                    `json:"checkver,omitempty"`
 	Autoupdate   *scoopAutoupdate          `json:"autoupdate,omitempty"`
 }
@@ -120,7 +139,7 @@ type scoopManifest struct {
 type scoopArchEntry struct {
 	URL  string `json:"url"`
 	Hash string `json:"hash"`
-	Bin  string `json:"bin"`
+	Bin  string `json:"bin,omitempty"`
 }
 
 type scoopAutoupdate struct {
@@ -145,14 +164,22 @@ func GenerateScoopManifest(in ScoopInput) string {
 	if binary == "" {
 		binary = in.Project
 	}
-	bin := binary + ".exe"
+	exe := in.ExeName
+	if exe == "" {
+		exe = binary + ".exe"
+	}
 
 	arch := map[string]scoopArchEntry{}
 	auto := map[string]scoopAutoArch{}
 	for _, a := range in.Archives {
 		key := scoopArchKey(a.Arch)
-		arch[key] = scoopArchEntry{URL: a.URL, Hash: a.SHA256, Bin: bin}
-		if in.Owner != "" && in.Repo != "" {
+		entry := scoopArchEntry{URL: a.URL, Hash: a.SHA256}
+		if !in.App {
+			entry.Bin = exe // CLI: per-arch bin(GUI は top-level bin にする)
+		}
+		arch[key] = entry
+		// autoupdate は archive 命名が定型な CLI 経路のみ。GUI(持ち込み zip)は命名が任意なので出さない。
+		if !in.App && in.Owner != "" && in.Repo != "" {
 			auto[key] = scoopAutoArch{
 				URL: fmt.Sprintf("https://github.com/%s/%s/releases/download/v$version/%s_$version_windows_%s.zip",
 					in.Owner, in.Repo, in.Project, a.Arch),
@@ -172,6 +199,15 @@ func GenerateScoopManifest(in ScoopInput) string {
 		Depends:      depends,
 		Architecture: arch,
 		Checkver:     "github",
+	}
+	if in.App {
+		// GUI: portable zip の exe を bin に、shortcuts で Start メニューに載せる(依頼③)。
+		label := in.AppName
+		if label == "" {
+			label = binary
+		}
+		m.Bin = exe
+		m.Shortcuts = [][]string{{exe, label}}
 	}
 	if len(auto) > 0 {
 		m.Autoupdate = &scoopAutoupdate{Architecture: auto}
