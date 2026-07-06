@@ -84,14 +84,15 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 	project := firstNonEmpty(in.Project, repo, r.moduleLast(), filepath.Base(r.Root))
 
 	prebuilt := IsPrebuilt(in)
+	bundle := IsBundle(in)
 
 	// main が曖昧でも、他は解決した実効設定を返す(config.json は data 必須・main は任意)。
 	// 呼び出し側はこの err を ok=false + main_ambiguous の Problem に変換する(07「停止」)。
-	// BYO-binary(prebuilt)ではビルドを wharfy がしないので main は不要 — `go list` を叩かず
-	// main は空のまま進める(非 Go リポで `cannot resolve 'main'` にならない・依頼①)。
+	// BYO-binary(prebuilt)/ BYO-bundle(bundle)ではビルドを wharfy がしないので main は不要 —
+	// `go list` を叩かず main は空のまま進める(非 Go リポで `cannot resolve 'main'` にならない・依頼①)。
 	var main string
 	var mainErr error
-	if !prebuilt {
+	if !prebuilt && !bundle {
 		main, mainErr = r.resolveMain(in.Main, project)
 	}
 
@@ -109,6 +110,9 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 	if prebuilt {
 		build = prebuiltBuild(in.Prebuilt) // 行列は持ち込みバイナリの (os,arch) から導く
 	}
+	if bundle {
+		build = bundleBuild(in.Bundle) // 行列は持ち込みバンドルの (os,arch) から導く
+	}
 
 	cfg := Config{
 		Project:  project,
@@ -116,11 +120,30 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 		Github:   github,
 		Homepage: homepage,
 		License:  license,
-		Channels: r.resolveChannels(in, owner, github, project, prebuilt),
+		Channels: r.resolveChannels(in, owner, github, project, prebuilt, bundle),
 		Build:    build,
 		Prebuilt: prebuilt,
+		Bundle:   bundle,
 	}
 	return cfg, mainErr
+}
+
+// bundleBuild は持ち込みバンドルの一覧から (os, arch) 行列を宣言順・重複なしで導く
+// (prebuiltBuild の対。ビルドはしないが Config.Build の表示として持つ)。
+func bundleBuild(in *BundleInput) *Build {
+	var goos, goarch []string
+	seenOS, seenArch := map[string]bool{}, map[string]bool{}
+	for _, b := range in.Bundles {
+		if b.OS != "" && !seenOS[b.OS] {
+			seenOS[b.OS] = true
+			goos = append(goos, b.OS)
+		}
+		if b.Arch != "" && !seenArch[b.Arch] {
+			seenArch[b.Arch] = true
+			goarch = append(goarch, b.Arch)
+		}
+	}
+	return &Build{GOOS: goos, GOARCH: goarch}
 }
 
 // prebuiltBuild は持ち込みバイナリの一覧から、重複を除いた (os, arch) 行列を宣言順で導く。
@@ -165,12 +188,16 @@ func (r *Resolver) resolveMain(explicit, project string) (string, error) {
 // resolveChannels は channels の明示値 or 既定列を、種別・発行先まで解決する。
 // prebuilt(BYO-binary)では Go 専用チャネル(goinstall/homebrew-core)を落とす(依頼②)。
 // 明示指定を静かに握り潰さないため、落とした分は CLI 層が要求列と突き合わせて警告できる。
-func (r *Resolver) resolveChannels(in File, owner, github, project string, prebuilt bool) []ResolvedChannel {
+func (r *Resolver) resolveChannels(in File, owner, github, project string, prebuilt, bundle bool) []ResolvedChannel {
 	names := in.Channels
 	if len(names) == 0 {
-		names = DefaultChannels
-		if prebuilt {
+		switch {
+		case bundle:
+			names = DefaultBundleChannels // GUI: cask ＋ releases(依頼書 §6)
+		case prebuilt:
 			names = DefaultPrebuiltChannels
+		default:
+			names = DefaultChannels
 		}
 	}
 	out := make([]ResolvedChannel, 0, len(names))
@@ -223,6 +250,17 @@ func resolveRepoURLs(channel string, in *RepoInput) (deliver, push string) {
 func (r *Resolver) channelTarget(name string, in File, owner, github, project string) string {
 	switch name {
 	case "homebrew":
+		if in.Homebrew != nil && in.Homebrew.Tap != "" {
+			return in.Homebrew.Tap
+		}
+		if owner != "" {
+			return fmt.Sprintf("%s/homebrew-%s", owner, project)
+		}
+	case "cask":
+		// cask を置く tap。既定は Formula と同じ <owner>/homebrew-<project>(同居=状態一元化・依頼④)。
+		if in.Cask != nil && in.Cask.Tap != "" {
+			return in.Cask.Tap
+		}
 		if in.Homebrew != nil && in.Homebrew.Tap != "" {
 			return in.Homebrew.Tap
 		}

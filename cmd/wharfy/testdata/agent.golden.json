@@ -92,6 +92,10 @@
       "kind": "owned"
     },
     {
+      "name": "cask",
+      "kind": "owned"
+    },
+    {
       "name": "scoop",
       "kind": "owned"
     },

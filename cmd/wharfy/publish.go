@@ -100,6 +100,8 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	switch args[0] {
 	case "homebrew":
 		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
+	case "cask":
+		return publishCask(ctx, c, root, cfg, in, version, tagMissing)
 	case "scoop":
 		return publishScoop(ctx, c, root, cfg, in, version, tagMissing)
 	case "apt":
@@ -121,7 +123,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	default:
 		item := channel.PlanItem{
 			Channel: args[0], Action: channel.ActionSkip,
-			Reason: "unknown channel (owned: homebrew/scoop/apt/rpm/container/aur/script/goinstall, gated: winget/homebrew-core)",
+			Reason: "unknown channel (owned: homebrew/cask/scoop/apt/rpm/container/aur/script/goinstall, gated: winget/homebrew-core)",
 		}
 		res := publishResult(c, "channel "+args[0]+" not implemented", false, []channel.PlanItem{item})
 		res.Next = []output.NextDo{{Reason: "publish a supported channel or all", Do: "wharfy publish"}}
@@ -132,7 +134,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 // implementedChannels は cfg.Channels のうち publish が扱える順序付きリスト。
 func implementedChannels(cfg config.Config) []string {
 	known := map[string]bool{
-		"homebrew": true, "scoop": true, "apt": true, "rpm": true, "container": true,
+		"homebrew": true, "cask": true, "scoop": true, "apt": true, "rpm": true, "container": true,
 		"aur": true, "winget": true, "goinstall": true, "script": true, "releases": true,
 		"homebrew-core": true,
 	}
@@ -197,7 +199,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 		// 一括 preview は軽量サマリ(各チャネルの発行先と操作)。詳細差分は単体 publish <ch> --dry-run。
 		var items []channel.PlanItem
 		for _, ch := range chans {
-			items = append(items, planChannelSummary(ch, cfg))
+			items = append(items, planChannelSummary(ch, cfg, in))
 		}
 		res := output.New(c.Name, fmt.Sprintf("plan: %d channel(s)", len(items)), true)
 		res.Data = publishData{Applied: false, Plan: items, Requires: reqs}
@@ -231,6 +233,14 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	var archs []build.Artifact
 	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
 		archs = set.Artifacts
+	} else if cfg.Bundle {
+		// BYO-bundle(GUI・依頼①): 再 archive せず持ち込みバンドルをそのまま Release upload。
+		a, rerr := bundleRelease(ctx, root, cfg, version, in)
+		if rerr != nil {
+			return buildErrorResult(c, rerr)
+		}
+		_ = build.SaveArtifacts(root, version, a)
+		archs = a
 	} else if cfg.Prebuilt {
 		// BYO-binary(依頼①): GoReleaser を通さず、自前 archive＋ネイティブ Release upload。
 		a, rerr := prebuiltRelease(ctx, root, cfg, in, version)
@@ -288,12 +298,14 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 }
 
 // planChannelSummary は一括 preview 用の軽量 plan(発行先＋操作。差分は出さない)。
-func planChannelSummary(ch string, cfg config.Config) channel.PlanItem {
+func planChannelSummary(ch string, cfg config.Config, in config.File) channel.PlanItem {
 	target := channelTargetByName(cfg, ch)
 	it := channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionCreate}
 	switch ch {
 	case "homebrew":
 		it.OwnedArtifact = orUnresolved(target, "Formula/"+cfg.Project+".rb")
+	case "cask":
+		it.OwnedArtifact = orUnresolved(target, "Casks/"+caskToken(cfg, in)+".rb")
 	case "scoop":
 		it.OwnedArtifact = orUnresolved(target, "bucket/"+cfg.Project+".json")
 	case "apt", "rpm":
@@ -357,6 +369,24 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			return channel.PlanItem{}, nil, err
 		}
 		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
+		item.Action = channel.ActionUpdate
+		return item, nil, nil
+
+	case "cask":
+		tap := channelTargetByName(cfg, "cask")
+		to, tr, ok := splitOwnerName(tap)
+		if !ok {
+			return skip("cask tap unresolved")
+		}
+		ck := caskPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs)
+		if _, err := ck.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
+			return channel.PlanItem{}, nil, err
+		}
+		item, pub, err := ck.Publish(ctx)
+		if err != nil {
+			return channel.PlanItem{}, nil, err
+		}
+		st.Publish["cask"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
 		item.Action = channel.ActionUpdate
 		return item, nil, nil
 
@@ -1550,6 +1580,118 @@ func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, gh
 			Archives:     scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 		},
 	}
+}
+
+// caskToken は cask の識別子/ファイル名。明示 token 優先、既定は <project>-app(依頼書 §4 の命名規約:
+// CLI=<project> / GUI=<project>-app と別ラベルにする)。
+func caskToken(cfg config.Config, in config.File) string {
+	if in.Cask != nil && in.Cask.Token != "" {
+		return in.Cask.Token
+	}
+	return cfg.Project + "-app"
+}
+
+// caskDisplayName は cask の表示名 "<App>"(name / app stanza)。cask.name > bundle.name > project。
+func caskDisplayName(cfg config.Config, in config.File) string {
+	if in.Cask != nil && in.Cask.Name != "" {
+		return in.Cask.Name
+	}
+	if in.Bundle != nil && in.Bundle.Name != "" {
+		return in.Bundle.Name
+	}
+	return cfg.Project
+}
+
+// caskAppBundle は app stanza の対象 "<App>.app"。明示 app 優先、既定は "<表示名>.app"。
+func caskAppBundle(cfg config.Config, in config.File) string {
+	if in.Cask != nil && in.Cask.App != "" {
+		return in.Cask.App
+	}
+	return caskDisplayName(cfg, in) + ".app"
+}
+
+// caskArtifacts は darwin の持ち込みバンドル(dmg/zip)を cask の url+sha256 にする。アセット名は
+// bundleRelease と同じく持ち込みファイル名をそのまま使う(url と実アセットの齟齬を防ぐ)。
+func caskArtifacts(archs []build.Artifact, ghOwner, ghRepo, version string) []channel.CaskArtifact {
+	var out []channel.CaskArtifact
+	for _, a := range archs {
+		if a.OS != "darwin" {
+			continue
+		}
+		if a.Kind != "dmg" && a.Kind != "zip" {
+			continue
+		}
+		name := filepath.Base(a.Path)
+		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		out = append(out, channel.CaskArtifact{Arch: a.Arch, URL: url, SHA256: a.SHA256})
+	}
+	channel.SortCaskArtifacts(out)
+	return out
+}
+
+// caskPublisher は bundle 成果物から Cask Publisher を組む(homebrewPublisher の対)。
+func caskPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Cask {
+	return &channel.Cask{
+		Token: caskToken(cfg, in),
+		Tap:   tap,
+		Store: newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN")),
+		Input: channel.CaskInput{
+			Token:     caskToken(cfg, in),
+			Name:      caskDisplayName(cfg, in),
+			Desc:      in.Description,
+			Homepage:  cfg.Homepage,
+			Version:   version,
+			AppBundle: caskAppBundle(cfg, in),
+			Notarized: false, // 依頼元は notarize しない方針(依頼⑤)。caveats で Gatekeeper を案内する
+			Artifacts: caskArtifacts(archs, ghOwner, ghRepo, version),
+		},
+	}
+}
+
+// publishCask は cask チャネル(owned・03)。持ち込みバンドルを GitHub Release へ上げ、実 sha256 で
+// 同一 tap の Casks/<token>.rb を書く(Formula と同居=状態一元化・依頼④)。publishHomebrew の対だが、
+// 成果物は archive でなく BYO-bundle(bundleRelease)から得る。
+func publishCask(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+	tap := channelTargetByName(cfg, "cask")
+	tapOwner, tapRepo, tapOK := splitOwnerName(tap)
+	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
+	if tap == "" || !tapOK || !ghOK {
+		return ownedSkip(c, "cask", "cask tap/github unresolved — set 'github' or 'cask.tap' in wharfy.yaml")
+	}
+	if !config.IsBundle(in) {
+		return ownedSkip(c, "cask", "cask needs a BYO-bundle input — declare 'bundle:' in wharfy.yaml")
+	}
+
+	if !flagYes {
+		// preview: バンドルを検証して実 sha を得る(アップロードしない)ため plan の差分を出す。
+		archs, aerr := build.ValidateBundles(root, toBundles(in))
+		if aerr != nil {
+			return buildErrorResult(c, aerr)
+		}
+		pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
+		return ownedReleaseDryRun(ctx, c, pub, version, "cask", tap, tagMissing)
+	}
+
+	if tagMissing {
+		return tagMissingResult(c, version)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return tokenMissingResult(c)
+	}
+	// 実 release: バンドルを GitHub Release へ上げ、実 sha256 を得る(記録済みなら再利用)。
+	var archs []build.Artifact
+	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
+		archs = set.Artifacts
+	} else {
+		a, rerr := bundleRelease(ctx, root, cfg, version, in)
+		if rerr != nil {
+			return buildErrorResult(c, rerr)
+		}
+		_ = build.SaveArtifacts(root, version, a)
+		archs = a
+	}
+	pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
+	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version)
 }
 
 // ownedReleaseDryRun は plan をプレビューする(書かない)。requires で実 apply の前提条件を先出し。

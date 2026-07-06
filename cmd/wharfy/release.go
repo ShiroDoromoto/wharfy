@@ -151,3 +151,36 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 	}
 	return archs, nil
 }
+
+// bundleRelease は BYO-bundle の実リリース(GUI・依頼①)。持ち込みバンドルを再 archive せず、
+// 存在＋実 sha256 を検証してそのまま GitHub Release へ(同名は置換して)アップロードする。
+// アセット名は持ち込みファイル名をそのまま使い(cask の url もこれを参照する)、命名規約の齟齬を防ぐ。
+// 返す成果物(Kind＋実 sha256)は cask がそのまま消費する(prebuiltRelease の対)。
+func bundleRelease(ctx context.Context, root string, cfg config.Config, version string, in config.File) ([]build.Artifact, error) {
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return nil, fmt.Errorf("cannot resolve github owner/repo from %q", cfg.Github)
+	}
+	archs, err := build.ValidateBundles(root, toBundles(in))
+	if err != nil {
+		return nil, err
+	}
+	assets := make([]channel.ReleaseAsset, 0, len(archs))
+	for _, a := range archs {
+		name := filepath.Base(a.Path)
+		p := a.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, a.Path)
+		}
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        name,
+			Path:        p,
+			ContentType: channel.AssetContentType(name),
+		})
+	}
+	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
+	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets); err != nil {
+		return nil, &build.FailedError{Err: err}
+	}
+	return archs, nil
+}

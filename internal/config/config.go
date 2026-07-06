@@ -21,8 +21,10 @@ type File struct {
 	Channels    []string        `yaml:"channels"`
 	RuntimeDeps []RuntimeDep    `yaml:"runtime_deps"`
 	Prebuilt    *PrebuiltInput  `yaml:"prebuilt"`
+	Bundle      *BundleInput    `yaml:"bundle"`
 	Build       *BuildInput     `yaml:"build"`
 	Homebrew    *HomebrewInput  `yaml:"homebrew"`
+	Cask        *CaskInput      `yaml:"cask"`
 	Scoop       *ScoopInput     `yaml:"scoop"`
 	Goinstall   *GoinstallIn    `yaml:"goinstall"`
 	Apt         *RepoInput      `yaml:"apt"`
@@ -118,9 +120,50 @@ type PrebuiltBinary struct {
 	SHA256 string `yaml:"sha256"`
 }
 
+// BundleInput は BYO-bundle モードの入力(GUI・依頼①)。prebuilt(単一バイナリ持ち込み)の対で、
+// ビルド済み・署名済みのバンドル(.dmg/.zip 等)を持ち込む。wharfy は生成も再署名もしない(relay)。
+// 宣言があると Config.Bundle=true になり、既定チャネルは GUI 向け(cask/releases)に切り替わる。
+// バンドルは既に最終成果物なので prebuilt と違い再 archive しない — 存在と sha256 を検証して
+// そのまま Release アセットにする。
+//   - Version: 任意。空なら git tag が版の真実(prebuilt と同じ)。
+//   - Name: アプリ表示名 "<App>"(cask の name / app stanza)。空なら project。token とは独立・不変。
+//   - Bundles: (os,arch,種別)→バンドルのパス。最低 1 要素。
+type BundleInput struct {
+	Version string   `yaml:"version"`
+	Name    string   `yaml:"name"`
+	Bundles []Bundle `yaml:"bundles"`
+}
+
+// Bundle は 1 ターゲットのビルド済みバンドル。
+//   - OS/Arch: 配布ターゲット(darwin/windows/linux, amd64/arm64/universal)。
+//   - Kind: バンドル種別(dmg/zip/exe/msi/appimage/deb/rpm)。Cask は darwin の dmg/zip を参照する。
+//   - Path: 利用者 root からの相対パス。wharfy はここを Release アセットにする(再 archive しない)。
+//   - SHA256: 任意。空なら wharfy が計算する(持ち込み時の検証にも使える)。
+type Bundle struct {
+	OS     string `yaml:"os"`
+	Arch   string `yaml:"arch"`
+	Kind   string `yaml:"kind"`
+	Path   string `yaml:"path"`
+	SHA256 string `yaml:"sha256"`
+}
+
 type HomebrewInput struct {
 	Tap          string   `yaml:"tap"`
 	Dependencies []string `yaml:"dependencies"`
+}
+
+// CaskInput は Homebrew Cask チャネルの設定。token / 表示名を Formula と独立に持てる(依頼②/⑥)。
+// 命名規約(依頼書 §4): 配布 token は GUI=<project>-app(Formula の <project> と別ラベル)だが、
+// コマンド名・アプリ表示名は不変。分けるのは配布ラベルだけ。
+//   - Token: cask の識別子/ファイル名。既定 <project>-app。
+//   - Tap: cask を置く tap。既定 <owner>/homebrew-<project>(Formula と同居させ状態を一元化・依頼④)。
+//   - Name: cask の name stanza(表示名 "<App>")。空なら Bundle.Name → project。
+//   - App: app stanza の対象 "<App>.app"。空なら "<Name>.app"。
+type CaskInput struct {
+	Token string `yaml:"token"`
+	Tap   string `yaml:"tap"`
+	Name  string `yaml:"name"`
+	App   string `yaml:"app"`
 }
 
 type ScoopInput struct {
@@ -146,6 +189,10 @@ type Config struct {
 	// wharfy は配布(package 以降)だけを担う。true のとき Main は空で、Build 行列は
 	// 持ち込みバイナリの (os,arch) 由来。Go 専用チャネル(goinstall/homebrew-core)は外れる。
 	Prebuilt bool `json:"prebuilt,omitempty"`
+	// Bundle=true は BYO-bundle モード(GUI・依頼①)。バンドル生成・署名は利用者側で済み、
+	// wharfy は Release アップロードと cask 等 GUI チャネルへの配布だけを担う。true のとき
+	// 既定チャネルは GUI 向け(cask/releases)。Prebuilt と同じく Main は不要。
+	Bundle bool `json:"bundle,omitempty"`
 }
 
 // ResolvedChannel は解決済みチャネル 1 つ(名前・種別・発行先)。
@@ -170,8 +217,11 @@ var (
 	DefaultChannels = []string{"homebrew", "scoop", "releases", "script", "goinstall"}
 	// DefaultPrebuiltChannels = BYO-binary(非 Go)時の既定列。goinstall は Go 専用なので外す(依頼②)。
 	DefaultPrebuiltChannels = []string{"homebrew", "scoop", "releases", "script"}
-	DefaultGOOS             = []string{"linux", "darwin", "windows"}
-	DefaultGOARCH           = []string{"amd64", "arm64"}
+	// DefaultBundleChannels = BYO-bundle(GUI)時の既定列。最小構成は Cask ＋ GitHub Release
+	// (依頼書 §6)。winget/scoop app・AppImage・apt/rpm GUI は明示指定で足す(依頼③)。
+	DefaultBundleChannels = []string{"cask", "releases"}
+	DefaultGOOS           = []string{"linux", "darwin", "windows"}
+	DefaultGOARCH         = []string{"amd64", "arm64"}
 )
 
 // goOnlyChannels は Go ツールチェーンを前提とし、BYO-binary(非 Go)では成立しないチャネル(依頼②)。
@@ -190,9 +240,15 @@ func IsPrebuilt(in File) bool {
 	return in.Prebuilt != nil && len(in.Prebuilt.Binaries) > 0
 }
 
+// IsBundle は File が BYO-bundle モード(ビルド済みバンドル持ち込み・GUI)かを返す。
+func IsBundle(in File) bool {
+	return in.Bundle != nil && len(in.Bundle.Bundles) > 0
+}
+
 // channelKind は各チャネルの種別。gated は審査制(winget / *-core)。それ以外は owned。
 var channelKind = map[string]string{
 	"homebrew":      "owned",
+	"cask":          "owned",
 	"scoop":         "owned",
 	"apt":           "owned",
 	"rpm":           "owned",

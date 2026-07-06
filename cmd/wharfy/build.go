@@ -39,6 +39,18 @@ func toPrebuiltBinaries(in config.File) []build.PrebuiltBinary {
 	return out
 }
 
+// toBundles は config の持ち込みバンドル宣言を build 層の値に写す(依存方向のため変換・依頼①)。
+func toBundles(in config.File) []build.Bundle {
+	if in.Bundle == nil {
+		return nil
+	}
+	out := make([]build.Bundle, 0, len(in.Bundle.Bundles))
+	for _, b := range in.Bundle.Bundles {
+		out = append(out, build.Bundle{OS: b.OS, Arch: b.Arch, Kind: b.Kind, Path: b.Path, SHA256: b.SHA256})
+	}
+	return out
+}
+
 // nowUTC は時刻取得の差し替え点(記録の at をテストで固定する)。
 var nowUTC = func() time.Time { return time.Now().UTC() }
 

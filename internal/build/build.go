@@ -18,9 +18,12 @@ import (
 )
 
 // Artifact はクロスビルドの成果物 1 つ(schemas/common.json の artifact と同形)。
+// Kind は BYO-bundle(GUI・依頼①)の種別(dmg/zip/appimage/deb/rpm 等)。空はバイナリ archive
+// (既存の Go/prebuilt 経路)を意味する。cask/release がこれで成果物を振り分ける。
 type Artifact struct {
 	OS     string `json:"os"`
 	Arch   string `json:"arch"`
+	Kind   string `json:"kind,omitempty"`
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256,omitempty"`
 }

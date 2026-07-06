@@ -92,7 +92,7 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	}
 
 	for _, ch := range cfg.Channels {
-		cs, warn := assessChannel(ctx, ch, cfg, st, probe, tag)
+		cs, warn := assessChannel(ctx, ch, cfg, in, st, probe, tag)
 		out.Channels = append(out.Channels, cs)
 		if warn != nil {
 			out.Warnings = append(out.Warnings, *warn)
@@ -118,7 +118,7 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 
 // assessChannel は 1 チャネルの記録＋実体照合を行う。実装済み(homebrew/script/goinstall)は
 // 各チャネルの実体を probe し、未実装は記録のみで見せる(③ 黙って合わせず source/drift で見せる)。
-func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, st *state.State, probe bool, tag string) (statusChannel, *output.Warning) {
+func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, st *state.State, probe bool, tag string) (statusChannel, *output.Warning) {
 	cs := statusChannel{Name: ch.Name, Kind: ch.Kind, Target: ch.Target}
 	recordedVer := st.Publish[ch.Name].Version
 
@@ -129,6 +129,8 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	switch ch.Name {
 	case "homebrew":
 		return assessHomebrew(ctx, cs, ch, cfg.Project, recordedVer)
+	case "cask":
+		return assessCask(ctx, cs, ch, caskToken(cfg, in), recordedVer)
 	case "scoop":
 		return assessScoop(ctx, cs, ch, cfg.Project, recordedVer)
 	case "script":
@@ -232,6 +234,22 @@ func assessHomebrew(ctx context.Context, cs statusChannel, ch config.ResolvedCha
 		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
 	}
 	warn := reconcileInto(&cs, "homebrew", recordedVer, rs)
+	return cs, warn
+}
+
+// assessCask は自前 tap の cask 版を照合する(homebrew と同型・状態一元化・依頼④)。
+// Formula と同じ tap を同じ TapStore で probe するので、両者が 1 つの status に並ぶ。
+func assessCask(ctx context.Context, cs statusChannel, ch config.ResolvedChannel, token, recordedVer string) (statusChannel, *output.Warning) {
+	tapOwner, tapRepo, ok := splitOwnerName(ch.Target)
+	if !ok {
+		return recordedOnly(cs, recordedVer, "tap unresolved — set 'github' or 'cask.tap'"), nil
+	}
+	ck := &channel.Cask{Token: token, Tap: ch.Target, Store: newTapStore(tapOwner, tapRepo, os.Getenv("GITHUB_TOKEN"))}
+	rs, err := ck.Probe(ctx)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not published yet"), probeFailedWarning(ch.Target, err)
+	}
+	warn := reconcileInto(&cs, "cask", recordedVer, rs)
 	return cs, warn
 }
 

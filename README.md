@@ -79,10 +79,17 @@ not duplicate it (a generated map can't go stale; a hand-written table can).
 
 ## Channels
 
-Owned (wharfy publishes directly): `homebrew`, `scoop`, `apt`, `rpm`, `container` (ghcr,
-multi-arch), `aur`, `script` (`curl | sh`), `goinstall`.
+Owned (wharfy publishes directly): `homebrew`, `cask` (GUI apps), `scoop`, `apt`, `rpm`,
+`container` (ghcr, multi-arch), `aur`, `script` (`curl | sh`), `goinstall`.
 Gated (wharfy prepares a PR and tracks it, never merges — and won't open a second PR while
 an earlier one is still under review): `winget`, `homebrew-core`.
+
+For a GUI app you ship a built, signed bundle (`.dmg`/`.zip`) instead of compiling — declare
+`bundle:` (BYO-bundle, the GUI counterpart of `prebuilt:`) and wharfy uploads it to the Release
+and writes a Homebrew **Cask** to the *same tap* as your Formula (`cask` defaults to token
+`<project>-app`, tap `<owner>/homebrew-<project>`), so `wharfy status` lists CLI Formula and GUI
+Cask together. wharfy never re-signs; a non-notarized bundle gets a Gatekeeper `caveats` note in
+the cask.
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels
