@@ -1101,6 +1101,11 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	}
 
 	names := expectedPackages(cfg, version, ext)
+	if cfg.Bundle {
+		// BYO-bundle(GUI・依頼③): deb/rpm は各アプリが持ち込む。パッケージ名(<app>-app)は
+		// バンドラ生成物に焼き込まれており、wharfy は名前を付け替えずそのまま同じ hosted repo に上げる。
+		names = bundlePackageNames(in, ext)
+	}
 	item := channel.PlanItem{
 		Channel: chName, Kind: channel.KindOwned, OwnedArtifact: repo,
 		Action: channel.ActionCreate, Diff: packageDiff(names, repo),
@@ -1133,8 +1138,15 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	}
 
 	// BYO-binary(依頼① #3): 持ち込みバイナリから nfpm で deb/rpm を作る(GoReleaser を通さない)。
+	// BYO-bundle(依頼③): 持ち込みの deb/rpm をそのまま使う(生成しない・ext フィルタで該当分だけ上げる)。
 	var pkgs []build.Artifact
-	if cfg.Prebuilt {
+	if cfg.Bundle {
+		p, perr := build.ValidateBundles(root, toBundles(in))
+		if perr != nil {
+			return buildErrorResult(c, perr)
+		}
+		pkgs = p
+	} else if cfg.Prebuilt {
 		p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
 		if perr != nil {
 			return buildErrorResult(c, perr)
@@ -1241,6 +1253,21 @@ func expectedPackages(cfg config.Config, version, ext string) []string {
 	var out []string
 	for _, arch := range goarch {
 		out = append(out, fmt.Sprintf("%s_%s_linux_%s%s", cfg.Project, version, arch, ext))
+	}
+	return out
+}
+
+// bundlePackageNames は BYO-bundle(GUI)で持ち込む deb/rpm の実ファイル名を返す(preview 表示用)。
+// 命名はバンドラ生成物に従う(wharfy は付け替えない)ので、宣言パスの basename をそのまま出す。
+func bundlePackageNames(in config.File, ext string) []string {
+	if in.Bundle == nil {
+		return nil
+	}
+	var out []string
+	for _, b := range in.Bundle.Bundles {
+		if filepath.Ext(b.Path) == ext {
+			out = append(out, filepath.Base(b.Path))
+		}
 	}
 	return out
 }

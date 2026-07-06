@@ -79,7 +79,11 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		archs []build.Artifact
 		berr  error
 	)
-	if cfg.Prebuilt {
+	if cfg.Bundle {
+		// BYO-bundle(GUI・依頼①③): 持ち込みバンドル(.dmg/.exe/.AppImage/.deb/.rpm)を再 archive せず
+		// そのまま Release アセットにする。AppImage はここで直 DL 可能になる(ポータブル・依頼③)。
+		archs, berr = bundleRelease(ctx, root, cfg, version, in)
+	} else if cfg.Prebuilt {
 		archs, berr = prebuiltRelease(ctx, root, cfg, in, version)
 	} else {
 		configPath, err := writeGeneratedConfig(root, cfg, in, version)
