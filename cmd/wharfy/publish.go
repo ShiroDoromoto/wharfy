@@ -388,7 +388,8 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		}
 		st.Publish["cask"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
 		item.Action = channel.ActionUpdate
-		return item, nil, nil
+		w := caskNotarizeWarning(cfg, in) // 依頼⑤: 非 notarized を一括発行でも先出し
+		return item, &w, nil
 
 	case "scoop":
 		bucket := channelTargetByName(cfg, "scoop")
@@ -1736,6 +1737,17 @@ func caskArtifacts(archs []build.Artifact, ghOwner, ghRepo, version string) []ch
 	return out
 }
 
+// caskNotarizeWarning は非 notarized バンドルを Cask で配る際の Gatekeeper 挙動を明示する(依頼⑤)。
+// wharfy は再署名も notarize もしない(relay)ので、初回起動で警告が出ることを利用者/エージェントに
+// 先出しする。回避手順は cask の caveats にも書いてある。machine-readable なコードで agent が拾える。
+func caskNotarizeWarning(cfg config.Config, in config.File) output.Warning {
+	name := caskDisplayName(cfg, in)
+	return output.Warning{
+		Code:    output.WarnDarwinUnnotarized,
+		Message: name + " ships without notarization — macOS Gatekeeper warns on first launch; the cask caveats tell users to right-click → Open (wharfy does not notarize)",
+	}
+}
+
 // caskPublisher は bundle 成果物から Cask Publisher を組む(homebrewPublisher の対)。
 func caskPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, ghOwner, ghRepo, version string, archs []build.Artifact) *channel.Cask {
 	return &channel.Cask{
@@ -1776,7 +1788,9 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 			return buildErrorResult(c, aerr)
 		}
 		pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
-		return ownedReleaseDryRun(ctx, c, pub, version, "cask", tap, tagMissing)
+		res := ownedReleaseDryRun(ctx, c, pub, version, "cask", tap, tagMissing)
+		res.Warnings = append(res.Warnings, caskNotarizeWarning(cfg, in)) // 依頼⑤: 非 notarized を先出し
+		return res
 	}
 
 	if tagMissing {
@@ -1798,7 +1812,9 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 		archs = a
 	}
 	pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
-	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version)
+	res := ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version)
+	res.Warnings = append(res.Warnings, caskNotarizeWarning(cfg, in)) // 依頼⑤: 非 notarized を先出し
+	return res
 }
 
 // ownedReleaseDryRun は plan をプレビューする(書かない)。requires で実 apply の前提条件を先出し。

@@ -101,6 +101,34 @@ func TestPublishCaskApply(t *testing.T) {
 	}
 }
 
+// TestPublishCaskNotarizeAdvisory: cask は非 notarized を配るため、publish 出力に darwin_unnotarized
+// の advisory を先出しする(依頼⑤)。preview でも apply でも出る。
+func TestPublishCaskNotarizeAdvisory(t *testing.T) {
+	root := scratchBundle(t, "releases, cask")
+	tagScratch(t, root, "v0.1.0")
+	chdir(t, root)
+
+	rel := channel.NewInMemoryReleaseStore()
+	defer swapReleaseStore(rel)()
+	tap := channel.NewInMemoryTapStore()
+	defer swapTapStore(tap)()
+
+	// preview
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"cask"})
+	if !hasWarning(res, "darwin_unnotarized") {
+		t.Errorf("preview should advise non-notarized: %+v", res.Warnings)
+	}
+
+	// apply
+	t.Setenv("GITHUB_TOKEN", "tok")
+	defer func() { flagYes = false }()
+	flagYes = true
+	res = runPublish(context.Background(), mustLookup(t, "publish"), []string{"cask"})
+	if !hasWarning(res, "darwin_unnotarized") {
+		t.Errorf("apply should advise non-notarized: %+v", res.Warnings)
+	}
+}
+
 // TestPublishCaskPreview: cask の dry-run はローカルでバンドルを検証して差分を見せるだけで、
 // アップロードも tap への書き込みもしない(差分を見せてから書く・02/03)。
 func TestPublishCaskPreview(t *testing.T) {
