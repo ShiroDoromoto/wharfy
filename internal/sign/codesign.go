@@ -50,8 +50,9 @@ func (e *FailedError) Unwrap() error { return e.Err }
 
 // SignFile は path の macOS Mach-O を opts.Identity で **in-place** 署名する。
 // 呼び出し側は利用者の元バイナリではなくステージ済みコピーの path を渡すこと(元を変異させない)。
-// P12 指定時は一時キーチェーンに import→署名→破棄する(グローバルのキーチェーン検索列は触らず、
-// codesign --keychain で対象を限定する)。identity 未指定で呼ぶのは誤り(先に opts.Enabled を見る)。
+// P12 指定時は一時キーチェーンに import→(検索列へ一時追加)→署名→(検索列を原状復帰)→破棄する。
+// codesign の identity 名解決は検索リストを見るため一時追加は必須だが、後始末で必ず戻すのでグローバルは
+// 汚さない(依頼書五通目)。identity 未指定で呼ぶのは誤り(先に opts.Enabled を見る)。
 func (s *Signer) SignFile(ctx context.Context, opts Options, path string) error {
 	if opts.Identity == "" {
 		return &FailedError{Err: fmt.Errorf("no signing identity")}
@@ -112,7 +113,45 @@ func (s *Signer) importP12(ctx context.Context, opts Options) (string, func(), e
 			return "", func() {}, &FailedError{Err: fmt.Errorf("security %s: %w", st[0], err), Output: redact(string(out), opts.P12Pass)}
 		}
 	}
+
+	// codesign の `--sign <CN>` は identity 名をキーチェーン検索リスト(security list-keychains -d user)
+	// から解決する。--keychain は「署名に使う鍵の在り処」を絞るだけで名前解決のスコープにはならないため、
+	// 一時キーチェーンを検索リストへ載せないと `<CN>: no identity found` になる(依頼書五通目)。
+	// 現在の検索列を退避 → 一時kc を先頭へ差し込み、cleanup で必ず原状復帰する(グローバルは汚さない)。
+	prev, err := s.userKeychains(ctx)
+	if err != nil {
+		cleanup()
+		return "", func() {}, &FailedError{Err: fmt.Errorf("security list-keychains: %w", err), Output: redact(err.Error(), opts.P12Pass)}
+	}
+	newList := append([]string{keychain}, prev...)
+	if out, err := s.Run(ctx, "security", append([]string{"list-keychains", "-d", "user", "-s"}, newList...)...); err != nil {
+		cleanup()
+		return "", func() {}, &FailedError{Err: fmt.Errorf("security list-keychains -s: %w", err), Output: redact(string(out), opts.P12Pass)}
+	}
+	// 検索列の復帰 → キーチェーン削除の順に後始末する(成否に関わらず defer される)。
+	cleanup = func() {
+		_, _ = s.Run(ctx, "security", append([]string{"list-keychains", "-d", "user", "-s"}, prev...)...)
+		_, _ = s.Run(ctx, "security", "delete-keychain", keychain)
+	}
 	return keychain, cleanup, nil
+}
+
+// userKeychains は現在のユーザ検索リスト(security list-keychains -d user)を返す。
+// 出力は 1 行 1 パスで、前置の空白と囲みのダブルクォートが付くため剥がす。
+func (s *Signer) userKeychains(ctx context.Context) ([]string, error) {
+	out, err := s.Run(ctx, "security", "list-keychains", "-d", "user")
+	if err != nil {
+		return nil, err
+	}
+	var list []string
+	for _, line := range strings.Split(string(out), "\n") {
+		p := strings.TrimSpace(line)
+		p = strings.Trim(p, `"`)
+		if p != "" {
+			list = append(list, p)
+		}
+	}
+	return list, nil
 }
 
 // redact は診断出力から P12 パスワードを伏せる(万一 security がエラーで引数を反響しても漏らさない)。
