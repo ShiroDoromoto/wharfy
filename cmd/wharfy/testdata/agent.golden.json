@@ -54,7 +54,7 @@
     },
     {
       "name": "sign",
-      "summary": "sign \u0026 notarize what can be signed",
+      "summary": "codesign macOS binaries with your identity (opt-in; skipped if none)",
       "next": [
         "release"
       ]

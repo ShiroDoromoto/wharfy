@@ -48,7 +48,7 @@ var Commands = []Command{
 	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}},
 	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}},
 	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}},
-	{Name: "sign", Summary: "sign & notarize what can be signed", Next: []string{"release"}},
+	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh)", Next: []string{"publish"}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}},
 	{Name: "verify", Summary: "install from each channel and run it"},

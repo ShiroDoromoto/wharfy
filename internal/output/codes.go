@@ -31,6 +31,7 @@ const (
 	ErrTagMissing         = "tag_missing"          // tag 上でない/tag が無い
 	ErrBuildFailed        = "build_failed"         // クロスビルド失敗
 	ErrBuilderUnavailable = "builder_unavailable"  // 下層ビルダ(GoReleaser)が見つからない/起動不可
+	ErrSignFailed         = "sign_failed"          // 署名失敗(codesign 不在/失敗・依頼①)
 	ErrTokenMissing       = "token_missing"        // その操作に必須のトークン未設定
 	ErrAuthFailed         = "auth_failed"          // トークン/鍵はあるが認証失敗
 	ErrKeychainFailed     = "keychain_failed"      // OS keychain への保存/読み出しに失敗(ロック/権限)
@@ -77,6 +78,7 @@ var Catalog = []CatalogEntry{
 	{ErrTagMissing, KindError, "tag 上でない/tag が無い"},
 	{ErrBuildFailed, KindError, "クロスビルド失敗"},
 	{ErrBuilderUnavailable, KindError, "下層ビルダが見つからない/起動不可"},
+	{ErrSignFailed, KindError, "署名失敗(codesign 不在/失敗)"},
 	{ErrTokenMissing, KindError, "その操作に必須のトークン未設定"},
 	{ErrAuthFailed, KindError, "トークン/鍵はあるが認証失敗"},
 	{ErrKeychainFailed, KindError, "OS keychain への保存/読み出しに失敗(ロック/権限)"},

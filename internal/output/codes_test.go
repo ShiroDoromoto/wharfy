@@ -39,6 +39,7 @@ var expectedCodes = []string{
 	"network_error",
 	"probe_failed",
 	"publish_failed",
+	"sign_failed",
 	"tag_missing",
 	"tap_will_be_created",
 	"target_create_failed",

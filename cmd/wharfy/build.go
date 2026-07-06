@@ -13,6 +13,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
+	"github.com/ShiroDoromoto/wharfy/internal/sign"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
@@ -151,6 +152,27 @@ func buildErrorResult(c registry.Command, berr error) output.Result {
 		}
 		res.Errors = []output.Problem{{Code: output.ErrBuildFailed, Message: failed.Error(), Hint: hint}}
 		res.Next = []output.NextDo{{Reason: "fix the error then retry", Do: "wharfy build"}}
+		return res
+	}
+	// sign 段(依頼①)の失敗は release 中に起こりうる。設定/環境起因なので internal(バグ)にせず
+	// sign_failed で分類し、素通しで隠さず fail loud にする。
+	var signUnavail *sign.UnavailableError
+	if errors.As(berr, &signUnavail) {
+		res := output.New(c.Name, "sign failed: codesign unavailable", false)
+		res.Errors = []output.Problem{{Code: output.ErrSignFailed, Message: signUnavail.Error(),
+			Hint: "codesign is macOS-only — run release on macOS, or drop sign.identity to bring your own pre-signed binaries"}}
+		res.Next = []output.NextDo{{Reason: "sign on macOS or remove sign.identity", Do: "wharfy release --yes"}}
+		return res
+	}
+	var signFailed *sign.FailedError
+	if errors.As(berr, &signFailed) {
+		res := output.New(c.Name, "sign failed", false)
+		hint := "check the signing identity / certificate"
+		if signFailed.Output != "" {
+			hint = signFailed.Output
+		}
+		res.Errors = []output.Problem{{Code: output.ErrSignFailed, Message: signFailed.Error(), Hint: hint}}
+		res.Next = []output.NextDo{{Reason: "fix signing then retry", Do: "wharfy release --yes"}}
 		return res
 	}
 	return internalError(c, berr)

@@ -96,7 +96,13 @@ uploads them to the Release and drives the GUI channels (defaults to `[cask, rel
 - **Windows** — **Scoop** app manifest (`<project>-app`, portable zip with a Start-menu shortcut)
   and **winget** (gated PR, portable-zip installer).
 
-wharfy never re-signs; a non-notarized macOS bundle gets a Gatekeeper `caveats` note in the cask.
+For **bundles**, wharfy relays them as-is and never re-signs — a non-notarized macOS bundle gets a
+Gatekeeper `caveats` note in the cask. For a **prebuilt CLI binary** (`prebuilt:`), signing is an
+opt-in stage: set `sign: { identity: … }` (a keychain certificate name, or `WHARFY_SIGN_IDENTITY`;
+for CI, a portable `.p12` via `WHARFY_SIGN_P12` + `WHARFY_SIGN_P12_PASSWORD`) and wharfy codesigns
+the macOS Mach-O **before** cutting checksums. With no identity it leaves your pre-signed binaries
+untouched, and secrets stay in env — never in `wharfy.yaml` or generated files. Notarization is
+never required (self-signed completes).
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels

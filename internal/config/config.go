@@ -23,6 +23,7 @@ type File struct {
 	Prebuilt    *PrebuiltInput  `yaml:"prebuilt"`
 	Bundle      *BundleInput    `yaml:"bundle"`
 	Build       *BuildInput     `yaml:"build"`
+	Sign        *SignInput      `yaml:"sign"`
 	Homebrew    *HomebrewInput  `yaml:"homebrew"`
 	Cask        *CaskInput      `yaml:"cask"`
 	Scoop       *ScoopInput     `yaml:"scoop"`
@@ -145,6 +146,19 @@ type Bundle struct {
 	Kind   string `yaml:"kind"`
 	Path   string `yaml:"path"`
 	SHA256 string `yaml:"sha256"`
+}
+
+// SignInput は sign 段の設定(依頼①: sign を advisory から実署名へ)。
+// identity が解決できなければ sign は従来どおり no-op(pre-signed 持ち込みを尊重)。
+// **秘密(P12 パスワード)は yaml にも生成物にも書かない** — env からのみ取る。
+//   - Identity: codesign の --sign 引数(キーチェーン上の証明書名。例 "Developer ID Application: … (TEAMID)")。
+//     空なら env WHARFY_SIGN_IDENTITY にフォールバック。これがローカル署名(証明書がキーチェーン常駐)の経路。
+//   - P12: 可搬 PKCS#12(.p12)のパス。指定すると wharfy が一時キーチェーンに import してから署名し、後始末する
+//     (CI 等・証明書がキーチェーンに無い環境向け)。空なら env WHARFY_SIGN_P12。
+//     パスワードは env WHARFY_SIGN_P12_PASSWORD からのみ。P12 使用時も Identity(証明書名)は必須。
+type SignInput struct {
+	Identity string `yaml:"identity"`
+	P12      string `yaml:"p12"`
 }
 
 type HomebrewInput struct {

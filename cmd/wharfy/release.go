@@ -122,7 +122,13 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 	if !ok {
 		return nil, fmt.Errorf("cannot resolve github owner/repo from %q", cfg.Github)
 	}
-	archs, err := build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
+	// sign 段(依頼①): identity があれば darwin バイナリを archive の**前**に署名する。
+	// これで archive の checksum は署名後の実体を反映する(署名でハッシュが変わるため順序が要点)。
+	bins, _, err := signPrebuiltBinaries(ctx, root, resolveSignOptions(in), toPrebuiltBinaries(in))
+	if err != nil {
+		return nil, err
+	}
+	archs, err := build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), bins)
 	if err != nil {
 		return nil, err
 	}
