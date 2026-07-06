@@ -21,6 +21,24 @@ var newBuilder = func(distDir string) build.Builder {
 	return build.NewGoReleaserBuilder(distDir)
 }
 
+// newPrebuiltBuilder は BYO-binary の Builder 生成点(依頼①)。GoReleaser を使わず、
+// 持ち込みバイナリを検証する。テストで差し替え可能にするため var で持つ。
+var newPrebuiltBuilder = func(bins []build.PrebuiltBinary) build.Builder {
+	return &build.PrebuiltBuilder{Binaries: bins}
+}
+
+// toPrebuiltBinaries は config の持ち込みバイナリ宣言を build 層の値に写す(依存方向のため変換)。
+func toPrebuiltBinaries(in config.File) []build.PrebuiltBinary {
+	if in.Prebuilt == nil {
+		return nil
+	}
+	out := make([]build.PrebuiltBinary, 0, len(in.Prebuilt.Binaries))
+	for _, b := range in.Prebuilt.Binaries {
+		out = append(out, build.PrebuiltBinary{OS: b.OS, Arch: b.Arch, Path: b.Path, SHA256: b.SHA256})
+	}
+	return out
+}
+
 // nowUTC は時刻取得の差し替え点(記録の at をテストで固定する)。
 var nowUTC = func() time.Time { return time.Now().UTC() }
 
@@ -54,19 +72,31 @@ func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result
 		return internalError(c, rerr)
 	}
 
-	// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない・03)。
-	glYAML, err := config.GenerateGoReleaser(cfg, in)
-	if err != nil {
-		return internalError(c, err)
-	}
-	configPath, err := config.WriteGoReleaser(root, glYAML)
-	if err != nil {
-		return internalError(c, err)
-	}
-
-	artifacts, berr := newBuilder(config.DistDir).Build(ctx, root, configPath)
-	if berr != nil {
-		return buildErrorResult(c, berr)
+	// BYO-binary(依頼①): ビルドせず、持ち込みバイナリを検証して成果物にする。GoReleaser も
+	// その設定生成も通らない(非 Go リポでは main が無く生成できない)。
+	var (
+		artifacts []build.Artifact
+		berr      error
+	)
+	if cfg.Prebuilt {
+		artifacts, berr = newPrebuiltBuilder(toPrebuiltBinaries(in)).Build(ctx, root, "")
+		if berr != nil {
+			return buildErrorResult(c, berr)
+		}
+	} else {
+		// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない・03)。
+		glYAML, err := config.GenerateGoReleaser(cfg, in)
+		if err != nil {
+			return internalError(c, err)
+		}
+		configPath, err := config.WriteGoReleaser(root, glYAML)
+		if err != nil {
+			return internalError(c, err)
+		}
+		artifacts, berr = newBuilder(config.DistDir).Build(ctx, root, configPath)
+		if berr != nil {
+			return buildErrorResult(c, berr)
+		}
 	}
 
 	// ローカル記録に反映(速い基点。真実は status で実体照合・04)。

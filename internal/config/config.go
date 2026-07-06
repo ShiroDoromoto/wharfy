@@ -20,6 +20,7 @@ type File struct {
 	License     string          `yaml:"license"`
 	Channels    []string        `yaml:"channels"`
 	RuntimeDeps []RuntimeDep    `yaml:"runtime_deps"`
+	Prebuilt    *PrebuiltInput  `yaml:"prebuilt"`
 	Build       *BuildInput     `yaml:"build"`
 	Homebrew    *HomebrewInput  `yaml:"homebrew"`
 	Scoop       *ScoopInput     `yaml:"scoop"`
@@ -94,6 +95,29 @@ type BuildInput struct {
 	LdflagsExtra []string `yaml:"ldflags_extra"`
 }
 
+// PrebuiltInput は BYO-binary モードの入力(言語非依存化・依頼①)。
+// 宣言があると **ビルド(コンパイル)責務は利用者側へ移る**: wharfy は自前ビルドせず、
+// ここで渡されたビルド済みバイナリを package→release→publish に流すだけになる。
+// これにより Go 以外(Rust/cargo 等)のプロジェクトも載る。GoReleaser のビルド行列
+// (goos/goarch/main/ldflags)は使わない — 版はバイナリ側で確定済みが前提。
+//   - Version: 任意。空なら git tag が版の真実(既存挙動と同じ)。
+//   - Binaries: (os,arch)→ビルド済みバイナリのパス。最低 1 要素。
+type PrebuiltInput struct {
+	Version  string           `yaml:"version"`
+	Binaries []PrebuiltBinary `yaml:"binaries"`
+}
+
+// PrebuiltBinary は 1 ターゲットのビルド済みバイナリ。
+//   - OS/Arch: 配布ターゲット(common.json の os/arch と同じ語彙: linux/darwin/windows, amd64/arm64)。
+//   - Path: 利用者 root からの相対パス。wharfy はここを archive 化・checksum する。
+//   - SHA256: 任意。空なら wharfy が計算する(持ち込み時の検証にも使える)。
+type PrebuiltBinary struct {
+	OS     string `yaml:"os"`
+	Arch   string `yaml:"arch"`
+	Path   string `yaml:"path"`
+	SHA256 string `yaml:"sha256"`
+}
+
 type HomebrewInput struct {
 	Tap          string   `yaml:"tap"`
 	Dependencies []string `yaml:"dependencies"`
@@ -118,6 +142,10 @@ type Config struct {
 	License  string            `json:"license,omitempty"`
 	Channels []ResolvedChannel `json:"channels"`
 	Build    *Build            `json:"build,omitempty"`
+	// Prebuilt=true は BYO-binary モード(依頼①)。ビルドは利用者側で済み、
+	// wharfy は配布(package 以降)だけを担う。true のとき Main は空で、Build 行列は
+	// 持ち込みバイナリの (os,arch) 由来。Go 専用チャネル(goinstall/homebrew-core)は外れる。
+	Prebuilt bool `json:"prebuilt,omitempty"`
 }
 
 // ResolvedChannel は解決済みチャネル 1 つ(名前・種別・発行先)。
@@ -140,9 +168,27 @@ type Build struct {
 var (
 	// DefaultChannels = 追加設定不要な owned 列(goinstall は Go ターゲット時のみ)。
 	DefaultChannels = []string{"homebrew", "scoop", "releases", "script", "goinstall"}
-	DefaultGOOS     = []string{"linux", "darwin", "windows"}
-	DefaultGOARCH   = []string{"amd64", "arm64"}
+	// DefaultPrebuiltChannels = BYO-binary(非 Go)時の既定列。goinstall は Go 専用なので外す(依頼②)。
+	DefaultPrebuiltChannels = []string{"homebrew", "scoop", "releases", "script"}
+	DefaultGOOS             = []string{"linux", "darwin", "windows"}
+	DefaultGOARCH           = []string{"amd64", "arm64"}
 )
+
+// goOnlyChannels は Go ツールチェーンを前提とし、BYO-binary(非 Go)では成立しないチャネル(依頼②)。
+//   - goinstall: そもそも `go install` 専用。
+//   - homebrew-core: wharfy が生成する source-build formula が `go build` 前提。
+var goOnlyChannels = map[string]bool{
+	"goinstall":     true,
+	"homebrew-core": true,
+}
+
+// PrebuiltCompatible は channel が BYO-binary モードで成立するかを返す(false=Go 専用で外す)。
+func PrebuiltCompatible(name string) bool { return !goOnlyChannels[name] }
+
+// IsPrebuilt は File が BYO-binary モード(ビルド済みバイナリ持ち込み)かを返す。
+func IsPrebuilt(in File) bool {
+	return in.Prebuilt != nil && len(in.Prebuilt.Binaries) > 0
+}
 
 // channelKind は各チャネルの種別。gated は審査制(winget / *-core)。それ以外は owned。
 var channelKind = map[string]string{

@@ -83,9 +83,17 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 
 	project := firstNonEmpty(in.Project, repo, r.moduleLast(), filepath.Base(r.Root))
 
+	prebuilt := IsPrebuilt(in)
+
 	// main が曖昧でも、他は解決した実効設定を返す(config.json は data 必須・main は任意)。
 	// 呼び出し側はこの err を ok=false + main_ambiguous の Problem に変換する(07「停止」)。
-	main, mainErr := r.resolveMain(in.Main, project)
+	// BYO-binary(prebuilt)ではビルドを wharfy がしないので main は不要 — `go list` を叩かず
+	// main は空のまま進める(非 Go リポで `cannot resolve 'main'` にならない・依頼①)。
+	var main string
+	var mainErr error
+	if !prebuilt {
+		main, mainErr = r.resolveMain(in.Main, project)
+	}
 
 	homepage := in.Homepage
 	if homepage == "" && github != "" {
@@ -97,16 +105,40 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 		license = detectLicense(r.Root)
 	}
 
+	build := resolveBuild(in.Build)
+	if prebuilt {
+		build = prebuiltBuild(in.Prebuilt) // 行列は持ち込みバイナリの (os,arch) から導く
+	}
+
 	cfg := Config{
 		Project:  project,
 		Main:     main,
 		Github:   github,
 		Homepage: homepage,
 		License:  license,
-		Channels: r.resolveChannels(in, owner, github, project),
-		Build:    resolveBuild(in.Build),
+		Channels: r.resolveChannels(in, owner, github, project, prebuilt),
+		Build:    build,
+		Prebuilt: prebuilt,
 	}
 	return cfg, mainErr
+}
+
+// prebuiltBuild は持ち込みバイナリの一覧から、重複を除いた (os, arch) 行列を宣言順で導く。
+// 既定 GOOS/GOARCH は使わない — 実際に持ち込まれたターゲットだけが配布対象(依頼①)。
+func prebuiltBuild(in *PrebuiltInput) *Build {
+	var goos, goarch []string
+	seenOS, seenArch := map[string]bool{}, map[string]bool{}
+	for _, b := range in.Binaries {
+		if b.OS != "" && !seenOS[b.OS] {
+			seenOS[b.OS] = true
+			goos = append(goos, b.OS)
+		}
+		if b.Arch != "" && !seenArch[b.Arch] {
+			seenArch[b.Arch] = true
+			goarch = append(goarch, b.Arch)
+		}
+	}
+	return &Build{GOOS: goos, GOARCH: goarch}
 }
 
 // resolveMain は main の明示値を優先し、無ければ検出する。曖昧なら停止(07)。
@@ -131,13 +163,21 @@ func (r *Resolver) resolveMain(explicit, project string) (string, error) {
 }
 
 // resolveChannels は channels の明示値 or 既定列を、種別・発行先まで解決する。
-func (r *Resolver) resolveChannels(in File, owner, github, project string) []ResolvedChannel {
+// prebuilt(BYO-binary)では Go 専用チャネル(goinstall/homebrew-core)を落とす(依頼②)。
+// 明示指定を静かに握り潰さないため、落とした分は CLI 層が要求列と突き合わせて警告できる。
+func (r *Resolver) resolveChannels(in File, owner, github, project string, prebuilt bool) []ResolvedChannel {
 	names := in.Channels
 	if len(names) == 0 {
 		names = DefaultChannels
+		if prebuilt {
+			names = DefaultPrebuiltChannels
+		}
 	}
 	out := make([]ResolvedChannel, 0, len(names))
 	for _, name := range names {
+		if prebuilt && !PrebuiltCompatible(name) {
+			continue // Go 専用チャネルは非 Go では成立しないので外す(依頼②)
+		}
 		ch := ResolvedChannel{Name: name, Kind: Kind(name)}
 		switch name {
 		case "apt":

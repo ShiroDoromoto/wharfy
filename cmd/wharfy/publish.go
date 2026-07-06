@@ -39,6 +39,10 @@ var (
 	newCoreSubmitter   = func(token string) channel.CoreSubmitter { return channel.NewGitHubCoreSubmitter(token) }
 	newAurPusher       = func(sshKey string) channel.AurPusher { return channel.NewGitAurPusher(sshKey) }
 	newMultiReleaser   = func(distDir string) build.MultiReleaser { return build.NewGoReleaserBuilder(distDir) }
+	// newReleaseStore は BYO-binary のネイティブ Release アップローダ(依頼①・テストで差し替え)。
+	newReleaseStore = func(owner, repo, token string) channel.ReleaseStore {
+		return channel.NewGitHubReleaseStore(owner, repo, token)
+	}
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
@@ -225,6 +229,14 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	var archs []build.Artifact
 	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
 		archs = set.Artifacts
+	} else if cfg.Prebuilt {
+		// BYO-binary(依頼①): GoReleaser を通さず、自前 archive＋ネイティブ Release upload。
+		a, rerr := prebuiltRelease(ctx, root, cfg, in, version)
+		if rerr != nil {
+			return buildErrorResult(c, rerr)
+		}
+		_ = build.SaveArtifacts(root, version, a)
+		archs = a
 	} else {
 		a, rerr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, skipDocker)
 		if rerr != nil {
@@ -537,7 +549,7 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 	reqs := aurRequirements(tagMissing)
 
 	if !flagYes {
-		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		archs, aerr := previewArchives(ctx, root, cfg, in, configPath, version)
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -696,7 +708,7 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 	reqs := applyRequirements(tagMissing)
 
 	if !flagYes {
-		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		archs, aerr := previewArchives(ctx, root, cfg, in, configPath, version)
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -1218,8 +1230,8 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	}
 
 	if !flagYes {
-		// preview: snapshot でローカルに archive を作り(アップロードしない)、暫定 sha で差分を見せる。
-		archs, aerr := newArchiver(config.DistDir).Archives(ctx, root, configPath)
+		// preview: ローカルに archive を作り(アップロードしない)、暫定 sha で差分を見せる。
+		archs, aerr := previewArchives(ctx, root, cfg, in, configPath, version)
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -1235,7 +1247,7 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	}
 	// release が済んでいれば(同 version)再アップロードせず記録済み成果物を使う(工程の分離・c2)。
 	// 無ければ実リリースを走らせて実 sha256 を得る(--skip=homebrew・後方互換のフォールバック)。
-	archs, _, rerr := releaseArtifacts(ctx, root, configPath, version)
+	archs, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version)
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
@@ -1244,16 +1256,43 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 
 // releaseArtifacts は publish の apply で使う成果物を返す。release(同 version)が記録済みなら
 // 再アップロードせず再利用し(reused=true)、無ければ release パスを走らせて記録する(後方互換)。
-func releaseArtifacts(ctx context.Context, root, configPath, version string) ([]build.Artifact, bool, error) {
+// BYO-binary(依頼①)では GoReleaser を通さず、自前 archive＋ネイティブ Release upload を使う。
+func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.Config, in config.File, version string) ([]build.Artifact, bool, error) {
 	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
 		return set.Artifacts, true, nil
 	}
-	archs, err := newReleaser(config.DistDir).Release(ctx, root, configPath)
+	var (
+		archs []build.Artifact
+		err   error
+	)
+	if cfg.Prebuilt {
+		archs, err = prebuiltRelease(ctx, root, cfg, in, version)
+	} else {
+		archs, err = newReleaser(config.DistDir).Release(ctx, root, configPath)
+	}
 	if err != nil {
 		return nil, false, err
 	}
 	_ = build.SaveArtifacts(root, version, archs) // 後続の publish <ch> が再利用できるよう記録
 	return archs, false, nil
+}
+
+// previewArchives は dry-run 用にローカル archive を作り、暫定 sha を得る(アップロードしない)。
+// BYO-binary では持ち込みバイナリをそのまま archive 化する(実 sha になる)。それ以外は
+// GoReleaser の snapshot でローカル生成する。
+func previewArchives(ctx context.Context, root string, cfg config.Config, in config.File, configPath, version string) ([]build.Artifact, error) {
+	if cfg.Prebuilt {
+		return build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
+	}
+	return newArchiver(config.DistDir).Archives(ctx, root, configPath)
+}
+
+// prebuiltBinaryName は archive 内の実行ファイル名(既定は project、binary 明示で上書き)。
+func prebuiltBinaryName(cfg config.Config, in config.File) string {
+	if in.Binary != "" {
+		return in.Binary
+	}
+	return cfg.Project
 }
 
 func ownedSkip(c registry.Command, chName, reason string) output.Result {
@@ -1305,8 +1344,13 @@ func publishScript(ctx context.Context, c registry.Command, root string, cfg con
 	if err != nil {
 		return internalError(c, err)
 	}
-	// 実 release: archive ＋ install.sh(extra_files)を GitHub Releases へアップロード。
-	if _, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath); rerr != nil {
+	// 実 release: archive ＋ install.sh を GitHub Releases へアップロード。BYO-binary(依頼①)は
+	// GoReleaser を通さず、記録済み成果物を再利用 or ネイティブ upload(releaseArtifacts が両対応)。
+	if cfg.Prebuilt {
+		if _, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version); rerr != nil {
+			return buildErrorResult(c, rerr)
+		}
+	} else if _, rerr := newReleaser(config.DistDir).Release(ctx, root, configPath); rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
 	if st, err := state.Load(root, cfg.Project); err == nil {
@@ -1522,7 +1566,19 @@ func dryRunNext(item channel.PlanItem, reqs []requirement, chName string) []outp
 
 // writeGeneratedConfig は所有する生成物(goreleaser.yaml ＋ script 有効時は install.sh)を
 // .wharfy/ に書く(03)。install.sh は extra_files が参照するので、生成設定と必ず同時に書く。
+//
+// BYO-binary(依頼①)では GoReleaser 設定を生成しない(非 Go リポでは main が無く生成できない)。
+// install.sh だけ書き、configPath は空("")を返す — 後段の archive/release は prebuilt seam が
+// GoReleaser を通さず処理する。
 func writeGeneratedConfig(root string, cfg config.Config, in config.File, version string) (string, error) {
+	if cfg.Prebuilt {
+		if config.HasChannel(cfg, "script") {
+			if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
+				return "", err
+			}
+		}
+		return "", nil
+	}
 	glYAML, err := config.GenerateGoReleaser(cfg, in)
 	if err != nil {
 		return "", err

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/ShiroDoromoto/wharfy/internal/build"
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
@@ -70,12 +73,22 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if os.Getenv("GITHUB_TOKEN") == "" {
 		return tokenMissingResult(c)
 	}
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
+	// BYO-binary(依頼①): GoReleaser を使わず、持ち込みバイナリを自前で archive 化し
+	// GitHub Release へアップロードする(D-1: prebuilt builder は Pro 専用のため)。
+	var (
+		archs []build.Artifact
+		berr  error
+	)
+	if cfg.Prebuilt {
+		archs, berr = prebuiltRelease(ctx, root, cfg, in, version)
+	} else {
+		configPath, err := writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
+		// skipDocker=true: container はレジストリ push で release の範囲外(publish container が扱う)。
+		archs, berr = newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, true)
 	}
-	// skipDocker=true: container はレジストリ push で release の範囲外(publish container が扱う)。
-	archs, berr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, true)
 	if berr != nil {
 		return buildErrorResult(c, berr)
 	}
@@ -95,4 +108,46 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs}
 	res.Next = nextFromSpec(c) // publish
 	return withInitNudge(res)
+}
+
+// prebuiltRelease は BYO-binary の実リリース(依頼①)。持ち込みバイナリを archive 化し、
+// script チャネルがあれば install.sh も生成し、GitHub Release へ(同名は置換して)アップロードする。
+// 返す Archive 成果物(実 sha256)は Go 経路と同形なので、publish <ch> はこれをそのまま消費できる。
+func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in config.File, version string) ([]build.Artifact, error) {
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return nil, fmt.Errorf("cannot resolve github owner/repo from %q", cfg.Github)
+	}
+	archs, err := build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
+	if err != nil {
+		return nil, err
+	}
+
+	assets := make([]channel.ReleaseAsset, 0, len(archs)+1)
+	for _, a := range archs {
+		name := filepath.Base(a.Path)
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        name,
+			Path:        filepath.Join(root, a.Path),
+			ContentType: channel.AssetContentType(name),
+		})
+	}
+	// script チャネル: install.sh を生成し release に同梱する(Go 経路の extra_files 相当)。
+	if config.HasChannel(cfg, "script") {
+		p, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version))
+		if err != nil {
+			return nil, err
+		}
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        config.InstallScriptName,
+			Path:        p,
+			ContentType: channel.AssetContentType(config.InstallScriptName),
+		})
+	}
+
+	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
+	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets); err != nil {
+		return nil, &build.FailedError{Err: err}
+	}
+	return archs, nil
 }

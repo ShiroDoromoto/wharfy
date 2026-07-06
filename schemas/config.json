@@ -49,6 +49,10 @@
             }
           },
           "additionalProperties": false
+        },
+        "prebuilt": {
+          "type": "boolean",
+          "description": "BYO-binary モード。ビルド済みバイナリを配布する(言語非依存・依頼①)。true のとき main は空で、build 行列は持ち込みバイナリの (os,arch) 由来。Go 専用チャネル(goinstall/homebrew-core)は外れる。"
         }
       },
       "required": ["project", "channels"],

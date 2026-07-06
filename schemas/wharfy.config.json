@@ -54,6 +54,34 @@
         "additionalProperties": false
       }
     },
+    "prebuilt": {
+      "type": "object",
+      "description": "BYO-binary モード(言語非依存・依頼①)。宣言するとビルド(コンパイル)責務は利用者側へ移り、wharfy は自前ビルドせずここで渡すビルド済みバイナリを package→release→publish に流すだけになる。Go 以外(Rust/cargo 等)のプロジェクトはこれで載る。build(goos/goarch/ldflags 等)や main は使われない — 版はバイナリ側で確定済みが前提。",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "配布する版。省略時: git tag が版の真実(既定挙動)。"
+        },
+        "binaries": {
+          "type": "array",
+          "minItems": 1,
+          "description": "(os,arch)→ビルド済みバイナリのパス。実際に持ち込んだターゲットだけが配布対象になる(既定 GOOS/GOARCH は使わない)。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "os": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os" },
+              "arch": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/arch" },
+              "path": { "type": "string", "minLength": 1, "description": "利用者 root からの相対パス。wharfy がここを archive 化・checksum する。" },
+              "sha256": { "type": "string", "description": "任意。空なら wharfy が計算する(持ち込み検証にも使える)。" }
+            },
+            "required": ["os", "arch", "path"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["binaries"],
+      "additionalProperties": false
+    },
     "build": {
       "type": "object",
       "properties": {
