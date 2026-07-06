@@ -144,6 +144,50 @@ func TestRunSignP12WithoutIdentity(t *testing.T) {
 	validateAgainst(t, resultSchemaID, res)
 }
 
+// TestRunSignSurfacesCodesignStderr: codesign が落ちたら、その生 stderr を errors[].detail に
+// surface する(依頼書四通目=依頼③)。P12 パスワードは redact 済みで漏らさない。
+func TestRunSignSurfacesCodesignStderr(t *testing.T) {
+	root := scratchPrebuilt(t)
+	chdir(t, root)
+	if err := os.WriteFile(filepath.Join(root, "cert.p12"), []byte("p12"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WHARFY_SIGN_IDENTITY", "Developer ID Application: Foo")
+	t.Setenv("WHARFY_SIGN_P12", filepath.Join(root, "cert.p12"))
+	t.Setenv("WHARFY_SIGN_P12_PASSWORD", "s3cr3t")
+
+	prev := newSigner
+	s := &sign.Signer{
+		TempDir:  t.TempDir(),
+		LookPath: func(string) (string, error) { return "/usr/bin/x", nil },
+		Run: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			if name == "codesign" {
+				// 下層エラー(万一 stderr にパスワードが反響しても漏らさないことも確かめる)。
+				return []byte("dist/sign/...: errSecInternalComponent (pw=s3cr3t)"), os.ErrPermission
+			}
+			return nil, nil // security の各段(create/import/partition-list/delete)は成功
+		},
+	}
+	newSigner = func() *sign.Signer { return s }
+	defer func() { newSigner = prev }()
+
+	res := runSign(context.Background(), mustLookup(t, "sign"), nil)
+	if res.OK {
+		t.Fatalf("sign must fail when codesign fails: %+v", res)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("expected an error problem")
+	}
+	d := res.Errors[0].Detail
+	if !strings.Contains(d, "errSecInternalComponent") {
+		t.Errorf("detail should surface codesign stderr: %q", d)
+	}
+	if strings.Contains(d, "s3cr3t") {
+		t.Errorf("detail must not leak the p12 password: %q", d)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
 // TestReleasePrebuiltUnavailableCodesign: identity 指定済みなのに codesign が無い(非macOS等)は
 // 素通しで隠さず fail する(未署名を「署名済み」と誤認させない)。
 func TestReleasePrebuiltUnavailableCodesign(t *testing.T) {

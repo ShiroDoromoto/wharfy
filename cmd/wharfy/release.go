@@ -73,18 +73,15 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if os.Getenv("GITHUB_TOKEN") == "" {
 		return tokenMissingResult(c)
 	}
-	// BYO-binary(依頼①): GoReleaser を使わず、持ち込みバイナリを自前で archive 化し
-	// GitHub Release へアップロードする(D-1: prebuilt builder は Pro 専用のため)。
+	// BYO(依頼①): GoReleaser を使わず、持ち込み成果物を自前で archive 化し GitHub Release へ上げる
+	// (D-1: prebuilt builder は Pro 専用のため)。prebuilt(CLI)と bundle(GUI)は併用でき、両方
+	// 宣言されていれば両方をリリースする(片方を黙って落とさない=依頼書四通目 依頼②)。
 	var (
 		archs []build.Artifact
 		berr  error
 	)
-	if cfg.Bundle {
-		// BYO-bundle(GUI・依頼①③): 持ち込みバンドル(.dmg/.exe/.AppImage/.deb/.rpm)を再 archive せず
-		// そのまま Release アセットにする。AppImage はここで直 DL 可能になる(ポータブル・依頼③)。
-		archs, berr = bundleRelease(ctx, root, cfg, version, in)
-	} else if cfg.Prebuilt {
-		archs, berr = prebuiltRelease(ctx, root, cfg, in, version)
+	if cfg.Prebuilt || cfg.Bundle {
+		archs, berr = byoRelease(ctx, root, cfg, in, version)
 	} else {
 		configPath, err := writeGeneratedConfig(root, cfg, in, version)
 		if err != nil {
@@ -112,6 +109,32 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs}
 	res.Next = nextFromSpec(c) // publish
 	return withInitNudge(res)
+}
+
+// byoRelease は BYO モード(prebuilt=CLI / bundle=GUI)の実リリース。両方宣言されていれば
+// **両方**を同じ Release タグへ上げる(依頼書四通目=依頼②)。従来は if/else-if で bundle が
+// prebuilt を握り潰し、CLI アーカイブが黙って欠落 → publish が 404 を指す Formula を書く事故に
+// つながっていた。どちらか一方の宣言なら従来どおりその一方だけを出す。
+// 署名失敗(prebuilt 経路)はそのまま error として返し、release を fail させる(未署名の半端リリースを作らない)。
+func byoRelease(ctx context.Context, root string, cfg config.Config, in config.File, version string) ([]build.Artifact, error) {
+	var archs []build.Artifact
+	if cfg.Prebuilt {
+		a, err := prebuiltRelease(ctx, root, cfg, in, version)
+		if err != nil {
+			return nil, err
+		}
+		archs = append(archs, a...)
+	}
+	if cfg.Bundle {
+		// BYO-bundle(GUI・依頼①③): 持ち込みバンドル(.dmg/.exe/.AppImage/.deb/.rpm)を再 archive せず
+		// そのまま Release アセットにする。AppImage はここで直 DL 可能になる(ポータブル・依頼③)。
+		a, err := bundleRelease(ctx, root, cfg, version, in)
+		if err != nil {
+			return nil, err
+		}
+		archs = append(archs, a...)
+	}
+	return archs, nil
 }
 
 // prebuiltRelease は BYO-binary の実リリース(依頼①)。持ち込みバイナリを archive 化し、

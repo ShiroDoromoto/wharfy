@@ -94,7 +94,14 @@ func signErrorResult(c registry.Command, err error) output.Result {
 		hint = "codesign is macOS-only — run sign/release on macOS, or drop sign.identity to bring your own pre-signed binaries"
 	}
 	res := output.New(c.Name, "sign failed: "+err.Error(), false)
-	res.Errors = []output.Problem{{Code: output.ErrSignFailed, Message: err.Error(), Hint: hint}}
+	// 下層 codesign/security の生 stderr を surface する(依頼書四通目=依頼③)。redact 済みなので
+	// P12 パスワードは出さない。errSecInternalComponent 等の一次情報で利用者が自己解決できる。
+	prob := output.Problem{Code: output.ErrSignFailed, Message: err.Error(), Hint: hint}
+	var failed *sign.FailedError
+	if errors.As(err, &failed) {
+		prob.Detail = failed.Output
+	}
+	res.Errors = []output.Problem{prob}
 	res.Next = []output.NextDo{{Reason: "fix signing then retry", Do: "wharfy sign"}}
 	return res
 }

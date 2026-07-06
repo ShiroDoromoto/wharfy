@@ -233,17 +233,10 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	var archs []build.Artifact
 	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
 		archs = set.Artifacts
-	} else if cfg.Bundle {
-		// BYO-bundle(GUI・依頼①): 再 archive せず持ち込みバンドルをそのまま Release upload。
-		a, rerr := bundleRelease(ctx, root, cfg, version, in)
-		if rerr != nil {
-			return buildErrorResult(c, rerr)
-		}
-		_ = build.SaveArtifacts(root, version, a)
-		archs = a
-	} else if cfg.Prebuilt {
-		// BYO-binary(依頼①): GoReleaser を通さず、自前 archive＋ネイティブ Release upload。
-		a, rerr := prebuiltRelease(ctx, root, cfg, in, version)
+	} else if cfg.Prebuilt || cfg.Bundle {
+		// BYO(依頼①②): GoReleaser を通さず、自前 archive＋ネイティブ Release upload。
+		// prebuilt(CLI)と bundle(GUI)は併用でき、両方あれば両方を出す(片方を落とさない)。
+		a, rerr := byoRelease(ctx, root, cfg, in, version)
 		if rerr != nil {
 			return buildErrorResult(c, rerr)
 		}
@@ -781,8 +774,8 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 	// BYO-bundle(GUI・依頼③)は再 archive せず持ち込み zip をそのまま上げる。
 	var archs []build.Artifact
 	var rerr error
-	if cfg.Bundle {
-		archs, rerr = bundleRelease(ctx, root, cfg, version, in)
+	if cfg.Prebuilt || cfg.Bundle {
+		archs, rerr = byoRelease(ctx, root, cfg, in, version) // 併用時は両方を出す(依頼②)
 	} else {
 		archs, rerr = newReleaser(config.DistDir).Release(ctx, root, configPath)
 	}
@@ -1138,11 +1131,19 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 		repo = pushURL // 生 push のみ指定された場合は表示・記録に流用
 	}
 
-	names := expectedPackages(cfg, version, ext)
-	if cfg.Bundle {
-		// BYO-bundle(GUI・依頼③): deb/rpm は各アプリが持ち込む。パッケージ名(<app>-app)は
-		// バンドラ生成物に焼き込まれており、wharfy は名前を付け替えずそのまま同じ hosted repo に上げる。
-		names = bundlePackageNames(in, ext)
+	// preview のパッケージ名。BYO 併用時は CLI(prebuilt)＋GUI(bundle)の両方を出す(依頼②)。
+	var names []string
+	if cfg.Prebuilt || cfg.Bundle {
+		if cfg.Prebuilt {
+			names = append(names, expectedPackages(cfg, version, ext)...)
+		}
+		if cfg.Bundle {
+			// BYO-bundle(GUI・依頼③): deb/rpm は各アプリが持ち込む。パッケージ名(<app>-app)は
+			// バンドラ生成物に焼き込まれており、wharfy は名前を付け替えずそのまま同じ hosted repo に上げる。
+			names = append(names, bundlePackageNames(in, ext)...)
+		}
+	} else {
+		names = expectedPackages(cfg, version, ext)
 	}
 	item := channel.PlanItem{
 		Channel: chName, Kind: channel.KindOwned, OwnedArtifact: repo,
@@ -1178,18 +1179,23 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	// BYO-binary(依頼① #3): 持ち込みバイナリから nfpm で deb/rpm を作る(GoReleaser を通さない)。
 	// BYO-bundle(依頼③): 持ち込みの deb/rpm をそのまま使う(生成しない・ext フィルタで該当分だけ上げる)。
 	var pkgs []build.Artifact
-	if cfg.Bundle {
-		p, perr := build.ValidateBundles(root, toBundles(in))
-		if perr != nil {
-			return buildErrorResult(c, perr)
+	if cfg.Prebuilt || cfg.Bundle {
+		// 併用時は両方から該当拡張子(.deb/.rpm)を集める(依頼②)。prebuilt=CLI パッケージ(nfpm)、
+		// bundle=持ち込み GUI パッケージ。以降の ext フィルタで該当分だけ hosted repo に上げる。
+		if cfg.Prebuilt {
+			p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
+			if perr != nil {
+				return buildErrorResult(c, perr)
+			}
+			pkgs = append(pkgs, p...)
 		}
-		pkgs = p
-	} else if cfg.Prebuilt {
-		p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
-		if perr != nil {
-			return buildErrorResult(c, perr)
+		if cfg.Bundle {
+			p, perr := build.ValidateBundles(root, toBundles(in))
+			if perr != nil {
+				return buildErrorResult(c, perr)
+			}
+			pkgs = append(pkgs, p...)
 		}
-		pkgs = p
 	} else {
 		configPath, err := writeGeneratedConfig(root, cfg, in, version)
 		if err != nil {
@@ -1417,10 +1423,8 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 		archs []build.Artifact
 		err   error
 	)
-	if cfg.Bundle {
-		archs, err = bundleRelease(ctx, root, cfg, version, in)
-	} else if cfg.Prebuilt {
-		archs, err = prebuiltRelease(ctx, root, cfg, in, version)
+	if cfg.Prebuilt || cfg.Bundle {
+		archs, err = byoRelease(ctx, root, cfg, in, version) // 併用時は両方を出す(依頼②)
 	} else {
 		archs, err = newReleaser(config.DistDir).Release(ctx, root, configPath)
 	}
@@ -1435,12 +1439,25 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 // BYO-binary では持ち込みバイナリをそのまま archive 化する(実 sha になる)。それ以外は
 // GoReleaser の snapshot でローカル生成する。
 func previewArchives(ctx context.Context, root string, cfg config.Config, in config.File, configPath, version string) ([]build.Artifact, error) {
-	if cfg.Bundle {
-		// BYO-bundle は再 archive しない — 持ち込みバンドルを検証して実 sha 付き成果物にする(依頼③)。
-		return build.ValidateBundles(root, toBundles(in))
-	}
-	if cfg.Prebuilt {
-		return build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
+	if cfg.Prebuilt || cfg.Bundle {
+		// 併用時は両方の成果物を返す(依頼②)。dry-run なので prebuilt は署名前の暫定 sha。
+		var archs []build.Artifact
+		if cfg.Prebuilt {
+			a, err := build.ArchivePrebuilt(root, config.DistDir, cfg.Project, version, prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in))
+			if err != nil {
+				return nil, err
+			}
+			archs = append(archs, a...)
+		}
+		if cfg.Bundle {
+			// BYO-bundle は再 archive しない — 持ち込みバンドルを検証して実 sha 付き成果物にする(依頼③)。
+			a, err := build.ValidateBundles(root, toBundles(in))
+			if err != nil {
+				return nil, err
+			}
+			archs = append(archs, a...)
+		}
+		return archs, nil
 	}
 	return newArchiver(config.DistDir).Archives(ctx, root, configPath)
 }
@@ -1502,9 +1519,9 @@ func publishScript(ctx context.Context, c registry.Command, root string, cfg con
 	if err != nil {
 		return internalError(c, err)
 	}
-	// 実 release: archive ＋ install.sh を GitHub Releases へアップロード。BYO-binary(依頼①)は
+	// 実 release: archive ＋ install.sh を GitHub Releases へアップロード。BYO(依頼①②)は
 	// GoReleaser を通さず、記録済み成果物を再利用 or ネイティブ upload(releaseArtifacts が両対応)。
-	if cfg.Prebuilt {
+	if cfg.Prebuilt || cfg.Bundle {
 		if _, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version); rerr != nil {
 			return buildErrorResult(c, rerr)
 		}

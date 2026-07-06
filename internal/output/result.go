@@ -44,10 +44,13 @@ type Warning struct {
 }
 
 // Problem は致命エラー(ok=false の時)。Hint は任意の解消ヒント(09)。
+// Detail は下層コマンドの生 stderr 等の診断文(依頼書四通目=依頼③)。秘密は redact 済みで渡すこと。
+// 自己解決に効く一次情報(codesign/security の errSecInternalComponent 等)を握り潰さないためのフィールド。
 type Problem struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Hint    string `json:"hint,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // New は schema_version と最低限の next を埋めた Result を作る。
@@ -84,6 +87,11 @@ func emitTo(w io.Writer, r Result, asJSON bool) {
 		fmt.Fprintf(w, "  ! %s: %s\n", e.Code, e.Message)
 		if e.Hint != "" {
 			fmt.Fprintf(w, "    %s\n", e.Hint)
+		}
+		if e.Detail != "" {
+			for _, ln := range strings.Split(strings.TrimRight(e.Detail, "\n"), "\n") {
+				fmt.Fprintf(w, "    | %s\n", ln)
+			}
 		}
 	}
 	for _, wn := range r.Warnings {

@@ -35,12 +35,13 @@
       "additionalProperties": false
     },
     "problem": {
-      "description": "致命エラー(ok=false の時)。hint は任意の解消ヒント。",
+      "description": "致命エラー(ok=false の時)。hint は任意の解消ヒント。detail は下層コマンドの生診断文(秘密は redact 済み)。",
       "type": "object",
       "properties": {
         "code": { "type": "string", "minLength": 1 },
         "message": { "type": "string", "minLength": 1 },
-        "hint": { "type": "string" }
+        "hint": { "type": "string" },
+        "detail": { "type": "string" }
       },
       "required": ["code", "message"],
       "additionalProperties": false

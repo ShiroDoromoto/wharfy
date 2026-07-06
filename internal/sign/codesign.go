@@ -101,7 +101,10 @@ func (s *Signer) importP12(ctx context.Context, opts Options) (string, func(), e
 		{"create-keychain", "-p", kcPass, keychain},
 		{"unlock-keychain", "-p", kcPass, keychain},
 		{"import", opts.P12, "-k", keychain, "-P", opts.P12Pass, "-T", "/usr/bin/codesign", "-f", "pkcs12"},
-		{"set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", kcPass, keychain},
+		// partition-list には codesign: が要る(依頼書四通目=依頼①)。apple-tool:/apple: だけだと
+		// /usr/bin/codesign から鍵アクセスが拒否され(errSecInternalComponent)、続く codesign --sign が
+		// exit 1 で落ちる。新しめの macOS ほど partition-list に厳格でこれが露見する。
+		{"set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", kcPass, keychain},
 	}
 	for _, st := range steps {
 		if out, err := s.Run(ctx, "security", st...); err != nil {

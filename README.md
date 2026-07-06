@@ -96,13 +96,24 @@ uploads them to the Release and drives the GUI channels (defaults to `[cask, rel
 - **Windows** — **Scoop** app manifest (`<project>-app`, portable zip with a Start-menu shortcut)
   and **winget** (gated PR, portable-zip installer).
 
+`prebuilt:` (CLI) and `bundle:` (GUI) can be declared **together** — one `wharfy release` ships both
+the CLI archives (and `install.sh`) and the GUI bundles to the same Release, and each channel reuses
+its own artifacts.
+
 For **bundles**, wharfy relays them as-is and never re-signs — a non-notarized macOS bundle gets a
 Gatekeeper `caveats` note in the cask. For a **prebuilt CLI binary** (`prebuilt:`), signing is an
 opt-in stage: set `sign: { identity: … }` (a keychain certificate name, or `WHARFY_SIGN_IDENTITY`;
 for CI, a portable `.p12` via `WHARFY_SIGN_P12` + `WHARFY_SIGN_P12_PASSWORD`) and wharfy codesigns
-the macOS Mach-O **before** cutting checksums. With no identity it leaves your pre-signed binaries
-untouched, and secrets stay in env — never in `wharfy.yaml` or generated files. Notarization is
-never required (self-signed completes).
+the macOS Mach-O **before** cutting checksums. Secrets stay in env — never in `wharfy.yaml` or
+generated files. Notarization is never required (self-signed completes).
+
+**Bring your own pre-signed binaries.** Leave `sign.identity` unset (and export no
+`WHARFY_SIGN_IDENTITY`): wharfy signs nothing but still *respects* your binaries — codesign them
+yourself first, drop them at the `prebuilt:` paths, then `wharfy release` archives them verbatim (the
+checksums are of your signed bytes). So the interim workaround for a signing bug is simply to
+pre-sign and unset the identity. Note the asymmetry that keeps releases honest: a *configured*
+identity that then fails to sign is a **fatal** error (the pipeline stops rather than shipping an
+unsigned CLI), whereas *no* identity is a deliberate, allowed passthrough.
 
 The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
 `publish` — direct download and `curl | sh` install come from there, and the owned channels
