@@ -71,6 +71,34 @@ func TestGenerateScoopManifestDependencies(t *testing.T) {
 	}
 }
 
+// TestScoopUnwiredSkips: architecture に配線する成果物が無い(Archives 空)なら、Plan は skip を返し
+// Publish は何も書かない。空 architecture の壊れたマニフェストを黙って公開しない(依頼書七通目 §1)。
+func TestScoopUnwiredSkips(t *testing.T) {
+	in := scoopInput()
+	in.Archives = nil // bundle が portable zip を持ち込まなかったケース
+	store := NewInMemoryTapStore()
+	sc := &Scoop{Project: "widget", Bucket: "acme/scoop-widget", Store: store, Input: in}
+
+	item, err := sc.Plan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Action != ActionSkip {
+		t.Errorf("unwired Plan action = %q, want skip", item.Action)
+	}
+	if item.Reason == "" {
+		t.Errorf("unwired skip must carry a reason")
+	}
+
+	item2, pub, err := sc.Publish(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item2.Action != ActionSkip || pub.Commit != "" || store.Commits != 0 {
+		t.Errorf("unwired Publish must not write: action=%q commit=%q commits=%d", item2.Action, pub.Commit, store.Commits)
+	}
+}
+
 func mapFromJSON(t *testing.T, s string) map[string]any {
 	t.Helper()
 	var m map[string]any

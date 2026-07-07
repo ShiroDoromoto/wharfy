@@ -17,6 +17,12 @@ import (
 const wingetManifestVersion = "1.6.0"
 const wingetLocale = "en-US"
 
+// WingetUnwiredReason は installer に配線すべき成果物(windows zip)が無いときの skip 理由。
+// bundle(GUI)が NSIS/msi などのインストーラだけで portable zip を持ち込まないと、拾える archive が
+// 無く Installers が空になる。Installers:[] の壊れた申請を microsoft/winget-pkgs へ PR せず、原因と
+// 次手を明示する(scoop の空 architecture ガードと同型・様々な配布者を想定した堅牢化)。
+const WingetUnwiredReason = "no windows .zip wired to winget — the bundle ships no portable zip (winget's manifest needs a portable .zip, not an NSIS/msi installer). Ship a windows .zip bundle, or distribute the GUI another way"
+
 // WingetInstaller は 1 アーキの windows zip(中に exe)。
 type WingetInstaller struct {
 	Arch   string // amd64 | arm64

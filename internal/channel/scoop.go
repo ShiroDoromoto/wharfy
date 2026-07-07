@@ -50,6 +50,15 @@ type Scoop struct {
 
 func (s *Scoop) Name() string { return "scoop" }
 
+// ScoopUnwiredReason は architecture に配線すべき成果物(windows zip)が無いときの skip 理由。
+// bundle(GUI)が NSIS/msi などのインストーラだけで portable zip を持ち込まないと、拾える archive が
+// 無く architecture が空になる。壊れたマニフェストを黙って公開せず、原因と次手を明示する(依頼書七通目 §1)。
+const ScoopUnwiredReason = "no windows .zip wired to scoop — the bundle ships no portable zip (scoop needs a portable .zip, not an NSIS/msi installer). Ship a windows .zip bundle, or distribute the GUI via cask/winget"
+
+// wired は architecture に配線する成果物が在るか。空なら scoop は「現アーキ向けの成果物が未定義」と
+// 判断してインストールに失敗するので、そのマニフェストは publish しない(Plan で skip・Publish で書かない)。
+func (s *Scoop) wired() bool { return len(s.Input.Archives) > 0 }
+
 // ManifestRefs は scoop manifest が書く各 archive の (URL→sha256)。publish の自己検査に使う(#10)。
 func (s *Scoop) ManifestRefs() []ManifestRef {
 	out := make([]ManifestRef, 0, len(s.Input.Archives))
@@ -75,12 +84,18 @@ func (s *Scoop) ownedArtifact() string { return s.Bucket + ":" + s.ManifestPath(
 
 // Plan は manifest を生成し、bucket 上の現状と突き合わせて操作と差分を返す(書かない)。
 func (s *Scoop) Plan(ctx context.Context) (PlanItem, error) {
+	item := PlanItem{Channel: s.Name(), Kind: s.Kind(), OwnedArtifact: s.ownedArtifact()}
+	if !s.wired() {
+		// 空 architecture の壊れたマニフェストは公開しない(依頼書七通目 §1)。
+		item.Action = ActionSkip
+		item.Reason = ScoopUnwiredReason
+		return item, nil
+	}
 	want := GenerateScoopManifest(s.Input)
 	base, found, err := s.Store.Get(ctx, s.ManifestPath())
 	if err != nil {
 		return PlanItem{}, fmt.Errorf("probe bucket manifest: %w", err)
 	}
-	item := PlanItem{Channel: s.Name(), Kind: s.Kind(), OwnedArtifact: s.ownedArtifact()}
 	switch {
 	case !found:
 		item.Action = ActionCreate
@@ -100,7 +115,8 @@ func (s *Scoop) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	if err != nil {
 		return PlanItem{}, PubResult{}, err
 	}
-	if item.Action == ActionNoop {
+	if item.Action == ActionNoop || item.Action == ActionSkip {
+		// skip は architecture が空(配線不能)。壊れたマニフェストは書かない(依頼書七通目 §1)。
 		return item, PubResult{}, nil
 	}
 	want := GenerateScoopManifest(s.Input)

@@ -757,7 +757,12 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
-		files := channel.GenerateWingetManifests(buildInput(archs))
+		wi := buildInput(archs)
+		if len(wi.Installers) == 0 {
+			// 配線対象(portable zip)が無い。Installers:[] の壊れた申請を予告せず skip する(scoop §1 と同型)。
+			return gatedUnwiredSkip(c, "winget", channel.WingetUnwiredReason)
+		}
+		files := channel.GenerateWingetManifests(wi)
 		item := channel.PlanItem{
 			Channel: "winget", Kind: channel.KindGated,
 			OwnedArtifact: "microsoft/winget-pkgs (PR from fork)",
@@ -795,6 +800,10 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 		return buildErrorResult(c, rerr)
 	}
 	wi := buildInput(archs)
+	if len(wi.Installers) == 0 {
+		// 配線対象(portable zip)が無い。Installers:[] の壊れた申請を PR せず skip する(scoop §1 と同型)。
+		return gatedUnwiredSkip(c, "winget", channel.WingetUnwiredReason)
+	}
 	files := channel.GenerateWingetManifests(wi)
 	prURL, serr := newWingetSubmitter(token).Submit(ctx, wi, files)
 	if serr != nil {
@@ -1494,6 +1503,25 @@ func ownedSkip(c registry.Command, chName, reason string) output.Result {
 	return res
 }
 
+// ownedSkipItem は Publisher が返した skip(配線不能など)を surface する(依頼書七通目 §1)。
+// 何も書かず・state に記録せず、理由を warning に載せて「壊れたマニフェストを黙って出さなかった」ことを配布者に見せる。
+func ownedSkipItem(c registry.Command, chName string, item channel.PlanItem) output.Result {
+	res := publishResult(c, chName+" skipped — nothing to wire", true, []channel.PlanItem{item})
+	res.Warnings = []output.Warning{{Code: output.WarnChannelSkipped, Message: chName + " skipped: " + item.Reason}}
+	res.Next = []output.NextDo{{Reason: "wire an artifact " + chName + " can install, or drop " + chName + " for this bundle", Do: "wharfy config"}}
+	return res
+}
+
+// gatedUnwiredSkip は gated チャネル(winget 等)で配線対象が無いときの skip を surface する
+// (scoop §1 と同型)。空 installer の壊れた申請を PR せず、理由を warning に載せて配布者に見せる。
+func gatedUnwiredSkip(c registry.Command, chName, reason string) output.Result {
+	item := channel.PlanItem{Channel: chName, Kind: channel.KindGated, Action: channel.ActionSkip, Reason: reason}
+	res := publishResult(c, chName+" skipped — nothing to wire", true, []channel.PlanItem{item})
+	res.Warnings = []output.Warning{{Code: output.WarnChannelSkipped, Message: chName + " skipped: " + reason}}
+	res.Next = []output.NextDo{{Reason: "wire an artifact " + chName + " can install, or drop " + chName + " for this bundle", Do: "wharfy config"}}
+	return res
+}
+
 // publishScript は script チャネル(curl|sh インストーラ・03/07)。install.sh を生成し、
 // 実 release の extra_files で同梱アップロードする。書く前に install.sh の内容を見せる。
 func publishScript(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
@@ -1861,6 +1889,10 @@ func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Pub
 	if err != nil {
 		return probeFailedResult(c, err)
 	}
+	// 配線不能(空 architecture など)は skip。壊れたマニフェストを予告せず、理由を surface する(依頼書七通目 §1)。
+	if item.Action == channel.ActionSkip {
+		return ownedSkipItem(c, chName, item)
+	}
 	reqs := applyRequirements(tagMissing)
 	msg := "plan: " + item.Action + " " + item.OwnedArtifact
 	msg += previewNote(version, tagMissing, true)
@@ -1989,6 +2021,10 @@ func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publ
 		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: err.Error(), Hint: "check token scope and repo permissions"}}
 		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
 		return res
+	}
+	// 配線不能なら Publish は書いていない。published と偽らず・state に記録せず skip を surface する(依頼書七通目 §1)。
+	if item.Action == channel.ActionSkip {
+		return ownedSkipItem(c, chName, item)
 	}
 
 	if st, err := state.Load(root, project); err == nil {
