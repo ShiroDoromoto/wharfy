@@ -206,7 +206,8 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 			ContentType: channel.AssetContentType(name),
 		})
 	}
-	// script チャネル: install.sh を生成し release に同梱する(Go 経路の extra_files 相当)。
+	// script チャネル: install.sh(mac/Linux)と install.ps1(Windows)を生成し release に同梱する
+	// (Go 経路の extra_files 相当)。
 	if config.HasChannel(cfg, "script") {
 		p, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version))
 		if err != nil {
@@ -216,6 +217,15 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 			Name:        config.InstallScriptName,
 			Path:        p,
 			ContentType: channel.AssetContentType(config.InstallScriptName),
+		})
+		pp, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version))
+		if err != nil {
+			return nil, err
+		}
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        config.InstallPS1Name,
+			Path:        pp,
+			ContentType: channel.AssetContentType(config.InstallPS1Name),
 		})
 	}
 

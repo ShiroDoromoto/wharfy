@@ -61,7 +61,7 @@
     },
     {
       "name": "release",
-      "summary": "upload the github release (archives, packages, install.sh, latest.json)",
+      "summary": "upload the github release (archives, packages, install.sh, install.ps1, latest.json)",
       "next": [
         "publish"
       ]

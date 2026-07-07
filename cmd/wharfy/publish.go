@@ -1963,6 +1963,9 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 			if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
 				return "", err
 			}
+			if _, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version)); err != nil {
+				return "", err
+			}
 		}
 		return "", nil
 	}
@@ -1972,6 +1975,9 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 	}
 	if config.HasChannel(cfg, "script") {
 		if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
+			return "", err
+		}
+		if _, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version)); err != nil {
 			return "", err
 		}
 	}

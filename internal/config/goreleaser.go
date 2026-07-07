@@ -164,12 +164,12 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 	}
 
 	// release: github(owner/repo)が解決できる時だけ。最終フォールバック列(03)。
-	// script チャネルは install.sh を同じ release に extra_files で同梱するため release を要する。
+	// script チャネルは install.sh/install.ps1 を同じ release に extra_files で同梱するため release を要する。
 	if HasChannel(cfg, "releases") || HasChannel(cfg, "script") {
 		if owner, name, ok := splitOwnerRepo(cfg.Github); ok {
 			rel := &glRelease{GitHub: glRepository{Owner: owner, Name: name}, Mode: "replace"}
 			if HasChannel(cfg, "script") {
-				rel.ExtraFiles = []glExtraFile{{Glob: InstallScriptRelPath}}
+				rel.ExtraFiles = []glExtraFile{{Glob: InstallScriptRelPath}, {Glob: InstallPS1RelPath}}
 			}
 			gl.Release = rel
 		}
