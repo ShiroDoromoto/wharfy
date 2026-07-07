@@ -5,7 +5,7 @@ Ship one binary to every channel — a release/distribution CLI built for **AI a
 [![ci](https://github.com/ShiroDoromoto/wharfy/actions/workflows/ci.yml/badge.svg)](https://github.com/ShiroDoromoto/wharfy/actions/workflows/ci.yml)
 
 You declare what to build; wharfy cross-compiles it and ships it to Homebrew, Scoop,
-apt/rpm, containers, AUR, winget, `go install`, and a `curl | sh` installer — wrapping
+apt/rpm, containers, AUR, winget, `go install`, and a `curl | sh` / PowerShell installer — wrapping
 [GoReleaser](https://goreleaser.com/) and adding a self-describing, machine-readable surface.
 
 ## Why
@@ -84,7 +84,7 @@ not duplicate it (a generated map can't go stale; a hand-written table can).
 ## Channels
 
 Owned (wharfy publishes directly): `homebrew`, `cask` (GUI apps), `scoop`, `apt`, `rpm`,
-`container` (ghcr, multi-arch), `aur`, `script` (`curl | sh`), `goinstall`.
+`container` (ghcr, multi-arch), `aur`, `script` (`curl | sh` + PowerShell `irm | iex`, per-user), `goinstall`.
 Gated (wharfy prepares a PR and tracks it, never merges — and won't open a second PR while
 an earlier one is still under review): `winget`, `homebrew-core`.
 
