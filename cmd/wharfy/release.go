@@ -101,7 +101,14 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
 		}
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: nowUTC().Format(time.RFC3339)}
+		now := nowUTC().Format(time.RFC3339)
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		// script チャネルの実体(install.sh)はこの release が同梱アップロードしている。
+		// その事実を台帳へ書かないと publish script を後追いするまで script 記録が古いまま残り、
+		// status が実体(0.17.0)と記録(0.16.1)の drift=ahead を出す。releases と対で記録する。
+		if config.HasChannel(cfg, "script") {
+			st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
+		}
 		_ = state.Save(root, st)
 	}
 

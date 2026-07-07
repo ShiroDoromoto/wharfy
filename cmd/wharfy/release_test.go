@@ -58,6 +58,11 @@ func TestReleaseApplyRecordsArtifacts(t *testing.T) {
 	if st.Publish["releases"].Version != "2.0.0" {
 		t.Errorf("state should record releases@2.0.0: %+v", st.Publish["releases"])
 	}
+	// release は install.sh を同梱アップロードするので script 記録も対で進める(drift 防止)。
+	// これが無いと status が実体(install.sh)と記録の drift=ahead を出し、publish script を後追いさせる。
+	if st.Publish["script"].Version != "2.0.0" {
+		t.Errorf("state should record script@2.0.0: %+v", st.Publish["script"])
+	}
 	if !hasNextDo(res, "wharfy publish") {
 		t.Errorf("next should point to publish: %+v", res.Next)
 	}
