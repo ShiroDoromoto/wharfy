@@ -62,7 +62,7 @@ Then drive — start by asking the tool what it can do:
 wharfy agent                 # one-screen capability map (use --json from an agent)
 wharfy config                # the resolved effective config
 wharfy build                 # cross-compile (via GoReleaser) → artifacts
-wharfy release --yes         # upload the github release (archives, packages, install.sh)
+wharfy release --yes         # upload the github release (archives, packages, install.sh, latest.json)
 wharfy publish homebrew --dry-run   # preview the formula diff before writing
 wharfy publish --yes         # write each channel's manifest (reuses the release)
 wharfy status                # what's built / released / published / drifted, and the next move
@@ -115,12 +115,18 @@ pre-sign and unset the identity. Note the asymmetry that keeps releases honest: 
 identity that then fails to sign is a **fatal** error (the pipeline stops rather than shipping an
 unsigned CLI), whereas *no* identity is a deliberate, allowed passthrough.
 
-The GitHub Release itself (archives, deb/rpm, `install.sh`) is produced by `release`, not
-`publish` — direct download and `curl | sh` install come from there, and the owned channels
-above reuse it. (`wharfy publish` only accepts the channels listed here.) By default the
-`curl | sh` URL points at the latest GitHub Release asset; set `script: { base_url: … }` to
-advertise `install.sh` from your own domain or CDN instead (the install instructions and the
-`status` probe follow that URL).
+The GitHub Release itself (archives, deb/rpm, `install.sh`, `latest.json`) is produced by
+`release`, not `publish` — direct download and `curl | sh` install come from there, and the
+owned channels above reuse it. (`wharfy publish` only accepts the channels listed here.) By
+default the `curl | sh` URL points at the latest GitHub Release asset; set
+`script: { base_url: … }` to advertise `install.sh` from your own domain or CDN instead (the
+install instructions and the `status` probe follow that URL).
+
+`release` also writes a static `latest.json` (version + per-OS/arch asset URLs) to the same
+Release, so its stable URL
+`…/releases/latest/download/latest.json` is a vehicle-independent "is there a newer version?"
+check any product can poll — reading it and prompting the user is the product's job (see
+`schemas/latest.json` for the contract).
 
 Run `wharfy agent --json` for the live set and each channel's kind.
 
