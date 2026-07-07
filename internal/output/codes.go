@@ -39,6 +39,7 @@ const (
 	ErrInitWriteFailed    = "init_write_failed"    // init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)
 	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
+	ErrChecksumMismatch   = "checksum_mismatch"    // manifest の sha256 が実アセットと不一致(#10 自己検査)
 	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗(04)
 	ErrNetworkError       = "network_error"        // 一時的なネットワーク失敗
 	ErrVerifyFailed       = "verify_failed"        // verify で install/実行が失敗
@@ -86,6 +87,7 @@ var Catalog = []CatalogEntry{
 	{ErrInitWriteFailed, KindError, "init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)"},
 	{ErrConsentRequired, KindError, "strict gated への申請に明示同意が必要(未同意)"},
 	{ErrPublishFailed, KindError, "チャネルへの発行失敗"},
+	{ErrChecksumMismatch, KindError, "manifest の sha256 が実アセットと不一致(自己検査)"},
 	{ErrProbeFailed, KindError, "実体照合に失敗"},
 	{ErrNetworkError, KindError, "一時的なネットワーク失敗"},
 	{ErrVerifyFailed, KindError, "verify で install/実行が失敗"},

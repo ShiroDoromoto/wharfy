@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"testing"
 
@@ -27,14 +28,113 @@ func (f fakeArchiver) Release(context.Context, string, string) ([]build.Artifact
 	return f.arts, f.err
 }
 
-func sampleArchiveArtifacts() []build.Artifact {
-	return []build.Artifact{
-		{OS: "darwin", Arch: "arm64", Path: ".wharfy/dist/a.tar.gz", SHA256: "11"},
-		{OS: "darwin", Arch: "amd64", Path: ".wharfy/dist/b.tar.gz", SHA256: "22"},
-		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/c.tar.gz", SHA256: "33"},
-		{OS: "linux", Arch: "arm64", Path: ".wharfy/dist/d.tar.gz", SHA256: "44"},
-		{OS: "windows", Arch: "amd64", Path: ".wharfy/dist/e.zip", SHA256: "55"}, // formula は無視
+// sampleVersion は sampleArchiveArtifacts が使う既定版。apply 経路のテストはこの版で tag する
+// (publish の sha 自己検査 #10 が URL の資産名で突き合わせるため、artifact 名と tag 版を揃える)。
+const sampleVersion = "1.0.0"
+
+// sampleArchiveArtifacts は release が上げた成果物の疑似セット。Path basename を実アップロード名
+// (<project>_<version>_<os>_<arch>.<ext>)に一致させる — #10 の自己検査が URL の資産名で突き合わせるため、
+// 非現実的な名前(旧 a.tar.gz 等)だと検査に弾かれる。版を跨ぐ apply テストは namedArtifacts を使う。
+func sampleArchiveArtifacts() []build.Artifact { return namedArtifacts("demo", sampleVersion) }
+
+// namedArtifacts は project/version の実アップロード名を持つ疑似成果物を返す。
+func namedArtifacts(project, version string) []build.Artifact {
+	mk := func(os, arch, ext, sha string) build.Artifact {
+		return build.Artifact{
+			OS: os, Arch: arch, SHA256: sha,
+			Path: fmt.Sprintf(".wharfy/dist/%s_%s_%s_%s.%s", project, version, os, arch, ext),
+		}
 	}
+	return []build.Artifact{
+		mk("darwin", "arm64", "tar.gz", "11"),
+		mk("darwin", "amd64", "tar.gz", "22"),
+		mk("linux", "amd64", "tar.gz", "33"),
+		mk("linux", "arm64", "tar.gz", "44"),
+		mk("windows", "amd64", "zip", "55"), // formula は無視 / scoop・winget が使う
+	}
+}
+
+// TestFormulaArchivesExcludesBundles: prebuilt CLI + bundle(dmg/deb)併用時、formula は
+// CLI archive(Kind 空)だけを引き、bundle を混ぜない。混ぜると dmg(OS=darwin)が darwin/arm64 の
+// tarball 参照に dmg の sha を載せ、cask と同一 sha を記録して brew が全 artifact を弾く(request.md)。
+func TestFormulaArchivesExcludesBundles(t *testing.T) {
+	archs := []build.Artifact{
+		{OS: "darwin", Arch: "arm64", Path: ".wharfy/dist/cli_darwin_arm64.tar.gz", SHA256: "cli-darwin-arm64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/cli_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
+		{OS: "darwin", Arch: "arm64", Kind: "dmg", Path: ".wharfy/dist/app.dmg", SHA256: "dmg-darwin-arm64"},
+		{OS: "linux", Arch: "amd64", Kind: "deb", Path: ".wharfy/dist/app.deb", SHA256: "deb-linux-amd64"},
+	}
+	got := formulaArchives(archs, "acme", "widget-dist", "widget", "0.1.1")
+	if len(got) != 2 {
+		t.Fatalf("formula should keep only the 2 CLI archives, got %d: %+v", len(got), got)
+	}
+	for _, r := range got {
+		if r.OS == "darwin" && r.Arch == "arm64" && r.SHA256 != "cli-darwin-arm64" {
+			t.Errorf("darwin/arm64 must carry the CLI tarball sha, not a bundle sha: %+v", r)
+		}
+		if r.SHA256 == "dmg-darwin-arm64" || r.SHA256 == "deb-linux-amd64" {
+			t.Errorf("bundle sha leaked into formula archive: %+v", r)
+		}
+	}
+}
+
+// TestAurSourcesExcludesBundles: AUR も linux bundle(deb/rpm/appimage)を source archive に混ぜない。
+func TestAurSourcesExcludesBundles(t *testing.T) {
+	archs := []build.Artifact{
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/cli_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
+		{OS: "linux", Arch: "amd64", Kind: "deb", Path: ".wharfy/dist/app.deb", SHA256: "deb-linux-amd64"},
+	}
+	got := aurSources(archs, "acme", "widget-dist", "widget", "0.1.1")
+	if len(got) != 1 || got[0].SHA256 != "cli-linux-amd64" {
+		t.Fatalf("aur should keep only the CLI archive: %+v", got)
+	}
+}
+
+// TestVerifyManifestChecksums: manifest の (URL→sha) を実 artifact の sha と突き合わせ、
+// 一致は nil、不一致/URL 資産名の不在は error(#10 の自己検査 = #9 の多層防御)。
+func TestVerifyManifestChecksums(t *testing.T) {
+	archs := []build.Artifact{
+		{OS: "darwin", Arch: "arm64", Path: ".wharfy/dist/widget_0.1.1_darwin_arm64.tar.gz", SHA256: "cli-arm64"},
+		{OS: "darwin", Arch: "arm64", Kind: "dmg", Path: ".wharfy/dist/widget-app.dmg", SHA256: "dmg-arm64"},
+	}
+	base := "https://github.com/acme/widget-dist/releases/download/v0.1.1/"
+	hb := func(sha string) *channel.Homebrew {
+		return &channel.Homebrew{Input: channel.FormulaInput{Archives: []channel.ArchiveRef{
+			{OS: "darwin", Arch: "arm64", URL: base + "widget_0.1.1_darwin_arm64.tar.gz", SHA256: sha},
+		}}}
+	}
+	// 正: URL の指す tarball と記録 sha が一致。
+	if err := verifyManifestChecksums(hb("cli-arm64"), archs); err != nil {
+		t.Errorf("matching sha must pass: %v", err)
+	}
+	// 誤: #9 の型 — CLI tarball の URL に dmg の sha を載せる → fail。
+	if err := verifyManifestChecksums(hb("dmg-arm64"), archs); err == nil {
+		t.Error("bundle sha under a CLI tarball URL must fail")
+	}
+	// 誤: URL の指す資産が upload 済み成果物に無い(404 誘発)→ fail。
+	miss := &channel.Homebrew{Input: channel.FormulaInput{Archives: []channel.ArchiveRef{
+		{OS: "linux", Arch: "amd64", URL: base + "widget_0.1.1_linux_amd64.tar.gz", SHA256: "x"},
+	}}}
+	if err := verifyManifestChecksums(miss, archs); err == nil {
+		t.Error("a URL with no matching uploaded artifact must fail")
+	}
+	// 対象外: ChecksumSource 未実装の Publisher は素通り(nil)。
+	if err := verifyManifestChecksums(&notChecksumSource{}, archs); err != nil {
+		t.Errorf("non-ChecksumSource publisher must be skipped: %v", err)
+	}
+}
+
+// notChecksumSource は ChecksumSource を実装しない Publisher(検査対象外の確認用)。
+type notChecksumSource struct{}
+
+func (notChecksumSource) Name() string                                  { return "x" }
+func (notChecksumSource) Kind() string                                  { return channel.KindOwned }
+func (notChecksumSource) Plan(context.Context) (channel.PlanItem, error) { return channel.PlanItem{}, nil }
+func (notChecksumSource) Publish(context.Context) (channel.PlanItem, channel.PubResult, error) {
+	return channel.PlanItem{}, channel.PubResult{}, nil
+}
+func (notChecksumSource) Probe(context.Context) (channel.RemoteState, error) {
+	return channel.RemoteState{}, nil
 }
 
 // TestPublishDryRunValidatesSchema: plan プレビューの envelope が publish.json に valid。
@@ -118,7 +218,7 @@ func requirementUnmet(reqs []requirement, name string) bool {
 // TestPublishApplyWiring: --yes で tap に書き、状態に記録する(tag+token あり)。
 func TestPublishApplyWiring(t *testing.T) {
 	root := scratchModule(t)
-	tagScratch(t, root, "v1.2.3")
+	tagScratch(t, root, "v"+sampleVersion) // artifact 名と版を揃える(#10 の sha 自己検査)
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
 	defer swapReleaser(fakeArchiver{arts: sampleArchiveArtifacts()})() // 実リリースを fake 化

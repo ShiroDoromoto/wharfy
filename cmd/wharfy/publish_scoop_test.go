@@ -45,7 +45,7 @@ func TestPublishScoopDryRun(t *testing.T) {
 // --yes: 実 release(fake)→ bucket に manifest を書き、state に scoop/releases を記録。
 func TestPublishScoopApply(t *testing.T) {
 	root := scratchModule(t)
-	tagScratch(t, root, "v0.3.0")
+	tagScratch(t, root, "v"+sampleVersion) // artifact 名と版を揃える(#10 の sha 自己検査)
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
 	defer swapReleaser(fakeArchiver{arts: sampleArchiveArtifacts()})()

@@ -19,6 +19,15 @@ type Homebrew struct {
 func (h *Homebrew) Name() string { return "homebrew" }
 func (h *Homebrew) Kind() string { return KindOwned }
 
+// ManifestRefs は formula が書く各 archive の (URL→sha256)。publish の自己検査に使う(#10)。
+func (h *Homebrew) ManifestRefs() []ManifestRef {
+	out := make([]ManifestRef, 0, len(h.Input.Archives))
+	for _, a := range h.Input.Archives {
+		out = append(out, ManifestRef{URL: a.URL, SHA256: a.SHA256})
+	}
+	return out
+}
+
 // FormulaPath は tap 内の formula の場所(所有対象＝この path だけを書く)。
 func (h *Homebrew) FormulaPath() string {
 	return "Formula/" + h.Project + ".rb"

@@ -133,7 +133,7 @@ func sortedDeps(deps []string) []string {
 
 // SortArchives は os/arch で安定順にする(生成 formula を決定的にして diff/golden を安定させる)。
 func SortArchives(archives []ArchiveRef) {
-	sort.Slice(archives, func(i, j int) bool {
+	sort.SliceStable(archives, func(i, j int) bool {
 		if archives[i].OS != archives[j].OS {
 			return archives[i].OS < archives[j].OS
 		}

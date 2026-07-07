@@ -49,6 +49,15 @@ type Scoop struct {
 }
 
 func (s *Scoop) Name() string { return "scoop" }
+
+// ManifestRefs は scoop manifest が書く各 archive の (URL→sha256)。publish の自己検査に使う(#10)。
+func (s *Scoop) ManifestRefs() []ManifestRef {
+	out := make([]ManifestRef, 0, len(s.Input.Archives))
+	for _, a := range s.Input.Archives {
+		out = append(out, ManifestRef{URL: a.URL, SHA256: a.SHA256})
+	}
+	return out
+}
 func (s *Scoop) Kind() string { return KindOwned }
 
 // manifestName は manifest のファイル名(Token 優先・既定 Project)。

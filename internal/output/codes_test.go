@@ -24,6 +24,7 @@ var expectedCodes = []string{
 	"build_failed",
 	"builder_unavailable",
 	"channel_skipped",
+	"checksum_mismatch",
 	"config_invalid",
 	"consent_required",
 	"darwin_unnotarized",

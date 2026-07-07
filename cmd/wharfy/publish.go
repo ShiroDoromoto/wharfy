@@ -354,6 +354,9 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			return skip("tap unresolved")
 		}
 		hb := homebrewPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs)
+		if err := verifyManifestChecksums(hb, archs); err != nil { // #10: 書き込み前の自己検査(tap 作成より前で止める)
+			return channel.PlanItem{}, nil, err
+		}
 		if _, err := hb.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
 			return channel.PlanItem{}, nil, err
 		}
@@ -372,6 +375,9 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			return skip("cask tap unresolved")
 		}
 		ck := caskPublisher(cfg, in, tap, to, tr, ghOwner, ghRepo, version, archs)
+		if err := verifyManifestChecksums(ck, archs); err != nil { // #10: 書き込み前の自己検査
+			return channel.PlanItem{}, nil, err
+		}
 		if _, err := ck.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
 			return channel.PlanItem{}, nil, err
 		}
@@ -391,6 +397,9 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 			return skip("bucket unresolved")
 		}
 		sc := scoopPublisher(cfg, in, bucket, bo, br, ghOwner, ghRepo, version, archs)
+		if err := verifyManifestChecksums(sc, archs); err != nil { // #10: 書き込み前の自己検査
+			return channel.PlanItem{}, nil, err
+		}
 		if _, err := sc.EnsureRepo(ctx); err != nil { // 未作成なら bucket を作る(ADR-8)
 			return channel.PlanItem{}, nil, err
 		}
@@ -645,6 +654,9 @@ func aurSources(archs []build.Artifact, ghOwner, ghRepo, project, version string
 	for _, a := range archs {
 		if a.OS != "linux" {
 			continue
+		}
+		if a.Kind != "" {
+			continue // linux bundle(deb/rpm/appimage)は AUR の source archive ではない(formula と同じ sha 汚染を避ける)
 		}
 		name := fmt.Sprintf("%s_%s_linux_%s.tar.gz", project, version, a.Arch)
 		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
@@ -1409,7 +1421,12 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
-	return ownedReleaseApply(ctx, c, makePub(archs), root, cfg.Project, chName, target, cfg.Github, version)
+	pub := makePub(archs)
+	// 書き込み前の自己検査(#10): manifest の sha が実アセットと食い違えば止める(#9 の多層防御)。
+	if err := verifyManifestChecksums(pub, archs); err != nil {
+		return checksumMismatchResult(c, chName, err)
+	}
+	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, chName, target, cfg.Github, version)
 }
 
 // releaseArtifacts は publish の apply で使う成果物を返す。release(同 version)が記録済みなら
@@ -1829,6 +1846,10 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 		archs = a
 	}
 	pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
+	// 書き込み前の自己検査(#10): cask の url が指すバンドルと記録 sha が食い違えば止める。
+	if err := verifyManifestChecksums(pub, archs); err != nil {
+		return checksumMismatchResult(c, "cask", err)
+	}
 	res := ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version)
 	res.Warnings = append(res.Warnings, caskNotarizeWarning(cfg, in)) // 依頼⑤: 非 notarized を先出し
 	return res
@@ -2048,11 +2069,18 @@ func publishVersion(root string) (version string, tagMissing bool) {
 }
 
 // formulaArchives は build の archive(darwin/linux)を Releases の URL 付き ArchiveRef にする。
+// bundle(dmg/deb/rpm/appimage 等・Kind 非空)は formula の対象外。混ぜると URL は CLI の
+// <project>_<ver>_<os>_<arch>.tar.gz を指すのに sha だけ bundle のものになり(同一 os/arch の
+// dmg が darwin/arm64 の tarball 参照を汚染し cask と同一 sha を記録する)、brew が checksum 不一致で
+// 全 artifact を弾く事故になる。formula は CLI archive(Kind 空)だけを引く(cask は caskArtifacts が dmg/zip を引く)。
 func formulaArchives(archs []build.Artifact, ghOwner, ghRepo, project, version string) []channel.ArchiveRef {
 	var out []channel.ArchiveRef
 	for _, a := range archs {
 		if a.OS != "darwin" && a.OS != "linux" {
 			continue // homebrew は darwin/linux のみ
+		}
+		if a.Kind != "" {
+			continue // bundle(dmg/deb/rpm/appimage)は formula の archive ではない — cask/linuxrepo が扱う
 		}
 		name := fmt.Sprintf("%s_%s_%s_%s.tar.gz", project, version, a.OS, a.Arch)
 		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
@@ -2060,6 +2088,45 @@ func formulaArchives(archs []build.Artifact, ghOwner, ghRepo, project, version s
 	}
 	channel.SortArchives(out)
 	return out
+}
+
+// verifyManifestChecksums は pub(ChecksumSource)が manifest に書く各 (URL→sha256) を、その URL の
+// 資産名に対応する実 artifact の sha256 と突き合わせる(#10 の自己検査)。不一致、または URL の指す
+// 資産が upload 済み成果物に無い場合は非 nil を返し publish を止める。これで #9 のような『URL は CLI
+// tarball を指すのに sha は bundle のもの』という取り違えや、URL/資産名のずれ(404 誘発)を書き込み前に捕まえる。
+// sha を書かないチャネル(ChecksumSource 未実装=container/script/releases)は nil(検査対象外)。
+func verifyManifestChecksums(pub channel.Publisher, archs []build.Artifact) error {
+	src, ok := pub.(channel.ChecksumSource)
+	if !ok {
+		return nil
+	}
+	bySHA := make(map[string]string, len(archs))
+	for _, a := range archs {
+		bySHA[filepath.Base(a.Path)] = a.SHA256
+	}
+	for _, ref := range src.ManifestRefs() {
+		asset := ref.URL[strings.LastIndexByte(ref.URL, '/')+1:] // URL 末尾が upload 資産名
+		want, ok := bySHA[asset]
+		if !ok {
+			return fmt.Errorf("manifest references %q but no uploaded artifact carries that name", asset)
+		}
+		if !strings.EqualFold(want, ref.SHA256) {
+			return fmt.Errorf("sha256 mismatch for %s: manifest records %s but the uploaded artifact is %s", asset, ref.SHA256, want)
+		}
+	}
+	return nil
+}
+
+// checksumMismatchResult は自己検査(verifyManifestChecksums)失敗を error として返す(半端な tap push を防ぐ)。
+func checksumMismatchResult(c registry.Command, chName string, err error) output.Result {
+	res := output.New(c.Name, chName+" checksum self-check failed — refusing to publish a mismatched manifest", false)
+	res.Errors = []output.Problem{{
+		Code:    output.ErrChecksumMismatch,
+		Message: err.Error(),
+		Hint:    "the manifest sha256 does not match the uploaded asset; re-run 'wharfy release --yes' to rebuild artifacts, then retry publish",
+	}}
+	res.Next = []output.NextDo{{Reason: "rebuild artifacts then retry", Do: "wharfy release --yes"}}
+	return res
 }
 
 func splitOwnerName(s string) (owner, name string, ok bool) {

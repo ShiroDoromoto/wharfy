@@ -20,6 +20,15 @@ type Cask struct {
 func (c *Cask) Name() string { return "cask" }
 func (c *Cask) Kind() string { return KindOwned }
 
+// ManifestRefs は cask が書く各バンドルの (URL→sha256)。publish の自己検査に使う(#10)。
+func (c *Cask) ManifestRefs() []ManifestRef {
+	out := make([]ManifestRef, 0, len(c.Input.Artifacts))
+	for _, a := range c.Input.Artifacts {
+		out = append(out, ManifestRef{URL: a.URL, SHA256: a.SHA256})
+	}
+	return out
+}
+
 // CaskPath は tap 内の cask の場所(所有対象＝この path だけを書く)。
 func (c *Cask) CaskPath() string {
 	return "Casks/" + c.Token + ".rb"

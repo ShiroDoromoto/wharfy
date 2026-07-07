@@ -53,6 +53,20 @@ type Publisher interface {
 	Probe(ctx context.Context) (RemoteState, error)
 }
 
+// ManifestRef は manifest が書く 1 つの (ダウンロード URL → sha256) の対。publish の自己検査に使う(#10)。
+type ManifestRef struct {
+	URL    string
+	SHA256 string
+}
+
+// ChecksumSource は manifest に埋める (URL, sha256) 群を公開する Publisher(自己検査用・#10)。
+// homebrew/cask/scoop/aur/winget が実装する。sha を書かないチャネル(container/script/releases)は
+// 実装せず検査対象外(型アサーションで素通り)。publish は書き込み前にこれを実 artifact の sha と
+// 突き合わせ、URL の指す資産と記録 sha が食い違えば fail する(brew の checksum 不一致事故を生成時点で止める)。
+type ChecksumSource interface {
+	ManifestRefs() []ManifestRef
+}
+
 // TapStore は自前 tap(owned リポジトリ)への読み書き境界。
 // 実体は GitHub。テストは InMemoryTapStore で差し替える(末端は差し替え可能・01)。
 type TapStore interface {
