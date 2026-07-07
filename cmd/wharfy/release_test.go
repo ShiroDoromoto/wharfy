@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/build"
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
@@ -40,6 +41,8 @@ func TestReleaseApplyRecordsArtifacts(t *testing.T) {
 	arts := sampleArchiveArtifacts()
 	mr := &fakeMultiReleaser{arts: arts}
 	defer swapMultiReleaser(mr)()
+	// Go 経路でも release は latest.json(検知②)を同じ Release へ上げるので store を差し替える。
+	defer swapReleaseStore(channel.NewInMemoryReleaseStore())()
 	defer func() { flagYes = false }()
 	flagYes = true
 
@@ -76,6 +79,7 @@ func TestReleaseApplySkipsDocker(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "tok")
 	mr := &fakeMultiReleaser{arts: sampleArchiveArtifacts()}
 	defer swapMultiReleaser(mr)()
+	defer swapReleaseStore(channel.NewInMemoryReleaseStore())()
 	defer func() { flagYes = false }()
 	flagYes = true
 

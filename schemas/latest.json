@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wharfy.io/schemas/v1/latest.json",
+  "title": "wharfy latest.json (検知② 更新チェック契約)",
+  "description": "release フローが公開 Release に載せる静的な『最新版』記述子。ビークル非依存・OS 横断の『新版あり』検知に使う(doc/wip/installer-distribution-playbook.md §5)。安定 URL は https://github.com/<owner>/<repo>/releases/latest/download/latest.json。wharfy はこの JSON の生成・発行と契約定義まで担い、読み取り(自版比較・アプリ内更新通知)は各プロダクトの実行時実装が行う。照会は既定 ON・タイムアウト付き・失敗サイレント・結果キャッシュ・opt-out が推奨。",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "最新リリースの版(タグから先頭 v を除いた形。例: 1.2.3)。プロダクトは自版とこれを比較する。",
+      "type": "string",
+      "minLength": 1
+    },
+    "notes_url": {
+      "description": "そのリリースの notes ページ URL(releases/tag/v<version>)。",
+      "type": "string"
+    },
+    "assets": {
+      "description": "OS/CPU(＋パッケージ種別)別のダウンロード URL。キーは `<os>-<arch>`(アーカイブ)または `<os>-<arch>-<kind>`(deb/rpm/dmg/appimage/exe/msi/pkg)。os は macos/linux/windows、arch は x64/arm64/x86。フォールバック導線やアプリ内通知が参照する。",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "required": ["version", "assets"],
+  "additionalProperties": false
+}

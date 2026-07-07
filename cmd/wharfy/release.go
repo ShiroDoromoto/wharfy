@@ -97,6 +97,11 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if err := build.SaveArtifacts(root, version, archs); err != nil {
 		return internalError(c, err)
 	}
+	// 検知②: latest.json を同じ Release へ発行する(playbook §5)。Go/BYO 両経路が合流する
+	// ここで1度だけ行えば、経路に依らず「新版あり」の横串が揃う。
+	if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+		return internalError(c, err)
+	}
 	if st, err := state.Load(root, cfg.Project); err == nil {
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
@@ -142,6 +147,35 @@ func byoRelease(ctx context.Context, root string, cfg config.Config, in config.F
 		archs = append(archs, a...)
 	}
 	return archs, nil
+}
+
+// uploadLatestJSON は検知②の latest.json を生成し、同じ Release タグへ資産として上げる
+// (playbook §5)。全 release 経路(Go/BYO)共通の合流点で 1 度だけ行うため runRelease に置く。
+// tag/GITHUB_TOKEN は apply 経路で保証済み。github(owner/repo)を組めない等の個別失敗では
+// release 本体(バイナリは上がり済み)を壊さず skip する — latest.json は検知の付帯物ゆえ。
+func uploadLatestJSON(ctx context.Context, root string, cfg config.Config, version string, archs []build.Artifact) error {
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return nil // URL を組めない — 検知ファイルは skip(release 本体は成功済み)
+	}
+	assets := make([]config.LatestAsset, 0, len(archs))
+	for _, a := range archs {
+		assets = append(assets, config.LatestAsset{OS: a.OS, Arch: a.Arch, Name: filepath.Base(a.Path)})
+	}
+	content, ok := config.GenerateLatestJSON(cfg, version, assets)
+	if !ok {
+		return nil
+	}
+	p, err := config.WriteLatestJSON(root, content)
+	if err != nil {
+		return err
+	}
+	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
+	return store.Upload(ctx, "v"+version, cfg.Project+" "+version, []channel.ReleaseAsset{{
+		Name:        config.LatestJSONName,
+		Path:        p,
+		ContentType: channel.AssetContentType(config.LatestJSONName),
+	}})
 }
 
 // prebuiltRelease は BYO-binary の実リリース(依頼①)。持ち込みバイナリを archive 化し、

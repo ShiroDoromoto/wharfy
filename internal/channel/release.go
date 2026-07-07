@@ -255,6 +255,8 @@ func AssetContentType(name string) string {
 	switch {
 	case strings.HasSuffix(name, ".sh"):
 		return "text/x-shellscript"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
 	case strings.HasSuffix(name, ".zip"):
 		return "application/zip"
 	case strings.HasSuffix(name, ".tar.gz"):
