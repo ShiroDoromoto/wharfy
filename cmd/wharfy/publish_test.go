@@ -59,6 +59,7 @@ func namedArtifacts(project, version string) []build.Artifact {
 // sha だけ別ファイルのものになる:
 //   - darwin: dmg が darwin/arm64 tarball 参照を汚染し cask と同一 sha(request.md #9)
 //   - linux: 同 os/arch の .rpm/.deb(Kind 空)が tarball 参照を汚染(実 release で #10 自己検査が検出)
+//
 // Kind だけでは Linux Package を除けないため拡張子 .tar.gz で絞る。
 func TestFormulaArchivesKeepsOnlyTarballs(t *testing.T) {
 	archs := []build.Artifact{
@@ -138,9 +139,11 @@ func TestVerifyManifestChecksums(t *testing.T) {
 // notChecksumSource は ChecksumSource を実装しない Publisher(検査対象外の確認用)。
 type notChecksumSource struct{}
 
-func (notChecksumSource) Name() string                                  { return "x" }
-func (notChecksumSource) Kind() string                                  { return channel.KindOwned }
-func (notChecksumSource) Plan(context.Context) (channel.PlanItem, error) { return channel.PlanItem{}, nil }
+func (notChecksumSource) Name() string { return "x" }
+func (notChecksumSource) Kind() string { return channel.KindOwned }
+func (notChecksumSource) Plan(context.Context) (channel.PlanItem, error) {
+	return channel.PlanItem{}, nil
+}
 func (notChecksumSource) Publish(context.Context) (channel.PlanItem, channel.PubResult, error) {
 	return channel.PlanItem{}, channel.PubResult{}, nil
 }
