@@ -54,39 +54,50 @@ func namedArtifacts(project, version string) []build.Artifact {
 	}
 }
 
-// TestFormulaArchivesExcludesBundles: prebuilt CLI + bundle(dmg/deb)併用時、formula は
-// CLI archive(Kind 空)だけを引き、bundle を混ぜない。混ぜると dmg(OS=darwin)が darwin/arm64 の
-// tarball 参照に dmg の sha を載せ、cask と同一 sha を記録して brew が全 artifact を弾く(request.md)。
-func TestFormulaArchivesExcludesBundles(t *testing.T) {
+// TestFormulaArchivesKeepsOnlyTarballs: formula は .tar.gz archive だけを引き、bundle(dmg・Kind 有)も
+// GoReleaser の Linux Package(deb/rpm・Kind 空)も混ぜない。混ぜると URL は CLI の tarball を指すのに
+// sha だけ別ファイルのものになる:
+//   - darwin: dmg が darwin/arm64 tarball 参照を汚染し cask と同一 sha(request.md #9)
+//   - linux: 同 os/arch の .rpm/.deb(Kind 空)が tarball 参照を汚染(実 release で #10 自己検査が検出)
+// Kind だけでは Linux Package を除けないため拡張子 .tar.gz で絞る。
+func TestFormulaArchivesKeepsOnlyTarballs(t *testing.T) {
 	archs := []build.Artifact{
-		{OS: "darwin", Arch: "arm64", Path: ".wharfy/dist/cli_darwin_arm64.tar.gz", SHA256: "cli-darwin-arm64"},
-		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/cli_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
+		{OS: "darwin", Arch: "arm64", Path: ".wharfy/dist/widget_0.1.1_darwin_arm64.tar.gz", SHA256: "cli-darwin-arm64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
 		{OS: "darwin", Arch: "arm64", Kind: "dmg", Path: ".wharfy/dist/app.dmg", SHA256: "dmg-darwin-arm64"},
-		{OS: "linux", Arch: "amd64", Kind: "deb", Path: ".wharfy/dist/app.deb", SHA256: "deb-linux-amd64"},
+		// GoReleaser の Linux Package は Kind 空・同 os/arch(実バグの再現)。
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.rpm", SHA256: "rpm-linux-amd64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.deb", SHA256: "deb-linux-amd64"},
 	}
 	got := formulaArchives(archs, "acme", "widget-dist", "widget", "0.1.1")
 	if len(got) != 2 {
-		t.Fatalf("formula should keep only the 2 CLI archives, got %d: %+v", len(got), got)
+		t.Fatalf("formula should keep only the 2 tar.gz archives, got %d: %+v", len(got), got)
 	}
 	for _, r := range got {
 		if r.OS == "darwin" && r.Arch == "arm64" && r.SHA256 != "cli-darwin-arm64" {
-			t.Errorf("darwin/arm64 must carry the CLI tarball sha, not a bundle sha: %+v", r)
+			t.Errorf("darwin/arm64 must carry the CLI tarball sha: %+v", r)
 		}
-		if r.SHA256 == "dmg-darwin-arm64" || r.SHA256 == "deb-linux-amd64" {
-			t.Errorf("bundle sha leaked into formula archive: %+v", r)
+		if r.OS == "linux" && r.Arch == "amd64" && r.SHA256 != "cli-linux-amd64" {
+			t.Errorf("linux/amd64 must carry the CLI tarball sha, not a package sha: %+v", r)
+		}
+		for _, bad := range []string{"dmg-darwin-arm64", "rpm-linux-amd64", "deb-linux-amd64"} {
+			if r.SHA256 == bad {
+				t.Errorf("non-tarball sha leaked into formula archive: %+v", r)
+			}
 		}
 	}
 }
 
-// TestAurSourcesExcludesBundles: AUR も linux bundle(deb/rpm/appimage)を source archive に混ぜない。
-func TestAurSourcesExcludesBundles(t *testing.T) {
+// TestAurSourcesKeepsOnlyTarballs: AUR も Linux Package(deb/rpm・Kind 空)を source archive に混ぜない。
+func TestAurSourcesKeepsOnlyTarballs(t *testing.T) {
 	archs := []build.Artifact{
-		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/cli_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
-		{OS: "linux", Arch: "amd64", Kind: "deb", Path: ".wharfy/dist/app.deb", SHA256: "deb-linux-amd64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.tar.gz", SHA256: "cli-linux-amd64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.rpm", SHA256: "rpm-linux-amd64"},
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/widget_0.1.1_linux_amd64.deb", SHA256: "deb-linux-amd64"},
 	}
 	got := aurSources(archs, "acme", "widget-dist", "widget", "0.1.1")
 	if len(got) != 1 || got[0].SHA256 != "cli-linux-amd64" {
-		t.Fatalf("aur should keep only the CLI archive: %+v", got)
+		t.Fatalf("aur should keep only the tar.gz archive: %+v", got)
 	}
 }
 

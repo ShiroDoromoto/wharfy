@@ -655,8 +655,8 @@ func aurSources(archs []build.Artifact, ghOwner, ghRepo, project, version string
 		if a.OS != "linux" {
 			continue
 		}
-		if a.Kind != "" {
-			continue // linux bundle(deb/rpm/appimage)は AUR の source archive ではない(formula と同じ sha 汚染を避ける)
+		if !strings.HasSuffix(a.Path, ".tar.gz") {
+			continue // deb/rpm/appimage は AUR の source archive ではない(formula と同じ sha 汚染を避ける)
 		}
 		name := fmt.Sprintf("%s_%s_linux_%s.tar.gz", project, version, a.Arch)
 		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
@@ -2068,19 +2068,20 @@ func publishVersion(root string) (version string, tagMissing bool) {
 	return strings.TrimPrefix(tag, "v"), false
 }
 
-// formulaArchives は build の archive(darwin/linux)を Releases の URL 付き ArchiveRef にする。
-// bundle(dmg/deb/rpm/appimage 等・Kind 非空)は formula の対象外。混ぜると URL は CLI の
-// <project>_<ver>_<os>_<arch>.tar.gz を指すのに sha だけ bundle のものになり(同一 os/arch の
-// dmg が darwin/arm64 の tarball 参照を汚染し cask と同一 sha を記録する)、brew が checksum 不一致で
-// 全 artifact を弾く事故になる。formula は CLI archive(Kind 空)だけを引く(cask は caskArtifacts が dmg/zip を引く)。
+// formulaArchives は build の archive(darwin/linux の .tar.gz)を Releases の URL 付き ArchiveRef にする。
+// tar.gz 以外(bundle の dmg/appimage、Linux Package の deb/rpm、windows の zip)は formula の対象外。
+// 混ぜると URL は CLI の <project>_<ver>_<os>_<arch>.tar.gz を指すのに sha だけ別ファイルのものになり
+// (例: linux/amd64 の .rpm が同 os/arch の tarball 参照を汚染する / darwin の dmg が cask と同一 sha を
+// 記録する)、brew が checksum 不一致で全 artifact を弾く事故になる。Kind だけでは足りない — GoReleaser の
+// Linux Package(deb/rpm)は Kind 空で archive と同じ os/arch を持つため、拡張子 .tar.gz で厳密に絞る。
 func formulaArchives(archs []build.Artifact, ghOwner, ghRepo, project, version string) []channel.ArchiveRef {
 	var out []channel.ArchiveRef
 	for _, a := range archs {
 		if a.OS != "darwin" && a.OS != "linux" {
 			continue // homebrew は darwin/linux のみ
 		}
-		if a.Kind != "" {
-			continue // bundle(dmg/deb/rpm/appimage)は formula の archive ではない — cask/linuxrepo が扱う
+		if !strings.HasSuffix(a.Path, ".tar.gz") {
+			continue // deb/rpm/dmg/appimage 等は formula の archive ではない — cask/linuxrepo が扱う
 		}
 		name := fmt.Sprintf("%s_%s_%s_%s.tar.gz", project, version, a.OS, a.Arch)
 		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
