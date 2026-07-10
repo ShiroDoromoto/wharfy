@@ -77,6 +77,12 @@ The order is `build → sign → release → publish → verify` (what `wharfy a
 each channel's manifest against that release, so a mid-batch failure resumes safely without
 re-uploading. `wharfy publish` with no prior `release` still works — it runs the release itself.
 
+`verify` checks the published channels from the consumer's side. For `homebrew` it reads the
+formula off the tap and matches the version; for `apt`/`rpm` it also adds your repo inside a
+Debian/Fedora container, installs the package and runs it — a broken dependency or a wrong file
+layout fails there, not on your users' machines. The upload itself can't catch that: it returns
+`200` either way. Without docker the container step is skipped and reported, never failed.
+
 Every command also takes `--json` and ends with a `next:` block. **The authoritative,
 always-current list of commands and channels is `wharfy agent` itself** — this README does
 not duplicate it (a generated map can't go stale; a hand-written table can).
