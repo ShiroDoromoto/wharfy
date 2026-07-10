@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -82,6 +83,39 @@ func TestGenerateInstallPS1(t *testing.T) {
 	// PowerShell のエスケープ文字(バックティック)を含まない(Go raw string と衝突しないことの担保)。
 	if strings.Contains(s, "`") {
 		t.Errorf("install.ps1 must not contain backticks")
+	}
+}
+
+// psDriveQualifiedVar は "$Name:" 形式の変数参照。PowerShell はこれを $Name という変数ではなく
+// ドライブ修飾変数(${drive:name})の書きかけと読むので、パーサが即座に落ちる。$env: だけは正当。
+var psDriveQualifiedVar = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*):`)
+
+// install.ps1 は "$Project: ..." と書いた瞬間、実行前のパースで死ぬ。アーキ判定にすら届かない。
+// v0.15.0 で実際にそうなり、Windows の script 経路が丸ごと使えなかった。名前は ${Project} で括る。
+func TestGenerateInstallPS1HasNoDriveQualifiedVars(t *testing.T) {
+	s := GenerateInstallPS1(scriptConfig(), "1.2.3")
+	for i, line := range strings.Split(s, "\n") {
+		for _, m := range psDriveQualifiedVar.FindAllStringSubmatch(line, -1) {
+			if m[1] == "env" {
+				continue // $env:LOCALAPPDATA 等は正当なドライブ修飾
+			}
+			t.Errorf("install.ps1:%d: %q parses as a drive-qualified variable — write ${%s} instead\n  %s",
+				i+1, m[0], m[1], line)
+		}
+	}
+}
+
+// 検査そのものが効いていること。v0.15.0 が実際に配った行を与えると落ちる。
+func TestPSDriveQualifiedVarCatchesTheRegression(t *testing.T) {
+	broken := `  default { Write-Error "$Project: unsupported arch: $env:PROCESSOR_ARCHITECTURE"; exit 1 }`
+	var caught []string
+	for _, m := range psDriveQualifiedVar.FindAllStringSubmatch(broken, -1) {
+		if m[1] != "env" {
+			caught = append(caught, m[0])
+		}
+	}
+	if len(caught) != 1 || caught[0] != "$Project:" {
+		t.Errorf("the check must catch $Project: and leave $env: alone, caught %v", caught)
 	}
 }
 
