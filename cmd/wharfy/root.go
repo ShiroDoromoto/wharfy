@@ -21,6 +21,7 @@ var (
 	flagDryRun    bool
 	flagYes       bool
 	flagNoProbe   bool
+	flagInstall   bool
 	flagAckReview bool
 )
 
@@ -38,6 +39,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "show what would change; write nothing")
 	root.PersistentFlags().BoolVar(&flagYes, "yes", false, "apply changes to owned distribution (publish writes the tap)")
 	root.PersistentFlags().BoolVar(&flagNoProbe, "no-probe", false, "status: read records only; do not probe channel reality")
+	root.PersistentFlags().BoolVar(&flagInstall, "install", false, "verify: install from each channel and run it (default: probe only)")
 	root.PersistentFlags().BoolVar(&flagAckReview, "acknowledge-review", false, "strict gated channels (e.g. homebrew-core): acknowledge you meet the acceptance criteria before opening a PR")
 
 	for _, c := range registry.Commands {

@@ -79,20 +79,33 @@ re-uploading. `wharfy publish` with no prior `release` still works — it runs t
 
 `verify` checks the channels in your `channels:` from the consumer's side — that list is what
 decides the scope, not the publish history in `state.json` (a channel you dropped from the config
-is never verified, and its old record no longer makes `verify` green). For `homebrew` it reads the
-formula off the tap and matches the version; for `releases` it checks that every asset listed in the
-release's own manifest (`latest.json`, plus `checksums.txt` when GoReleaser wrote one) really exists
-on the release — a user following that manifest would otherwise hit a `404`. The binaries themselves
-are not downloaded, and a release carrying neither manifest is reported `skipped`, not verified.
-For `apt`/`rpm` it also adds your repo inside a
-Debian/Fedora container, installs the package and runs it — a broken dependency or a wrong file
-layout fails there, not on your users' machines. The upload itself can't catch that: it returns
-`200` either way. Without docker the container step is not run: the channel is reported `partial`,
-never failed. If **no** channel could be verified at all, `verify` exits non-zero with
-`nothing_to_verify` rather than reporting a green run it never made.
+is never verified, and its old record no longer makes `verify` green).
+
+By default it installs nothing: it probes each channel over the network, so you can run it on every
+CI build. For `homebrew` it reads the formula off the tap and matches the version; for `releases` it
+checks that every asset listed in the release's own manifest (`latest.json`, plus `checksums.txt`
+when GoReleaser wrote one) really exists on the release — a user following that manifest would
+otherwise hit a `404`. The binaries themselves are not downloaded, and a release carrying neither
+manifest is reported `skipped`, not verified. For `script` it fetches the published `install.sh` and
+matches the version it installs; for `goinstall` it asks the module proxy whether your tag resolves;
+for `apt`/`rpm` it reads the version out of the repo metadata. Those four have more to check than a
+probe can reach, so they are reported `partial`, never `verified`.
+
+`wharfy verify --install` goes the rest of the way and installs for real. `apt`/`rpm` add your repo
+inside a Debian/Fedora container, install the package and run it — a broken dependency or a wrong
+file layout fails there, not on your users' machines. The upload itself can't catch that: it returns
+`200` either way. `script` runs the published `install.sh` into a temporary `PREFIX`, and `goinstall`
+runs `go install` into a temporary `GOBIN`; both then run the binary they installed. Nothing lands on
+your `PATH`. When the tool a channel needs is absent (no docker, no `sh`, no `go`), that channel is
+reported `partial` with a warning — never failed. A `goinstall` binary is only required to run, not
+to report the right version: `go install` does not apply your ldflags, so a CLI that injects its
+version says `dev`.
+
+If **no** channel could be verified at all, `verify` exits non-zero with `nothing_to_verify` rather
+than reporting a green run it never made.
 
 `wharfy verify apt` narrows the run to a single channel — useful while you fix one, since the
-container steps are slow. A name absent from `channels:` is refused with `channel_not_configured`,
+`--install` steps are slow. A name absent from `channels:` is refused with `channel_not_configured`,
 exactly as `wharfy publish <channel>` refuses it.
 
 Every command also takes `--json` and ends with a `next:` block. **The authoritative,
