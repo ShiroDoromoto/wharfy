@@ -363,10 +363,12 @@ go vet ./...
 
 CI runs gofmt / vet / build / `go test -race` on every push and PR.
 
-One suite is opt-in, because it needs a real docker and a real network. It builds deliberately broken
-`.deb` packages — an unmet dependency, a binary off `PATH` — serves them from a local apt repo, and
-checks that `wharfy verify --install` fails on them (and passes on a healthy one). Everything else
-stubs docker out, so this is the only place the container step itself is exercised.
+One suite is behind a build tag, because it needs a real docker and a real network. It builds
+deliberately broken `.deb` and `.rpm` packages — an unmet dependency, a binary off `PATH` — serves
+them from a local apt/rpm repo, and checks that `wharfy verify --install` fails on them (and passes
+on a healthy one). Everything else stubs docker out, so this is the only place the container step
+itself is exercised. CI runs it as its own `docker-verify` job, so the fast suite above is never held
+up by image pulls and installs.
 
 ```sh
 go test -tags dockerverify ./cmd/wharfy/ -run TestDockerVerify -timeout 20m
