@@ -69,7 +69,11 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		return withStaleGeneratorWarning(root, c, res)
 	}
 
-	// apply: tag/token が要る(release は実アップロード)。
+	// apply: 版ズレ/tag/token が要る(release は実アップロード)。版ズレの検査はアップロードの前でなければ
+	// 意味がない — 生成物は実行中のバイナリが作るので、上がってから告げても手遅れ。
+	if res, blocked := staleGeneratorRefusal(root, c); blocked {
+		return res
+	}
 	if tagMissing {
 		return tagMissingResult(c, version)
 	}

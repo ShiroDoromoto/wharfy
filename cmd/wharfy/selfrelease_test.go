@@ -122,3 +122,52 @@ func TestWithStaleGeneratorWarning(t *testing.T) {
 		t.Errorf("HEAD 由来なのに warning: %+v", res.Warnings)
 	}
 }
+
+// apply(--yes)は版ズレのまま走らせない。警告はアップロード後にしか読まれないので、
+// 手前で止めるのが唯一の防波堤。逃げ道は --allow-stale-generator だけ。
+func TestStaleGeneratorRefusal(t *testing.T) {
+	restore := func(m, r func() string, allow bool) { selfModulePath, selfRevision, flagAllowStale = m, r, allow }
+	defer restore(selfModulePath, selfRevision, flagAllowStale)
+
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Dir(filepath.Dir(root)) // cmd/wharfy → repo root
+	c := registry.Command{Name: "release"}
+
+	selfModulePath = func() string { return selfModule }
+	selfRevision = func() string { return "dead" }
+	flagAllowStale = false
+	res, blocked := staleGeneratorRefusal(root, c)
+	if !blocked {
+		t.Fatal("版ズレなのに apply を通した")
+	}
+	if res.OK {
+		t.Error("拒否なのに ok=true")
+	}
+	if len(res.Errors) != 1 || res.Errors[0].Code != output.ErrStaleGeneratorBlocked {
+		t.Fatalf("errors = %+v, want 1 stale_generator_blocked", res.Errors)
+	}
+	if len(res.Next) != 2 || !strings.Contains(res.Next[1].Do, "--allow-stale-generator") {
+		t.Errorf("next = %+v, want a rebuild hint and an override hint", res.Next)
+	}
+
+	// 明示上書き: 進ませる(判断は人間が済ませた)。警告は withStaleGeneratorWarning が結果に残す。
+	flagAllowStale = true
+	if _, blocked := staleGeneratorRefusal(root, c); blocked {
+		t.Error("--allow-stale-generator なのに拒否した")
+	}
+
+	// HEAD 由来のバイナリ、および wharfy 以外の repo では発火しない。
+	flagAllowStale = false
+	selfRevision = func() string { return gitHeadRevision(root) }
+	if _, blocked := staleGeneratorRefusal(root, c); blocked {
+		t.Error("HEAD 由来なのに拒否した")
+	}
+	selfModulePath = func() string { return "example.com/other" }
+	selfRevision = func() string { return "dead" }
+	if _, blocked := staleGeneratorRefusal(root, c); blocked {
+		t.Error("他人の repo で拒否した")
+	}
+}

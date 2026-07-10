@@ -39,6 +39,7 @@ var expectedCodes = []string{
 	"publish_failed",
 	"sign_failed",
 	"stale_generator",
+	"stale_generator_blocked",
 	"tag_missing",
 	"tap_will_be_created",
 	"target_create_failed",

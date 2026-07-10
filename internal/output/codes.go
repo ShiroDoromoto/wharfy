@@ -61,7 +61,11 @@ const (
 	// ErrNothingToVerify: channels: のどのチャネルも検証できなかった(D-4)。「何も確かめられなかった」を
 	// 緑で返すと CI が壊れた配布を通すので、検証成功と区別して ok=false にする。
 	ErrNothingToVerify = "nothing_to_verify"
-	ErrInternal        = "internal" // 想定外(バグ)
+	// ErrStaleGeneratorBlocked: 版ズレ(WarnStaleGenerator と同じ事象)のまま apply(--yes)しようとした。
+	// 警告どまりで済むのは plan 経路だけで、--yes は非対話ゆえ警告が読まれる頃にはもう上がっている。
+	// 判断できる時点で止めるため、apply では警告ではなく拒否にする(--allow-stale-generator で上書き可)。
+	ErrStaleGeneratorBlocked = "stale_generator_blocked"
+	ErrInternal              = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -115,6 +119,7 @@ var Catalog = []CatalogEntry{
 	{ErrNetworkError, KindError, "一時的なネットワーク失敗"},
 	{ErrVerifyFailed, KindError, "verify で install/実行が失敗"},
 	{ErrNothingToVerify, KindError, "channels: のどのチャネルも検証できなかった(検証成功と区別する)"},
+	{ErrStaleGeneratorBlocked, KindError, "版ズレのまま --yes で apply しようとした(--allow-stale-generator で上書き可)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 
