@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -587,7 +589,8 @@ func latestJSON(version string, names ...string) string {
 	return string(b)
 }
 
-// latest.json が載せる資産がすべて Release に在る → verified。
+// 既定(--install 無し)は資産名の実在照合まで。名前が揃っても中身は見ていないので verified とは
+// 言わず probe で止める(D-4)。
 func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
 	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
 		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
@@ -601,10 +604,102 @@ func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("a release whose assets all exist should verify ok: %+v", res)
 	}
-	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusOK {
-		t.Errorf("releases check should be verified: %+v", ck)
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Fatalf("releases should stop at probe without --install: %+v", ck)
+	}
+	if !strings.Contains(ck[0].Message, "contents are unchecked") {
+		t.Errorf("the probe must say the contents were not checked: %q", ck[0].Message)
+	}
+	// probe で止めたことは warning にしない(既定どおりに動いただけ)。--install は next で案内する。
+	if len(res.Warnings) != 0 {
+		t.Errorf("probing by default should not warn: %+v", res.Warnings)
 	}
 	validateAgainst(t, resultSchemaID, res)
+}
+
+// --install: checksums マニフェストの sha256 と実資産が一致する → verified。
+func TestVerifyReleasesInstallChecksumsMatch(t *testing.T) {
+	assets := map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	}
+	assets["demo_1.2.0_checksums.txt"] = checksumsFor(assets, "demo_linux.tar.gz")
+	srv := ghReleaseServer(t, "v1.2.0", assets)
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+	withInstall(t)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("assets that match their sha256 should verify ok: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusOK {
+		t.Fatalf("releases check should be verified: %+v", ck)
+	}
+	if !strings.Contains(ck[0].Message, "match their sha256") {
+		t.Errorf("the success must say the sha256 were compared: %q", ck[0].Message)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// --install: 資産が checksums の sha256 と食い違う(途中で切れた・差し替えられた)→ verify_failed。
+// 名前は在るので、既定の probe では緑のまま通り抜けてしまう壊れ方。
+func TestVerifyReleasesInstallChecksumMismatchFails(t *testing.T) {
+	assets := map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	}
+	assets["demo_1.2.0_checksums.txt"] = checksumsFor(assets, "demo_linux.tar.gz")
+	assets["demo_linux.tar.gz"] = "tampered" // マニフェストを書いた後で中身だけ差し替える
+	srv := ghReleaseServer(t, "v1.2.0", assets)
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+	withInstall(t)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("an asset that does not match its sha256 should be verify_failed: %+v", res)
+	}
+	if !strings.Contains(res.Errors[0].Detail, "demo_linux.tar.gz") {
+		t.Errorf("the mismatched asset should be named in the detail: %+v", res.Errors[0])
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// --install: latest.json しか無い Release は sha256 を持たないので検算できない。緑と呼べば
+// 「中身を確かめた」という嘘になるので partial に落とし、warning で言う。
+func TestVerifyReleasesInstallWithoutChecksumsIsPartial(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+	withInstall(t)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a release without checksums should not fail: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Fatalf("releases should be partial when there is nothing to compare against: %+v", ck)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0].Message, "no sha256 to compare against") {
+		t.Errorf("--install that could not check contents must warn: %+v", res.Warnings)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// checksumsFor は assets の本文から GoReleaser 形式の checksums マニフェストを組む。
+func checksumsFor(assets map[string]string, names ...string) string {
+	var b strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&b, "%x  %s\n", sha256.Sum256([]byte(assets[n])), n)
+	}
+	return b.String()
 }
 
 // latest.json に載る資産が Release に無い → verify_failed(利用者はその URL で 404 を踏む)。

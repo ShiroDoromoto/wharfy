@@ -9,10 +9,14 @@ package channel
 // GoReleaser 経路なら checksums マニフェストもあるので、在れば両方を合わせて期待集合にする。
 // wharfy のネイティブ経路(BYO-binary)はこれを発行しないので、主にはできない(D-4)。
 //
-// バイナリ本体は落とさない — 資産名の実在照合まで(D-4)。sha256 の検算は verify --install の範囲。
+// 既定(Audit)はバイナリ本体を落とさない — 資産名の実在照合まで(D-4)。名前が在れば緑になるので、
+// 途中で切れた・差し替えられた資産は捕まらない。それを捕まえるのが VerifyChecksums で、
+// 資産を落として sha256 を検算する。数百 MB を毎回落とさないため verify --install でだけ呼ぶ。
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,6 +57,23 @@ type ReleaseAudit struct {
 	Version   string   // latest.json が名乗る版(checksums しか無ければ空)
 	Expected  []string // マニフェストが載せる資産名(昇順)
 	Missing   []string // そのうち Release に実在しないもの(昇順)
+
+	// Checksums は checksums マニフェスト由来の 資産名 → 期待 sha256。sha を持つのはこの
+	// マニフェストだけなので、latest.json しか無い Release では空になる(検算できない)。
+	Checksums map[string]string
+	// URLs は 資産名 → ダウンロード URL(Release に実在するものだけ)。VerifyChecksums が使う。
+	URLs map[string]string
+}
+
+// ChecksumMismatch は落とした資産の sha256 が checksums マニフェストと食い違ったこと。
+type ChecksumMismatch struct {
+	Asset string
+	Want  string // マニフェストが載せる sha256
+	Got   string // 実際に落ちてきた資産の sha256
+}
+
+func (m ChecksumMismatch) String() string {
+	return m.Asset + ": manifest says " + m.Want + ", the asset hashes to " + m.Got
 }
 
 type ghReleaseAsset struct {
@@ -96,7 +117,7 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 	for _, a := range rel.Assets {
 		present[a.Name] = a.DownloadURL
 	}
-	audit := ReleaseAudit{Found: true}
+	audit := ReleaseAudit{Found: true, URLs: present}
 
 	expected := map[string]bool{}
 	if url, ok := present[ManifestLatestJSON]; ok {
@@ -111,13 +132,17 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 		}
 	}
 	for _, name := range checksumsAssets(present) {
-		names, err := p.fetchChecksumNames(ctx, present[name])
+		sums, err := p.fetchChecksums(ctx, present[name])
 		if err != nil {
 			return ReleaseAudit{}, err
 		}
 		audit.Manifests = append(audit.Manifests, name)
-		for _, n := range names {
+		if audit.Checksums == nil {
+			audit.Checksums = map[string]string{}
+		}
+		for n, sum := range sums {
 			expected[n] = true
+			audit.Checksums[n] = sum
 		}
 	}
 	// マニフェスト自身は自分を載せない。載っていても欠損には数えない。
@@ -195,22 +220,75 @@ func (p *ReleasesProbe) fetchLatestJSON(ctx context.Context, url string) (latest
 	return doc, nil
 }
 
-// fetchChecksumNames は checksums.txt の各行から資産名を読む(GoReleaser 形式 "<sha>  <name>"、
-// binary mode の "*name" も剥がす)。sha は使わない — 検算は資産本体を落とす verify --install の範囲。
-func (p *ReleasesProbe) fetchChecksumNames(ctx context.Context, url string) ([]string, error) {
+// fetchChecksums は checksums.txt の各行を 資産名 → sha256 に読む(GoReleaser 形式 "<sha>  <name>"、
+// binary mode の "*name" も剥がす)。名前は Audit の期待集合に、sha は VerifyChecksums の検算に使う。
+func (p *ReleasesProbe) fetchChecksums(ctx context.Context, url string) (map[string]string, error) {
 	body, err := p.fetchAsset(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	sums := map[string]string{}
 	for _, line := range strings.Split(string(body), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
-		names = append(names, strings.TrimPrefix(fields[len(fields)-1], "*"))
+		sums[strings.TrimPrefix(fields[len(fields)-1], "*")] = fields[0]
 	}
-	return names, nil
+	return sums, nil
+}
+
+// VerifyChecksums は checksums マニフェストが載せる資産を実際に落とし、sha256 を検算する。
+// 食い違ったものを昇順で返す(空なら全一致)。
+//
+// 名前の実在照合(Audit)では「途中で切れた・後から差し替えられた資産」を捕まえられない
+// ——名前は在るからだ。それを捕まえられる唯一の手が、本体を落として突き合わせることになる。
+// Release に実在しない資産は Audit が Missing として既に報告しているので、ここでは飛ばす。
+//
+// 資産は sha256 に流し込むだけでメモリには溜めない。呼び手が ctx で上限を掛ける。
+func (p *ReleasesProbe) VerifyChecksums(ctx context.Context, audit ReleaseAudit) ([]ChecksumMismatch, error) {
+	names := make([]string, 0, len(audit.Checksums))
+	for name := range audit.Checksums {
+		if _, ok := audit.URLs[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	var bad []ChecksumMismatch
+	for _, name := range names {
+		got, err := p.assetSHA256(ctx, audit.URLs[name])
+		if err != nil {
+			return nil, err
+		}
+		if want := audit.Checksums[name]; !strings.EqualFold(got, want) {
+			bad = append(bad, ChecksumMismatch{Asset: name, Want: want, Got: got})
+		}
+	}
+	return bad, nil
+}
+
+// assetSHA256 は資産を落としながら sha256 を計算する。
+// 取得は browser_download_url を素で叩く — 認証を足さないのは、利用者が踏むのと同じ経路を見るため。
+func (p *ReleasesProbe) assetSHA256(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("fetch %s: %s: %s", url, resp.Status, snippet(body))
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, resp.Body); err != nil {
+		return "", fmt.Errorf("read %s: %w", url, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (p *ReleasesProbe) fetchAsset(ctx context.Context, url string) ([]byte, error) {
