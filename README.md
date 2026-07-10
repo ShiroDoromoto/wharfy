@@ -341,6 +341,15 @@ go vet ./...
 
 CI runs gofmt / vet / build / `go test -race` on every push and PR.
 
+One suite is opt-in, because it needs a real docker and a real network. It builds deliberately broken
+`.deb` packages — an unmet dependency, a binary off `PATH` — serves them from a local apt repo, and
+checks that `wharfy verify` fails on them (and passes on a healthy one). Everything else stubs docker
+out, so this is the only place the container step itself is exercised.
+
+```sh
+go test -tags dockerverify ./cmd/wharfy/ -run TestDockerVerify -timeout 20m
+```
+
 ## License
 
 [AGPL-3.0](LICENSE)
