@@ -37,7 +37,7 @@ const dockerVerifyVersion = "1.2.0"
 // 依存が満たせない deb は install が落ちる。アップロードの 200 では捕まえられない壊れ方。
 func TestDockerVerifyAptMissingDependency(t *testing.T) {
 	res := runDockerVerifyApt(t, debSpec{depends: []string{"wharfy-verify-no-such-package"}})
-	detail := requireVerifyFailed(t, res, "unmet dependency")
+	detail := requireVerifyFailed(t, res, "apt", "unmet dependency")
 
 	// apt がエラーを吐き、demo は設定まで進んでいない。ここを見ないと「落ちた」だけで
 	// 「依存不足で落ちた」ことを示せない(壊し方と落ちる段階が対応していることの確認)。
@@ -52,7 +52,7 @@ func TestDockerVerifyAptMissingDependency(t *testing.T) {
 // バイナリが PATH に無い deb は install が通っても起動確認で落ちる(ファイル配置の誤り)。
 func TestDockerVerifyAptBinaryNotOnPath(t *testing.T) {
 	res := runDockerVerifyApt(t, debSpec{binaryName: "demo-misplaced"})
-	detail := requireVerifyFailed(t, res, "a binary that is not on PATH")
+	detail := requireVerifyFailed(t, res, "apt", "a binary that is not on PATH")
 
 	// install は通り、起動確認だけが落ちる。依存不足とは別の段階で捕まえていることを確かめる。
 	if !strings.Contains(detail, "Setting up demo") {
@@ -104,7 +104,8 @@ func runDockerVerifyApt(t *testing.T, spec debSpec) output.Result {
 }
 
 // requireVerifyFailed は verify_failed で返ることを確かめ、診断に載ったコンテナの出力を返す。
-func requireVerifyFailed(t *testing.T, res output.Result, what string) string {
+// channel は次の一手(publish <channel> --yes)の照合に使う ——直す先を取り違えて案内してはいけない。
+func requireVerifyFailed(t *testing.T, res output.Result, channel, what string) string {
 	t.Helper()
 	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
 		t.Fatalf("a package with %s must fail verify: %+v", what, res)
@@ -113,7 +114,7 @@ func requireVerifyFailed(t *testing.T, res output.Result, what string) string {
 	if strings.TrimSpace(detail) == "" {
 		t.Fatalf("the container output should be handed back as detail: %+v", res.Errors[0])
 	}
-	if !hasNextDo(res, "wharfy publish apt --yes") {
+	if !hasNextDo(res, "wharfy publish "+channel+" --yes") {
 		t.Errorf("verify must guide to re-publish: %+v", res.Next)
 	}
 	return detail
