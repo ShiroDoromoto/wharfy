@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// cask_publisher.go — Cask Publisher(owned・即時)。自前 tap の Casks/<token>.rb を所有する(03)。
+// cask_publisher.go — Cask Publisher(owned・即時)。自前 tap の Casks/<token>.rb を所有する。
 // homebrew.go(Formula)の対で、同じ tap・同じ TapStore に書く。Formula と Cask が 1 つの tap に
 // 同居するので、status は両方を同じ probe 経路で照合できる(状態一元化・依頼④)。
 
@@ -64,7 +64,7 @@ func (c *Cask) Plan(ctx context.Context) (PlanItem, error) {
 	return item, nil
 }
 
-// Publish は差分があれば tap に書く。noop なら書かない。書くのは owned cask のみ(03)。
+// Publish は差分があれば tap に書く。noop なら書かない。書くのは owned cask のみ。
 func (c *Cask) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	item, err := c.Plan(ctx)
 	if err != nil {
@@ -85,7 +85,7 @@ func (c *Cask) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 // RepoExists は tap リポジトリが在るか(dry-run の tap_will_be_created 予告に使う)。
 func (c *Cask) RepoExists(ctx context.Context) (bool, error) { return c.Store.Exists(ctx) }
 
-// EnsureRepo は tap が無ければ作る(--yes の上でのみ呼ばれる・ADR-8)。created=作成したか。
+// EnsureRepo は tap が無ければ作る(--yes の上でのみ呼ばれる)。created=作成したか。
 func (c *Cask) EnsureRepo(ctx context.Context) (bool, error) { return ensureRepo(ctx, c.Store) }
 
 // Probe は tap 上の cask の版を返す(実体・04 の照合の基点)。

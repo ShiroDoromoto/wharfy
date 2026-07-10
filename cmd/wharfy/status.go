@@ -12,7 +12,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// status.go — 記録(state.json)＋実体照合(Publisher.Probe)で drift を見せる(設計 04 / ADR-2)。
+// status.go — 記録(state.json)＋実体照合(Publisher.Probe)で drift を見せる。
 // status.json は Result envelope と別形(top-level に project/build/channels を持つ)。
 
 // statusOutput は `wharfy status --json`(schemas/status.json)。
@@ -44,7 +44,7 @@ type statusChannel struct {
 	Reason    string       `json:"reason,omitempty"`
 	Source    string       `json:"source"`
 	Drift     *state.Drift `json:"drift,omitempty"`
-	State     string       `json:"state,omitempty"` // gated の申請状態(11A)
+	State     string       `json:"state,omitempty"` // gated の申請状態
 	PR        string       `json:"pr,omitempty"`    // gated の PR URL
 	// Deprecated は畳む宣言(D-3)。宣言が無ければ出ない。
 	Deprecated *config.Deprecation `json:"deprecated,omitempty"`
@@ -158,7 +158,7 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	}
 }
 
-// assessGatedPR は gated チャネル(winget / *-core)の申請状態を見せる(none/pr_open/merged/...・11A)。
+// assessGatedPR は gated チャネル(winget / *-core)の申請状態を見せる(none/pr_open/merged/...)。
 // 記録した PR URL があれば GitHub API で実状態を引いて更新する(probe 失敗時は記録にフォールバック)。
 func assessGatedPR(ctx context.Context, cs statusChannel, rec state.PublishRecord, label string) (statusChannel, *output.Warning) {
 	if rec.Version == "" {

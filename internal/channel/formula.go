@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// formula.go — Homebrew formula(.rb)を生成する(設計 02 出力契約・examples/formula.example.rb)。
-// wharfy が所有する配布物。形は安定・機械生成で、利用者は直接書かない(03)。
+// formula.go — Homebrew formula(.rb)を生成する(出力契約)。
+// wharfy が所有する配布物。形は安定・機械生成で、利用者は直接書かない。
 // macOS は未署名だと cask が Gatekeeper に弾かれるため formula を採用する。
 
 // ArchiveRef は 1 つの配布アーカイブ(os/arch ごと)。URL は Releases のダウンロード先。
@@ -130,7 +130,7 @@ func className(project string) string {
 	return strings.Join(parts, "")
 }
 
-// sortedDeps は依存リストを入力を壊さずに sort したコピーを返す(生成物を決定的にする・02)。
+// sortedDeps は依存リストを入力を壊さずに sort したコピーを返す(生成物を決定的にする)。
 func sortedDeps(deps []string) []string {
 	out := append([]string(nil), deps...)
 	sort.Strings(out)

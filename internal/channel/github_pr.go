@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// github_pr.go — gated チャネル共通の GitHub fork→branch→ファイル commit→PR(設計 11A)。
+// github_pr.go — gated チャネル共通の GitHub fork→branch→ファイル commit→PR。
 // winget(microsoft/winget-pkgs)も *-core(Homebrew/homebrew-core 等)もこの 1 経路を使う。
 // 中央リポジトリへ PR を出すだけでマージはしない。冪等を志向する(再実行で重複 PR を作らない)。
 //

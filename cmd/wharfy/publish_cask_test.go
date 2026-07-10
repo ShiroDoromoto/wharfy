@@ -132,7 +132,7 @@ func TestPublishCaskNotarizeAdvisory(t *testing.T) {
 }
 
 // TestPublishCaskPreview: cask の dry-run はローカルでバンドルを検証して差分を見せるだけで、
-// アップロードも tap への書き込みもしない(差分を見せてから書く・02/03)。
+// アップロードも tap への書き込みもしない(差分を見せてから書く)。
 func TestPublishCaskPreview(t *testing.T) {
 	root := scratchBundle(t, "releases, cask")
 	tagScratch(t, root, "v0.1.0")

@@ -1,5 +1,5 @@
 // Package output は全コマンド共通の戻り(Result envelope)と、
-// 人間向け / --json を 1 か所で出し分ける emit を持つ(設計 01 出力契約層 / 02)。
+// 人間向け / --json を 1 か所で出し分ける emit を持つ(出力契約層)。
 //
 // ここが「出力は契約」の実体。フィールドの形は schemas/result.json に厳密に従う。
 // 破壊的変更は schema_version で管理する(削除・意味変更で繰り上げ)。
@@ -37,13 +37,13 @@ type NextDo struct {
 	Do     string `json:"do"`
 }
 
-// Warning は非致命の注意。AI が自由文でなくコードで分岐できるようコード付き(09)。
+// Warning は非致命の注意。AI が自由文でなくコードで分岐できるようコード付き。
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// Problem は致命エラー(ok=false の時)。Hint は任意の解消ヒント(09)。
+// Problem は致命エラー(ok=false の時)。Hint は任意の解消ヒント。
 // Detail は下層コマンドの生 stderr 等の診断文(依頼書四通目=依頼③)。秘密は redact 済みで渡すこと。
 // 自己解決に効く一次情報(codesign/security の errSecInternalComponent 等)を握り潰さないためのフィールド。
 type Problem struct {
@@ -65,7 +65,7 @@ func New(command, message string, ok bool) Result {
 	}
 }
 
-// Emit は人間向けと --json を 1 か所で出し分ける(samples/cmd_agent.go の emit 準拠)。
+// Emit は人間向けと --json を 1 か所で出し分ける。
 // next: の体裁もここで統一する。
 func Emit(r Result, asJSON bool) {
 	emitTo(os.Stdout, r, asJSON)

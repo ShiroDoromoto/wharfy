@@ -2,7 +2,7 @@ package channel
 
 import "strings"
 
-// diff.go — 書き込み前に見せる行差分(設計 03「ブラックボックスにしない」)。
+// diff.go — 書き込み前に見せる行差分(ブラックボックスにしない)。
 // 所有配布物の旧 vs 新を unified 風に出す。依存を増やさず LCS で最小実装。
 
 // Diff は old→new の行差分を "+/-/ " 行で返す。old が空なら全行を追加として返す。

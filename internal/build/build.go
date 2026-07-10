@@ -1,8 +1,8 @@
-// Package build はクロスビルドのアダプタ境界(設計 01 Builder / ADR-1・ADR-5)。
+// Package build はクロスビルドのアダプタ境界(Builder)。
 //
 // 上位層は Builder インタフェースしか知らない。GoReleaser 依存はこのパッケージに閉じ、
 // (A)→(C) 独立移行時は nativeBuilder を実装して差し替えるだけにする。
-// ADR-5 によりライブラリ import せず、pin したバイナリをサブプロセスで叩く。
+// GoReleaser はライブラリ import せず、pin したバイナリをサブプロセスで叩く。
 package build
 
 import (
@@ -110,7 +110,7 @@ type MultiReleaser interface {
 	ReleaseAll(ctx context.Context, root, configPath string, skipDocker bool) ([]Artifact, error)
 }
 
-// UnavailableError は下層ビルダが見つからない/起動不可(09 builder_unavailable)。
+// UnavailableError は下層ビルダが見つからない/起動不可(builder_unavailable)。
 type UnavailableError struct {
 	Bin string
 	Err error
@@ -121,7 +121,7 @@ func (e *UnavailableError) Error() string {
 }
 func (e *UnavailableError) Unwrap() error { return e.Err }
 
-// FailedError はクロスビルド失敗(09 build_failed)。Output は診断のための末尾ログ。
+// FailedError はクロスビルド失敗(build_failed)。Output は診断のための末尾ログ。
 type FailedError struct {
 	Err    error
 	Output string
@@ -130,7 +130,7 @@ type FailedError struct {
 func (e *FailedError) Error() string { return fmt.Sprintf("build failed: %v", e.Err) }
 func (e *FailedError) Unwrap() error { return e.Err }
 
-// Runner はサブプロセス実行の差し替え点(テストで stub 化する＝末端は差し替え可能・01)。
+// Runner はサブプロセス実行の差し替え点(テストで stub 化する＝末端は差し替え可能)。
 // 結合出力とエラーを返す。
 type Runner func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 
@@ -169,7 +169,7 @@ func (b *GoReleaserBuilder) Archives(ctx context.Context, root, configPath strin
 
 // Release は**実リリース**。クリーンな tag ＋ GITHUB_TOKEN が要る。アーカイブを
 // GitHub Releases へアップロードし、その実アーカイブの Archive 成果物(実 sha256)を返す。
-// formula push は wharfy が所有するので --skip=homebrew で goreleaser には書かせない(03)。
+// formula push は wharfy が所有するので --skip=homebrew で goreleaser には書かせない。
 func (b *GoReleaserBuilder) Release(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	// docker は container チャネルが別経路(Containers)で扱うので、ここでは作らない。
 	return b.runAndParse(ctx, root, configPath, []string{"Archive"},
@@ -184,7 +184,7 @@ func (b *GoReleaserBuilder) Packages(ctx context.Context, root, configPath strin
 }
 
 // Containers は OCI イメージ(per-arch)をビルドし ghcr へ push、manifest list を作る。
-// goreleaser の docker pipe に任せる(ADR-5)。docker デーモン ＋ ghcr 認証が要る。
+// goreleaser の docker pipe に任せる。docker デーモン ＋ ghcr 認証が要る。
 func (b *GoReleaserBuilder) Containers(ctx context.Context, root, configPath string) ([]Artifact, error) {
 	return b.runAndParse(ctx, root, configPath, []string{"Docker Image"},
 		"release", "--clean", "--skip=homebrew", "--config", configPath)

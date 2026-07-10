@@ -87,7 +87,7 @@ func TestGenerateInstallPS1(t *testing.T) {
 
 // 失敗しうる 2 か所(取得・書き込み)が、原因と次の一手を出すこと。
 // curl を tar にパイプすると $? は tar のものになり、POSIX sh に pipefail は無いので、
-// 分離していること自体が契約(依頼書 doc/wip/request.md §2-1)。
+// 分離していること自体が契約。
 func TestGenerateInstallScriptFailurePaths(t *testing.T) {
 	s := GenerateInstallScript(scriptConfig(), "1.2.3")
 	if strings.Contains(s, `curl -fsSL "$url" | tar`) {

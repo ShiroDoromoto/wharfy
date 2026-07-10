@@ -7,7 +7,7 @@ import (
 )
 
 // core.go — *-core(中央キュレーション repo への gated 配布)。代表は homebrew-core。
-// 自分の tap と違い上流のレビュー＆マージが要る(winget と同じ gated・11A)。wharfy は formula を
+// 自分の tap と違い上流のレビュー＆マージが要る(winget と同じ gated)。wharfy は formula を
 // 生成して fork PR を出し、状態を追うだけ。マージはしない。受け入れ基準(brew audit 等)は利用者責務。
 
 // CoreInput は *-core への申請 1 件。
@@ -53,7 +53,7 @@ type CoreFormulaInput struct {
 }
 
 // GenerateCoreFormula は homebrew-core 向けの source-build formula(Go)を生成する。
-// あくまで叩き台で、`brew audit --new --strict` の合格保証ではない(11A)。
+// あくまで叩き台で、`brew audit --new --strict` の合格保証ではない。
 func GenerateCoreFormula(in CoreFormulaInput) string {
 	binary := in.Binary
 	if binary == "" {

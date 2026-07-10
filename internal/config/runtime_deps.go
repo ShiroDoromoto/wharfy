@@ -1,7 +1,6 @@
 package config
 
-// runtime_deps.go — 横断 runtime_deps を各 owned パッケージチャネルの依存記法へ射影する
-// (設計 design-runtime-deps-first-class-and-gated-distribution.md)。
+// runtime_deps.go — 横断 runtime_deps を各 owned パッケージチャネルの依存記法へ射影する。
 //
 // 射影の要点:
 //   - 同名なら 1 宣言で全チャネルに出す。名前が割れる/凝った記法は As で per-channel 逐語上書き。

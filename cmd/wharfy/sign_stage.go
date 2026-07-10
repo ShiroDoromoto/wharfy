@@ -19,7 +19,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/sign"
 )
 
-// newSigner は Signer の生成点(テストで差し替える＝末端は差し替え可能・01)。
+// newSigner は Signer の生成点(テストで差し替える＝末端は差し替え可能)。
 var newSigner = func() *sign.Signer { return sign.NewSigner() }
 
 // 署名設定の env フォールバック。秘密(パスワード)は env のみ受け付け、yaml/生成物には出さない。

@@ -15,7 +15,7 @@ import (
 // これで --json の ok:false が終了コードにも一致する(利用者が指摘した「ok:false なのに exit 0」直し)。
 var errNotOK = errors.New("command reported ok=false")
 
-// 共通グローバルフラグ(設計 01 CLI 層)。全コマンドが受ける。
+// 共通グローバルフラグ(CLI 層)。全コマンドが受ける。
 var (
 	flagJSON      bool
 	flagDryRun    bool
@@ -25,7 +25,7 @@ var (
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
-// コマンド本体は薄く、registry を単一真実に保つ(05 drift 対策)。
+// コマンド本体は薄く、registry を単一真実に保つ(drift 対策)。
 // テストからも同じツリーを組み立てられるよう関数に分ける。
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{

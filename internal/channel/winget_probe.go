@@ -9,7 +9,7 @@ import (
 	"regexp"
 )
 
-// winget_probe.go — gated(winget)の実体照合(設計 04・11A)。記録した PR URL から GitHub の
+// winget_probe.go — gated(winget)の実体照合。記録した PR URL から GitHub の
 // PR 状態を引き、申請の進行(pr_open/merged/closed)を実状態に更新する。マージはしない。
 
 // WingetProbe は PR URL の状態を GitHub API で引く。

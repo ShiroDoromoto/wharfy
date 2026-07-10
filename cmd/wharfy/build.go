@@ -17,7 +17,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// newBuilder は Builder の生成点(テストで差し替える＝末端は差し替え可能・01)。
+// newBuilder は Builder の生成点(テストで差し替える＝末端は差し替え可能)。
 var newBuilder = func(distDir string) build.Builder {
 	return build.NewGoReleaserBuilder(distDir)
 }
@@ -60,7 +60,7 @@ type buildData struct {
 	Artifacts []build.Artifact `json:"artifacts"`
 }
 
-// runBuild は実効設定→生成 GoReleaser 設定→サブプロセスビルド→状態記録(設計 01/04/ADR-5)。
+// runBuild は実効設定→生成 GoReleaser 設定→サブプロセスビルド→状態記録。
 // 目印: `wharfy build --json` が成果物一覧と next: sign|publish を返す。
 func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result {
 	root, err := os.Getwd()
@@ -97,7 +97,7 @@ func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result
 			return buildErrorResult(c, berr)
 		}
 	} else {
-		// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない・03)。
+		// 生成 GoReleaser 設定を .wharfy/ に書く(利用者 root には書かない)。
 		glYAML, err := config.GenerateGoReleaser(cfg, in)
 		if err != nil {
 			return internalError(c, err)
@@ -112,7 +112,7 @@ func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result
 		}
 	}
 
-	// ローカル記録に反映(速い基点。真実は status で実体照合・04)。
+	// ローカル記録に反映(速い基点。真実は status で実体照合)。
 	if st, err := state.Load(root, cfg.Project); err == nil {
 		st.RecordBuild(gitCurrentTag(root), nowUTC().Format(time.RFC3339), artifacts)
 		_ = state.Save(root, st) // 記録失敗はビルド成功を覆さない(記録は最適化)
@@ -130,7 +130,7 @@ func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result
 	return res
 }
 
-// buildErrorResult は Builder のエラーを envelope のコードに変換する(09)。
+// buildErrorResult は Builder のエラーを envelope のコードに変換する。
 func buildErrorResult(c registry.Command, berr error) output.Result {
 	var unavailable *build.UnavailableError
 	if errors.As(berr, &unavailable) {

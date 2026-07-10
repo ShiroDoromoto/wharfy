@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// stubResolver は外部 I/O を固定値に差し替えた Resolver を作る(末端は差し替え可能・01)。
+// stubResolver は外部 I/O を固定値に差し替えた Resolver を作る(末端は差し替え可能)。
 func stubResolver(origin string, mains []string, module string) *Resolver {
 	return &Resolver{
 		Root:       "/fake/root",
@@ -89,7 +89,7 @@ func TestResolveReleasesTargetIsGithub(t *testing.T) {
 	if got := targetOf(cfg, "releases"); got != "acme/widget-demo" {
 		t.Errorf("releases target = %q, want acme/widget-demo (the real repo, not owner/project)", got)
 	}
-	// homebrew は ADR-8 の <owner>/homebrew-<project> のまま。
+	// homebrew は <owner>/homebrew-<project> のまま。
 	if got := targetOf(cfg, "homebrew"); got != "acme/homebrew-widget" {
 		t.Errorf("homebrew target = %q, want acme/homebrew-widget", got)
 	}

@@ -13,7 +13,7 @@ import (
 
 // tapstore.go — TapStore の実装。InMemory(テスト用)と GitHub(実体)。
 
-// InMemoryTapStore はテスト用。tap の内容をメモリに持つ(末端の差し替え・01)。
+// InMemoryTapStore はテスト用。tap の内容をメモリに持つ(末端の差し替え)。
 type InMemoryTapStore struct {
 	Files      map[string]string
 	Commits    int  // Put 回数(書き込み発生の検証用)
@@ -193,7 +193,7 @@ func (s *GitHubTapStore) Exists(ctx context.Context) (bool, error) {
 }
 
 // Create は tap/bucket を作る(auto_init で既定ブランチを用意)。owner が認証ユーザなら
-// /user/repos、組織なら /orgs/{owner}/repos に作る。--yes の上でのみ呼ばれる(03/ADR-8)。
+// /user/repos、組織なら /orgs/{owner}/repos に作る。--yes の上でのみ呼ばれる。
 func (s *GitHubTapStore) Create(ctx context.Context) error {
 	if s.Token == "" {
 		return fmt.Errorf("GITHUB_TOKEN required to create %s/%s", s.Owner, s.Repo)

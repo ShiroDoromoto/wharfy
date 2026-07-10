@@ -16,7 +16,7 @@ import (
 
 // init は「2回目以降のリリースで agent が wharfy を素通りしない」ための一手。
 // AGENTS.md / CLAUDE.md に「リリースは wharfy agent を実行して従え」という入口だけを
-// 管理ブロックで書き込む。手順は焼き込まない——真実は常に `wharfy agent` 側にある(05 drift 対策)。
+// 管理ブロックで書き込む。手順は焼き込まない——真実は常に `wharfy agent` 側にある(drift 対策)。
 
 // initTargets は書き込む対象。単数 AGENT.md は事実上どのツールも読まないため複数形 AGENTS.md と
 // CLAUDE.md の 2 本を狙う(Codex/Cursor 系 = AGENTS.md、Claude Code = CLAUDE.md)。

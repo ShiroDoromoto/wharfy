@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-// PrebuiltContainerizer は docker buildx で BYO の OCI イメージを作る(末端差し替え・01)。
+// PrebuiltContainerizer は docker buildx で BYO の OCI イメージを作る(末端差し替え)。
 type PrebuiltContainerizer struct {
 	Bin      string // 既定 "docker"
 	LookPath func(string) (string, error)

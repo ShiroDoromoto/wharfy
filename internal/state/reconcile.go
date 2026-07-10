@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// reconcile.go — ハイブリッド状態の照合(設計 04)。記録(recorded)と実体(remote)を突き合わせ、
+// reconcile.go — ハイブリッド状態の照合。記録(recorded)と実体(remote)を突き合わせ、
 // source と drift を決める。drift は黙って合わせず status に見せる(③)。
 
 // source の値(common.json stateSource)。
@@ -31,7 +31,7 @@ type Drift struct {
 }
 
 // Reconcile は記録版 recorded と実体版 remote(remoteFound=実体に在るか)から
-// source と drift を決める(04 の照合表)。probed=false なら未照合＝recorded で返す。
+// source と drift を決める(照合表)。probed=false なら未照合＝recorded で返す。
 func Reconcile(recorded, remote string, remoteFound, probed bool) (source string, drift *Drift) {
 	if !probed {
 		return SourceRecorded, nil

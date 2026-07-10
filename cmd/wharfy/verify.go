@@ -11,7 +11,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// runVerify は発行済み owned チャネルの到達性・整合性を確認する(設計 01 verify / 06)。
+// runVerify は発行済み owned チャネルの到達性・整合性を確認する(verify)。
 // スライス1 は homebrew のみ: 自前 tap の formula が在り、版が記録と一致するかを照合する。
 // 未発行なら「確認対象なし」を正直に返し、publish を促す(空 next の dead-end を作らない)。
 func runVerify(ctx context.Context, c registry.Command, _ []string) output.Result {

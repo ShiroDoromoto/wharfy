@@ -2,8 +2,8 @@ package build
 
 // nfpm.go — BYO-binary(依頼① #3)の deb/rpm ネイティブ生成。持ち込み linux バイナリから
 // nfpm をライブラリとして呼んで deb/rpm を作る(D-2: 利用者に nfpm CLI を要求しない)。
-// パッケージングは決定的なファイル生成でありコンパイルではないので、ADR-5(compiler は
-// subprocess pin)の射程外としてライブラリ import を選ぶ。
+// パッケージングは決定的なファイル生成でありコンパイルではないので、compiler を
+// subprocess に pin する方針の射程外としてライブラリ import を選ぶ。
 
 import (
 	"fmt"

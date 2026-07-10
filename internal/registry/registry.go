@@ -1,4 +1,4 @@
-// Package registry は能力の単一真実(設計 01 能力レジストリ / 05 drift 対策)。
+// Package registry は能力の単一真実(能力レジストリ / drift 対策)。
 //
 // コマンド・要約・引数・既定 next: をここ 1 か所に持つ。cobra のコマンド登録も
 // agent の一枚出力も「ここから生成」する。手書きの能力一覧は実体とズレるため持たない。
@@ -13,12 +13,12 @@ import (
 )
 
 // Command はレジストリの 1 エントリ。schemas/common.json の commandSpec と同形。
-// agent --json の commands[] はこれの配列(02 出力契約)。
+// agent --json の commands[] はこれの配列(出力契約)。
 type Command struct {
 	Name    string   `json:"name"`
 	Summary string   `json:"summary"`
 	Args    string   `json:"args,omitempty"`
-	Next    []string `json:"next,omitempty"` // 既定の次コマンド名。参照先は必ず registry に実在する(05)。
+	Next    []string `json:"next,omitempty"` // 既定の次コマンド名。参照先は必ず registry に実在する。
 }
 
 // ChannelRef は agent 出力でのチャネル参照。schemas/common.json の channelRef。
@@ -32,7 +32,7 @@ type ChannelRef struct {
 // InstallExitCode は install.sh / install.ps1 が名乗る終了コードと、その意味。
 //
 // wharfy が所有する生成物の対外契約なので、ここが単一真実になる。生成物のヘッダ・
-// agent 出力・README で別々に書けば必ずずれる(05 drift 対策)。
+// agent 出力・README で別々に書けば必ずずれる(drift 対策)。
 type InstallExitCode struct {
 	Code    int
 	Meaning string
@@ -61,7 +61,7 @@ func InstallExitCodeLine() string {
 }
 
 // AgentDoc は `wharfy agent --json` の出力(schemas/agent.json)。Result envelope とは別形。
-// registry から生成するので実体とズレない(05)。
+// registry から生成するので実体とズレない。
 type AgentDoc struct {
 	SchemaVersion string       `json:"schema_version"`
 	Tool          string       `json:"tool"`
@@ -74,11 +74,11 @@ type AgentDoc struct {
 
 const schemaVersion = "1"
 
-// Commands は唯一の真実。順番は「通常の操作順」(02 の COMMANDS usual order)。
+// Commands は唯一の真実。順番は「通常の操作順」。
 //
 // status/build/sign/publish/verify はドメインコマンド。agent/config/version も
 // cobra に登録される実コマンドなので、cobra==registry を例外なく成り立たせるため
-// ここに含める(05 の「cobra にあるが registry にない」を構造的にゼロにする)。
+// ここに含める(「cobra にあるが registry にない」を構造的にゼロにする)。
 var Commands = []Command{
 	{Name: "agent", Summary: "print this capability map (read once, then drive)", Next: []string{"status"}},
 	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
@@ -93,11 +93,11 @@ var Commands = []Command{
 	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},
 }
 
-// StateReaders は状態の読み口になるコマンド名(02 agent の state_readers)。
+// StateReaders は状態の読み口になるコマンド名(agent の state_readers)。
 var StateReaders = []string{"status", "config"}
 
 // Channels は agent が宣伝するチャネル一覧。実装済み Publisher に追従させる(同じ生成思想)。
-// homebrew で型を固めた後、低摩擦な goinstall / script から横展開中(08 §5)。
+// homebrew で型を固めた後、低摩擦な goinstall / script から横展開中(§5)。
 var Channels = []ChannelRef{
 	{Name: "homebrew", Kind: "owned"},
 	{Name: "cask", Kind: "owned"},

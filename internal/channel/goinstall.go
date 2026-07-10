@@ -8,12 +8,11 @@ import (
 	"strings"
 )
 
-// goinstall.go — go install チャネル(owned・梱包ゼロ。設計 01/03/07)。
+// goinstall.go — go install チャネル(owned・梱包ゼロ)。
 //
 // 発行物を push しない特殊な owned: module が `go install` 可能なこと＋version 注入を
 // 確認して手順を案内するだけ(Plan/Publish は実質 noop、Probe で版を確認)。
-// version 注入は ldflags 不要で、go install 時に debug.ReadBuildInfo(module version)で効く
-// (samples/version.go の fallback)。
+// version 注入は ldflags 不要で、go install 時に debug.ReadBuildInfo(module version)で効く。
 
 // GoInstall は goinstall チャネルの Publisher。
 type GoInstall struct {
@@ -53,7 +52,7 @@ func (g *GoInstall) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	return item, PubResult{}, err
 }
 
-// Probe は module proxy に版があるか(=go install できるか)を確認する(04 の実体照合)。
+// Probe は module proxy に版があるか(=go install できるか)を確認する(実体照合)。
 func (g *GoInstall) Probe(ctx context.Context) (RemoteState, error) {
 	if g.Version == "" {
 		return RemoteState{Found: false}, nil

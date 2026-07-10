@@ -17,7 +17,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
-// drift テスト骨格(設計 05)。「agent が語る能力 vs 実際のコマンド実体」のズレを CI で落とす。
+// drift テスト骨格。「agent が語る能力 vs 実際のコマンド実体」のズレを CI で落とす。
 // コマンドを足したら registry に足すだけで全生成物に載る、を構造的に担保する。
 
 var updateGolden = flag.Bool("update", false, "update golden snapshot files in testdata/")
@@ -84,7 +84,7 @@ func TestAgentContainsAllCommands(t *testing.T) {
 	}
 }
 
-// TestAgentJSONValidatesSchema: agent --json 出力が schemas/agent.json に valid(02 契約)。
+// TestAgentJSONValidatesSchema: agent --json 出力が schemas/agent.json に valid(契約)。
 func TestAgentJSONValidatesSchema(t *testing.T) {
 	doc := registry.BuildAgentDoc(fixedTestVersion)
 	validateAgainst(t, "https://wharfy.io/schemas/v1/agent.json", doc)

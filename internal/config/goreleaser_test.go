@@ -117,7 +117,7 @@ func TestGenerateRequiresMain(t *testing.T) {
 	}
 }
 
-// WriteGoReleaser は .wharfy/ に書き、利用者 root には書かない(03)。
+// WriteGoReleaser は .wharfy/ に書き、利用者 root には書かない。
 func TestWriteGoReleaserNonDestructive(t *testing.T) {
 	root := t.TempDir()
 	data := []byte("version: 2\n")

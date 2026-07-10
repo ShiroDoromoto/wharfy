@@ -1,4 +1,4 @@
-// Package state はハイブリッド状態の「ローカル記録」側(設計 04 / ADR-2)。
+// Package state はハイブリッド状態の「ローカル記録」側。
 //
 // wharfy が「何をしたか」を .wharfy/state.json に逐次記録する。これは速い基点であって
 // 真実ではない(drift しうる)。status は必ず実体(Publisher.Probe)と突き合わせてから提示する。
@@ -15,13 +15,13 @@ import (
 
 const schemaVersion = "1"
 
-// FileName は記録の置き場所(.wharfy/ 配下＝wharfy のスクラッチ・03)。
+// FileName は記録の置き場所(.wharfy/ 配下＝wharfy のスクラッチ)。
 const FileName = "state.json"
 
 // DirName は .wharfy(config.WharfyDirName と一致。循環 import を避けるため再掲)。
 const DirName = ".wharfy"
 
-// State は .wharfy/state.json の全体(04 の記録スキーマ)。
+// State は .wharfy/state.json の全体(記録スキーマ)。
 type State struct {
 	SchemaVersion string                   `json:"schema_version"`
 	Project       string                   `json:"project"`
@@ -38,7 +38,7 @@ type BuildRecord struct {
 }
 
 // PublishRecord はチャネルへの発行記録(status の照合の基点)。
-// gated(winget 等)は State / PR で申請の進行を追う(11A)。
+// gated(winget 等)は State / PR で申請の進行を追う。
 type PublishRecord struct {
 	Version string `json:"version,omitempty"`
 	Target  string `json:"target,omitempty"`
@@ -54,7 +54,7 @@ func Path(root string) string {
 }
 
 // Load は記録を読む。無ければ空 State(エラーではない＝記録は最適化・実体が真実)。
-// 壊れている場合はエラーを返す(呼び出し側はフォールバックして作り直せる・04)。
+// 壊れている場合はエラーを返す(呼び出し側はフォールバックして作り直せる)。
 func Load(root, project string) (*State, error) {
 	b, err := os.ReadFile(Path(root))
 	if os.IsNotExist(err) {
@@ -76,7 +76,7 @@ func Load(root, project string) (*State, error) {
 	return &s, nil
 }
 
-// Save は記録をアトミックに書く(temp に書いて rename。途中失敗で state.json を壊さない・04)。
+// Save は記録をアトミックに書く(temp に書いて rename。途中失敗で state.json を壊さない)。
 func Save(root string, s *State) error {
 	if s.SchemaVersion == "" {
 		s.SchemaVersion = schemaVersion

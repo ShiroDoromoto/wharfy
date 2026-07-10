@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// homebrew.go — Homebrew Publisher(owned・即時)。自前 tap の Formula/<project>.rb を所有する(03)。
-// Plan で差分を見せ、Publish で tap に書く。Probe で tap 上の版を確認し status の照合に使う(04)。
+// homebrew.go — Homebrew Publisher(owned・即時)。自前 tap の Formula/<project>.rb を所有する。
+// Plan で差分を見せ、Publish で tap に書く。Probe で tap 上の版を確認し status の照合に使う。
 
 // Homebrew は homebrew チャネルの Publisher。Tap は "owner/homebrew-<project>"。
 type Homebrew struct {
@@ -63,7 +63,7 @@ func (h *Homebrew) Plan(ctx context.Context) (PlanItem, error) {
 	return item, nil
 }
 
-// Publish は差分があれば tap に書く。noop なら書かない。書くのは owned formula のみ(03)。
+// Publish は差分があれば tap に書く。noop なら書かない。書くのは owned formula のみ。
 func (h *Homebrew) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	item, err := h.Plan(ctx)
 	if err != nil {
@@ -84,7 +84,7 @@ func (h *Homebrew) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 // RepoExists は自前 tap リポジトリが在るか(dry-run の tap_will_be_created 予告に使う)。
 func (h *Homebrew) RepoExists(ctx context.Context) (bool, error) { return h.Store.Exists(ctx) }
 
-// EnsureRepo は tap が無ければ作る(--yes の上でのみ呼ばれる・ADR-8)。created=作成したか。
+// EnsureRepo は tap が無ければ作る(--yes の上でのみ呼ばれる)。created=作成したか。
 func (h *Homebrew) EnsureRepo(ctx context.Context) (bool, error) { return ensureRepo(ctx, h.Store) }
 
 // Probe は tap 上の formula の版を返す(実体・04 の照合の基点)。

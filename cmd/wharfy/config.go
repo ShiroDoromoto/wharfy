@@ -9,7 +9,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
-// runConfig は解決後の実効設定を返す(設計 02 config.json / 07)。
+// runConfig は解決後の実効設定を返す(config.json)。
 // 生ファイルではなく、既定推測を埋めた Config を data に載せる。
 // 曖昧な main は output.ErrMainAmbiguous で停止する(ok=false・黙って間違えない)。
 func runConfig(_ context.Context, c registry.Command, _ []string) output.Result {
@@ -43,7 +43,7 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 	// main を解決できない(複数 main で曖昧、または検出コマンド `go list` が失敗)。
 	// 実効設定は cfg に載っているので internal で潰さず、data + coded problem +
 	// 次の一手(main を明示)を見せる。status が同じ Resolve のエラーを飲み込んで動くのに対し、
-	// config は黙らず「main だけ未解決」と正直に見せる(07 黙って間違えない)。
+	// config は黙らず「main だけ未解決」と正直に見せる(黙って間違えない)。
 	// go list 失敗の真因は rerr に stderr つきで包まれている(resolve.go execError)ので、
 	// 利用者が見ていた不透明な "exit status 1" ではなく実メッセージが Message に出る。
 	if rerr != nil {
@@ -67,7 +67,7 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 	return res
 }
 
-// internalError は想定外を envelope に包む(09 internal)。
+// internalError は想定外を envelope に包む(internal)。
 func internalError(c registry.Command, err error) output.Result {
 	res := output.New(c.Name, "internal error", false)
 	res.Errors = []output.Problem{{Code: output.ErrInternal, Message: err.Error()}}

@@ -1,4 +1,4 @@
-// version.go — tag を単一ソースにする version 注入(samples/version.go を移植)。
+// version.go — tag を単一ソースにする version 注入。
 //
 // 値は手書きしない。リリース時に ldflags で注入する:
 //

@@ -25,7 +25,7 @@ type ReleaseAsset struct {
 	ContentType string // 空なら application/octet-stream
 }
 
-// ReleaseStore は tag のリリースを用意しアセットを(置換)アップロードする境界(末端差し替え・01)。
+// ReleaseStore は tag のリリースを用意しアセットを(置換)アップロードする境界(末端差し替え)。
 type ReleaseStore interface {
 	Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset) error
 }

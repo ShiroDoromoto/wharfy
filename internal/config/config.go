@@ -1,5 +1,5 @@
 // Package config は最小 wharfy.yaml を読み、既定を推測して実効設定を組み立てる
-// (設計 07 / ADR-4「入力は最小宣言・出力を契約にする」)。
+// (入力は最小宣言・出力を契約にする)。
 //
 // 凍結するのは出力(schemas/config.json の resolved)であって入力ではない。
 // 入力(File)はエディタ補助の助言。`wharfy config` は解決後の Config を返す(生ファイルではない)。
@@ -50,8 +50,7 @@ type DeprecateInput struct {
 }
 
 // RuntimeDep は横断ランタイム依存(B: 実行時に呼ぶ外部ツール)の宣言。1 ツール 1 エントリで、
-// 全 owned パッケージチャネル(homebrew/scoop/apt/rpm/aur)へ射影する(設計
-// design-runtime-deps-first-class-and-gated-distribution.md)。
+// 全 owned パッケージチャネル(homebrew/scoop/apt/rpm/aur)へ射影する。
 //   - Min: 最小バージョン。apt/rpm/aur は制約として反映、homebrew/scoop は名前のみに縮退。
 //   - Required: 既定 true。false なら推奨/任意側へ(apt/rpm の Recommends・aur の optdepends)。
 //     必須/任意を区別しない homebrew/scoop では required=false は出さない(As で明示時を除く)。
@@ -268,7 +267,7 @@ type Build struct {
 	GOARCH []string `json:"goarch,omitempty"`
 }
 
-// 既定値(07 のフィールド一覧)。
+// 既定値。
 var (
 	// DefaultChannels = 追加設定不要な owned 列(goinstall は Go ターゲット時のみ)。
 	DefaultChannels = []string{"homebrew", "scoop", "releases", "script", "goinstall"}

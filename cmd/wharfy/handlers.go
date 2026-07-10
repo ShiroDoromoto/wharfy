@@ -7,7 +7,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
-// handler はコマンド 1 つの本体。引数を解いてドメイン層を呼び Result を返す(設計 01)。
+// handler はコマンド 1 つの本体。引数を解いてドメイン層を呼び Result を返す。
 // スライス1 で中身が無いコマンドは stubResult を返す。
 type handler func(ctx context.Context, c registry.Command, args []string) output.Result
 
@@ -57,7 +57,7 @@ func runVersion(ctx context.Context, c registry.Command, _ []string) output.Resu
 }
 
 // stubResult は未実装コマンドの正直な戻り。envelope は valid に保つ(ok=true なので errors 不要)。
-// スライス1 の実装順(08 §3)で順に本体へ差し替えていく。
+// スライス1 の実装順(§3)で順に本体へ差し替えていく。
 func stubResult(c registry.Command) output.Result {
 	res := output.New(c.Name, c.Name+": not implemented yet (slice 1 in progress)", true)
 	res.Next = nextFromSpec(c)

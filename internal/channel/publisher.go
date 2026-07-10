@@ -1,13 +1,13 @@
-// Package channel はチャネル発行層(設計 01 Publisher / 03 非破壊境界 / 11)。
+// Package channel はチャネル発行層(Publisher / 非破壊境界)。
 //
 // Plan(差分プレビュー)と Publish(実書き込み)を分け、「差分を見せてから書く」を全チャネル
-// 共通で実現する(02・03)。所有する配布物だけが書き込み対象＝利用者のソース・CI は触らない。
-// スライス1 は homebrew(owned)1 本。型をここで固めてから横展開する(08 §5)。
+// 共通で実現する。所有する配布物だけが書き込み対象＝利用者のソース・CI は触らない。
+// スライス1 は homebrew(owned)1 本。型をここで固めてから横展開する(§5)。
 package channel
 
 import "context"
 
-// Kind はチャネル種別。owned=即時発行 / gated=申請を組み立て状態追跡(11)。
+// Kind はチャネル種別。owned=即時発行 / gated=申請を組み立て状態追跡。
 const (
 	KindOwned = "owned"
 	KindGated = "gated"
@@ -38,13 +38,13 @@ type PubResult struct {
 	URL    string
 }
 
-// RemoteState は実体照合(Probe)の結果。status の drift 判定に使う(04)。
+// RemoteState は実体照合(Probe)の結果。status の drift 判定に使う。
 type RemoteState struct {
 	Version string
 	Found   bool
 }
 
-// Publisher はチャネル発行の境界(01)。Plan は書かない・Publish が書く。
+// Publisher はチャネル発行の境界。Plan は書かない・Publish が書く。
 type Publisher interface {
 	Name() string
 	Kind() string
@@ -68,20 +68,20 @@ type ChecksumSource interface {
 }
 
 // TapStore は自前 tap(owned リポジトリ)への読み書き境界。
-// 実体は GitHub。テストは InMemoryTapStore で差し替える(末端は差し替え可能・01)。
+// 実体は GitHub。テストは InMemoryTapStore で差し替える(末端は差し替え可能)。
 type TapStore interface {
 	// Get は path の現在の内容を返す。無ければ found=false(エラーではない)。
 	Get(ctx context.Context, path string) (content string, found bool, err error)
-	// Put は path に content を書き(commit message 付き)、commit を返す。書き込みは owned のみ(03)。
+	// Put は path に content を書き(commit message 付き)、commit を返す。書き込みは owned のみ。
 	Put(ctx context.Context, path, content, message string) (commit string, err error)
 	// Exists は所有リポジトリ(tap/bucket)自体が在るか。無ければ false。
 	Exists(ctx context.Context) (bool, error)
-	// Create は所有リポジトリを作る(初期化付き)。利用者の明示同意(--yes)の上でのみ呼ぶ(03/ADR-8)。
+	// Create は所有リポジトリを作る(初期化付き)。利用者の明示同意(--yes)の上でのみ呼ぶ。
 	Create(ctx context.Context) error
 }
 
 // RepoBacked は自前リポジトリ(tap/bucket)に書く owned チャネル(homebrew/scoop)。
-// 未作成なら --yes で wharfy が作成する(ADR-8)。dry-run は RepoExists で予告に使う。
+// 未作成なら --yes で wharfy が作成する。dry-run は RepoExists で予告に使う。
 type RepoBacked interface {
 	RepoExists(ctx context.Context) (bool, error)
 	EnsureRepo(ctx context.Context) (created bool, err error)

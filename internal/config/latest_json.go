@@ -8,8 +8,7 @@ import (
 	"strings"
 )
 
-// latest_json.go — 検知②の横串になる静的 latest.json を生成する
-// (doc/wip/installer-distribution-playbook.md §5)。
+// latest_json.go — 更新チェックの横串になる静的 latest.json を生成する。
 //
 // release 時点で wharfy は全 Release アセットの URL を握っているため、これは最も低コストで
 // 作れる純生成物。ビークル非依存・OS 横断で「新版あり」を知らせる土台になる。
@@ -141,7 +140,7 @@ func latestAssetKey(goos, goarch, name string) string {
 	}
 }
 
-// WriteLatestJSON は latest.json を <root>/.wharfy/latest.json に書く(root は汚さない・03)。
+// WriteLatestJSON は latest.json を <root>/.wharfy/latest.json に書く(root は汚さない)。
 func WriteLatestJSON(root, content string) (string, error) {
 	dir := filepath.Join(root, WharfyDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

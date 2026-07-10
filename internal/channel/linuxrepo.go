@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// linuxrepo.go — apt/rpm hosted repo の実体照合(設計 04)。best-effort: 慣習的なメタデータ
+// linuxrepo.go — apt/rpm hosted repo の実体照合。best-effort: 慣習的なメタデータ
 // (apt=Debian Packages / rpm=repomd→primary)を引いて版を読む。レイアウトが違えば取得できず
 // status は recorded に落ちる(誤検出はしない)。base はテストで httptest に差し替え可能。
 

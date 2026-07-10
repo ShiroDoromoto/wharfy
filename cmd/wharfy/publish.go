@@ -26,7 +26,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// 差し替え点(テストで fake 化＝末端は差し替え可能・01)。
+// 差し替え点(テストで fake 化＝末端は差し替え可能)。
 var (
 	newArchiver      = func(distDir string) build.Archiver { return build.NewGoReleaserBuilder(distDir) }
 	newReleaser      = func(distDir string) build.Releaser { return build.NewGoReleaserBuilder(distDir) }
@@ -73,7 +73,7 @@ type requirement struct {
 	Hint        string `json:"hint,omitempty"`
 }
 
-// runPublish は所有チャネルへ発行する。書く前に必ず差分(plan)を見せる(設計 02/03)。
+// runPublish は所有チャネルへ発行する。書く前に必ず差分(plan)を見せる。
 // --yes 無し: plan のプレビュー(applied:false)。--yes: 実書き込み(applied:true)。
 // 実装済み: homebrew / goinstall。未対応チャネルは plan で skip を返す(型は同一)。
 func runPublish(ctx context.Context, c registry.Command, args []string) output.Result {
@@ -357,7 +357,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err := verifyManifestChecksums(hb, archs); err != nil { // #10: 書き込み前の自己検査(tap 作成より前で止める)
 			return channel.PlanItem{}, nil, err
 		}
-		if _, err := hb.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
+		if _, err := hb.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る
 			return channel.PlanItem{}, nil, err
 		}
 		item, pub, err := hb.Publish(ctx)
@@ -378,7 +378,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err := verifyManifestChecksums(ck, archs); err != nil { // #10: 書き込み前の自己検査
 			return channel.PlanItem{}, nil, err
 		}
-		if _, err := ck.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る(ADR-8)
+		if _, err := ck.EnsureRepo(ctx); err != nil { // 未作成なら tap を作る
 			return channel.PlanItem{}, nil, err
 		}
 		item, pub, err := ck.Publish(ctx)
@@ -400,7 +400,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err := verifyManifestChecksums(sc, archs); err != nil { // #10: 書き込み前の自己検査
 			return channel.PlanItem{}, nil, err
 		}
-		if _, err := sc.EnsureRepo(ctx); err != nil { // 未作成なら bucket を作る(ADR-8)
+		if _, err := sc.EnsureRepo(ctx); err != nil { // 未作成なら bucket を作る
 			return channel.PlanItem{}, nil, err
 		}
 		item, pub, err := sc.Publish(ctx)
@@ -549,7 +549,7 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 		})
 }
 
-// publishAur は aur チャネル(owned・03)。-bin パッケージの PKGBUILD/.SRCINFO を生成し、
+// publishAur は aur チャネル(owned)。-bin パッケージの PKGBUILD/.SRCINFO を生成し、
 // AUR の自前 git(ssh)へ push する(審査なし)。linux tarball の実 sha を参照する。
 func publishAur(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	pkg := channelTargetByName(cfg, "aur")
@@ -682,7 +682,7 @@ func aurRequirements(tagMissing bool) []requirement {
 	}
 }
 
-// publishWinget は winget チャネル(gated・11A)。manifest 3 種を生成し、microsoft/winget-pkgs を
+// publishWinget は winget チャネル(gated)。manifest 3 種を生成し、microsoft/winget-pkgs を
 // fork→branch→commit→PR まで組み立てる(マージはしない)。書く前に申請物を見せる。
 // openGatedPR は gated チャネル(winget / homebrew-core)に既存の OPEN な PR があるかを確認し、
 // あれば「重複 PR を出さない」ための Result を返す(無ければ nil = 提出してよい)。
@@ -925,7 +925,7 @@ var sourceTarballSHA = func(ctx context.Context, url string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// publishHomebrewCore は homebrew-core チャネル(strict gated・*-core・11A)。core は notability ＋
+// publishHomebrewCore は homebrew-core チャネル(strict gated・*-core)。core は notability ＋
 // ソースビルド formula ＋ 厳格審査が要る。wharfy は **source-build formula** を生成して fork PR を
 // 組むが、(1) 受け入れ基準を提示し (2) --acknowledge-review が無ければ出さない(コミュニティ配慮)。
 // マージはしない。出すのはあくまで叩き台で brew audit 合格保証ではない。
@@ -1039,7 +1039,7 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 	return res
 }
 
-// publishContainer は container チャネル(ghcr OCI・マルチアーキ・11B)。goreleaser の
+// publishContainer は container チャネル(ghcr OCI・マルチアーキ)。goreleaser の
 // docker pipe で per-arch イメージをビルドし ghcr へ push、manifest list を作る。
 // docker デーモン＋ghcr 認証(GITHUB_TOKEN packages:write)が要る。書く前に計画を見せる。
 func publishContainer(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
@@ -1136,7 +1136,7 @@ func containerRequirements(tagMissing bool) []requirement {
 }
 
 // publishLinuxPkg は apt(deb)/rpm チャネル。nfpm で deb/rpm を生成し、hosted repo へ
-// multipart POST でアップロードする(PACKAGE_REPO_TOKEN。GitHub には触れない・03/07)。
+// multipart POST でアップロードする(PACKAGE_REPO_TOKEN。GitHub には触れない)。
 // repo 未設定は skip して案内(channel_skipped)。プロバイダ依存のため `-F package=@` 形を既定。
 func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, ext string) output.Result {
 	repo := channelTargetByName(cfg, chName)        // 配信 URL(probe/install/表示)
@@ -1357,7 +1357,7 @@ func pkgRequirements(tagMissing bool) []requirement {
 }
 
 // httpUploadPackage は hosted repo へ multipart POST する(field "package"=ファイル、
-// 認証は basic auth で username=token。build.example.yaml の curl -F package=@ -u token: 準拠)。
+// 認証は basic auth で username=token。`curl -F package=@… -u token:` 相当)。
 func httpUploadPackage(ctx context.Context, repoURL, token, filePath string) error {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -1399,7 +1399,7 @@ func httpUploadPackage(ctx context.Context, repoURL, token, filePath string) err
 // publishViaRelease は「archive をアップロードして所有リポジトリに manifest/formula を書く」
 // owned チャネル共通の発行フロー(homebrew/scoop)。makePub が archive から Publisher を組む。
 func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, target string, makePub func([]build.Artifact) channel.Publisher) output.Result {
-	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く(03)。
+	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く。
 	// BYO-bundle(GUI・依頼③)は goreleaser を通さない(main が無く生成不可)ため configPath は空。
 	var configPath string
 	if !cfg.Bundle {
@@ -1524,7 +1524,7 @@ func gatedUnwiredSkip(c registry.Command, chName, reason string) output.Result {
 	return res
 }
 
-// publishScript は script チャネル(curl|sh インストーラ・03/07)。install.sh を生成し、
+// publishScript は script チャネル(curl|sh インストーラ)。install.sh を生成し、
 // 実 release の extra_files で同梱アップロードする。書く前に install.sh の内容を見せる。
 func publishScript(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	if cfg.Github == "" {
@@ -1594,7 +1594,7 @@ func publishScript(ctx context.Context, c registry.Command, root string, cfg con
 	return res
 }
 
-// publishGoinstall は goinstall チャネル(梱包ゼロ・03/07)。何も push せず、module proxy で
+// publishGoinstall は goinstall チャネル(梱包ゼロ)。何も push せず、module proxy で
 // go install 可否を確認して手順を案内する。--yes でも書き込みは無い(noop)。
 func publishGoinstall(ctx context.Context, c registry.Command, root string, cfg config.Config, tagMissing bool) output.Result {
 	mod := channelTargetByName(cfg, "goinstall")
@@ -1834,7 +1834,7 @@ func caskPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, gh
 	}
 }
 
-// publishCask は cask チャネル(owned・03)。持ち込みバンドルを GitHub Release へ上げ、実 sha256 で
+// publishCask は cask チャネル(owned)。持ち込みバンドルを GitHub Release へ上げ、実 sha256 で
 // 同一 tap の Casks/<token>.rb を書く(Formula と同居=状態一元化・依頼④)。publishHomebrew の対だが、
 // 成果物は archive でなく BYO-bundle(bundleRelease)から得る。
 func publishCask(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
@@ -1904,7 +1904,7 @@ func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Pub
 	res := output.New(c.Name, msg, true)
 	res.Data = publishData{Applied: false, Plan: []channel.PlanItem{item}, Requires: reqs}
 	res.Next = dryRunNext(item, reqs, chName)
-	// 自前リポジトリ(tap/bucket)が未作成なら予告する(--yes で wharfy が作る・ADR-8)。
+	// 自前リポジトリ(tap/bucket)が未作成なら予告する(--yes で wharfy が作る)。
 	if rb, ok := pub.(channel.RepoBacked); ok {
 		if exists, e := rb.RepoExists(ctx); e == nil && !exists {
 			res.Warnings = append(res.Warnings, output.Warning{
@@ -1957,7 +1957,7 @@ func dryRunNext(item channel.PlanItem, reqs []requirement, chName string) []outp
 }
 
 // writeGeneratedConfig は所有する生成物(goreleaser.yaml ＋ script 有効時は install.sh)を
-// .wharfy/ に書く(03)。install.sh は extra_files が参照するので、生成設定と必ず同時に書く。
+// .wharfy/ に書く。install.sh は extra_files が参照するので、生成設定と必ず同時に書く。
 //
 // BYO-binary(依頼①)では GoReleaser 設定を生成しない(非 Go リポでは main が無く生成できない)。
 // install.sh だけ書き、configPath は空("")を返す — 後段の archive/release は prebuilt seam が
@@ -1995,7 +1995,7 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 	return config.WriteGoReleaser(root, glYAML)
 }
 
-// tagMissingResult / tokenMissingResult は実 apply の前提不足(09)。実リリース前に弾く。
+// tagMissingResult / tokenMissingResult は実 apply の前提不足。実リリース前に弾く。
 func tagMissingResult(c registry.Command, version string) output.Result {
 	res := output.New(c.Name, "cannot publish without a tag", false)
 	res.Errors = []output.Problem{{Code: output.ErrTagMissing, Message: "no git tag found; the tag is the version", Hint: "git tag vX.Y.Z && git push --tags, then retry"}}
@@ -2013,7 +2013,7 @@ func tokenMissingResult(c registry.Command) output.Result {
 // ownedReleaseApply は実 archive 反映後に formula/manifest を所有リポジトリに書く(--yes)。
 // 前提(tag/token)は確認済み。archive は既に GitHub Releases へアップロード済み(実 checksum)。
 func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publisher, root, project, chName, target, releaseTarget, version string) output.Result {
-	// 自前リポジトリ(tap/bucket)が無ければ作る(--yes の明示同意があるので・ADR-8/03)。
+	// 自前リポジトリ(tap/bucket)が無ければ作る(--yes の明示同意があるので)。
 	created := false
 	if rb, ok := pub.(channel.RepoBacked); ok {
 		c2, err := rb.EnsureRepo(ctx)

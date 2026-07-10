@@ -1,22 +1,22 @@
 package output
 
-// codes.go — warning / error コードの正準カタログ(設計 09)。
+// codes.go — warning / error コードの正準カタログ。
 //
-// 規約(09):
+// 規約:
 //   - コードは snake_case の安定識別子。**追加は非破壊**、**改名・意味変更は破壊的**
-//     (02 の schema_version と同じ扱い)。
+//     (schema_version と同じ扱い)。
 //   - message は人間向け(変わってよい)。**分岐は code で行う**(message でしない)。
 //   - 新しい失敗パターンは、まずここに code を足してから実装する(後付けの無秩序な文字列を作らない)。
 //
 // Result を作る箇所はここの定数だけを使う。Catalog がこのパッケージの単一真実で、
-// doc/wip/wharfy/design/09_error_catalog.md(人間向けカタログ)との一致を codes_test.go で担保する。
+// 追加・削除は codes_test.go の golden がレビューに載せる。
 
 // 警告コード(warnings・処理は続行)。
 const (
 	WarnWinUnsigned       = "win_unsigned"        // Windows 成果物が未署名(証明書なし)
 	WarnDarwinUnnotarized = "darwin_unnotarized"  // darwin 署名済みだが未公証
 	WarnChannelSkipped    = "channel_skipped"     // チャネルを skip(トークン/設定不足)
-	WarnDriftDetected     = "drift_detected"      // status で記録と実体が食い違い(04)
+	WarnDriftDetected     = "drift_detected"      // status で記録と実体が食い違い
 	WarnGatedPending      = "gated_pending"       // gated チャネルが審査待ち
 	WarnGoinstallOnlyGo   = "goinstall_only_go"   // goinstall 指定だが Go ターゲットでない
 	WarnTapWillBeCreated  = "tap_will_be_created" // 自前 tap/bucket が未作成で作る予定
@@ -45,7 +45,7 @@ const (
 	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
 	ErrChecksumMismatch   = "checksum_mismatch"    // manifest の sha256 が実アセットと不一致(#10 自己検査)
-	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗(04)
+	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗
 	ErrNetworkError       = "network_error"        // 一時的なネットワーク失敗
 	ErrVerifyFailed       = "verify_failed"        // verify で install/実行が失敗
 	ErrInternal           = "internal"             // 想定外(バグ)
@@ -59,7 +59,7 @@ const (
 	KindError   CodeKind = "error"
 )
 
-// CatalogEntry は正準カタログの 1 行。Summary は「いつ起きるか」(09 の表の説明)。
+// CatalogEntry は正準カタログの 1 行。Summary は「いつ起きるか」。
 type CatalogEntry struct {
 	Code    string
 	Kind    CodeKind

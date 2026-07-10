@@ -7,7 +7,7 @@ import (
 )
 
 // winget_github.go — Submitter の実体。microsoft/winget-pkgs を fork し、ブランチに manifest を
-// commit して中央リポジトリへ PR を出す(設計 11A)。低レベルの fork/branch/commit/PR は
+// commit して中央リポジトリへ PR を出す。低レベルの fork/branch/commit/PR は
 // ghPR(github_pr.go)に委譲する(winget / *-core 共通)。マージはしない。
 //
 // 注: 実 PR を Microsoft のリポジトリに出すため自動テストでは検証しない(fake Submitter で

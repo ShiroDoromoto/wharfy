@@ -9,7 +9,7 @@ import (
 
 // cask.go — Homebrew Cask(.rb)を生成する(GUI バンドル配布・依頼②)。
 // Formula(CLI)と同じ tap に同居させ(Casks/<token>.rb)、`wharfy status` で一元表示する(依頼④)。
-// 形は安定・機械生成で、利用者は直接書かない(03)。formula.go の対。
+// 形は安定・機械生成で、利用者は直接書かない。formula.go の対。
 //
 // バンドルは各アプリが署名済みで持ち込む(BYO-bundle)。wharfy は再署名しない — 非 notarized なら
 // macOS の quarantine で初回起動時に Gatekeeper 警告が出るため、caveats に回避手順を書く(依頼⑤)。

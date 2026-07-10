@@ -16,7 +16,7 @@ import (
 // ConfigFileName は利用者リポジトリ root に置く設定ファイル名。
 const ConfigFileName = "wharfy.yaml"
 
-// AmbiguousMainError は main を一意に推測できないとき(設計 07「黙って間違えない」)。
+// AmbiguousMainError は main を一意に推測できないとき(黙って間違えない)。
 // CLI 層がこれを output.ErrMainAmbiguous の Problem に変換する(code 付与は Result 作成側)。
 type AmbiguousMainError struct {
 	Candidates []string // 検出された main パッケージ(./相対)。0 件のこともある。
@@ -31,7 +31,7 @@ func (e *AmbiguousMainError) Error() string {
 }
 
 // Resolver は実効設定を組み立てる。外部 I/O(git / go list / go.mod 読み)は
-// 関数フィールドに分離してテストで差し替え可能にする(設計 01 末端は差し替え可能)。
+// 関数フィールドに分離してテストで差し替え可能にする(末端は差し替え可能)。
 type Resolver struct {
 	Root       string
 	OriginURL  func(root string) (string, error)   // git remote origin URL
@@ -66,7 +66,7 @@ func Load(root string) (File, error) {
 	return f, nil
 }
 
-// Resolve は解決順(07: フラグ＞env＞明示値＞推測)のうち、明示値＞推測を組み立てる。
+// Resolve は解決順(フラグ＞env＞明示値＞推測)のうち、明示値＞推測を組み立てる。
 // フラグ・env の上書きは CLI 層が File に流し込む前提でここでは扱わない。
 func (r *Resolver) Resolve(in File) (Config, error) {
 	owner, repo := splitGithub(in.Github)
@@ -88,7 +88,7 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 	bundle := IsBundle(in)
 
 	// main が曖昧でも、他は解決した実効設定を返す(config.json は data 必須・main は任意)。
-	// 呼び出し側はこの err を ok=false + main_ambiguous の Problem に変換する(07「停止」)。
+	// 呼び出し側はこの err を ok=false + main_ambiguous の Problem に変換する(停止)。
 	// BYO-binary(prebuilt)/ BYO-bundle(bundle)ではビルドを wharfy がしないので main は不要 —
 	// `go list` を叩かず main は空のまま進める(非 Go リポで `cannot resolve 'main'` にならない・依頼①)。
 	var main string
@@ -166,7 +166,7 @@ func prebuiltBuild(in *PrebuiltInput) *Build {
 	return &Build{GOOS: goos, GOARCH: goarch}
 }
 
-// resolveMain は main の明示値を優先し、無ければ検出する。曖昧なら停止(07)。
+// resolveMain は main の明示値を優先し、無ければ検出する。曖昧なら停止。
 func (r *Resolver) resolveMain(explicit, project string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
@@ -287,7 +287,7 @@ func resolveRepoURLs(channel string, in *RepoInput) (deliver, push string) {
 	return in.Repo, firstNonEmpty(in.Push, in.Repo)
 }
 
-// channelTarget は自前 tap/bucket 等の発行先を既定生成する(ADR-8: プロジェクトごと命名)。
+// channelTarget は自前 tap/bucket 等の発行先を既定生成する(プロジェクトごと命名)。
 // 解決できない(owner 不明など)場合は空(schema 上 target は任意)。
 func (r *Resolver) channelTarget(name string, in File, owner, github, project string) string {
 	switch name {
@@ -494,7 +494,7 @@ func baseName(p string) string {
 	return p
 }
 
-// detectLicense は LICENSE ファイルから SPDX を粗く推定する。不確実なら空(07)。
+// detectLicense は LICENSE ファイルから SPDX を粗く推定する。不確実なら空。
 func detectLicense(root string) string {
 	for _, name := range []string{"LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"} {
 		b, err := os.ReadFile(filepath.Join(root, name))

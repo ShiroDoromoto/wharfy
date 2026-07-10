@@ -9,7 +9,7 @@ import (
 )
 
 // winget.go — winget(gated)。中央リポジトリ microsoft/winget-pkgs へ申請する manifest を
-// 生成する(設計 11A)。wharfy は「fork→branch→manifest→PR→状態追跡」までを担い、マージはしない。
+// 生成する。wharfy は「fork→branch→manifest→PR→状態追跡」までを担い、マージはしない。
 // 生成するのは v1.6 の 3 種 manifest(version / installer / locale)。
 //
 // 実体(fork/PR)は Submitter(channel/winget_github.go)。ここは「申請物の生成」。

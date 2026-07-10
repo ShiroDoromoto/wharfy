@@ -1,4 +1,4 @@
-// Command wharfy — 1 つのバイナリをあらゆるチャネルへ配る道具(設計 01)。
+// Command wharfy — 1 つのバイナリをあらゆるチャネルへ配る道具。
 // main は薄く、cobra ツリーの組み立てと実行だけを行う。
 package main
 

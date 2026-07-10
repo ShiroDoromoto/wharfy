@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// oci.go — container(ghcr)の実体照合(設計 04・11B)。Docker Registry HTTP API V2 で
+// oci.go — container(ghcr)の実体照合。Docker Registry HTTP API V2 で
 // イメージのタグ存在を確認する。version タグが在れば found(=配布済み)。
 // 公開イメージは匿名トークン、非公開は GITHUB_TOKEN で token 交換する。
 

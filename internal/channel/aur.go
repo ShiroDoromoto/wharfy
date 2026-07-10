@@ -11,7 +11,7 @@ import (
 )
 
 // aur.go — AUR(Arch User Repository・owned)。ビルド済みバイナリの -bin パッケージとして
-// PKGBUILD ＋ .SRCINFO を生成し、aur.archlinux.org の自前パッケージ git へ push する(設計 03)。
+// PKGBUILD ＋ .SRCINFO を生成し、aur.archlinux.org の自前パッケージ git へ push する。
 // 審査はなく自前 push(AUR_SSH_KEY)。実体照合は AUR RPC で版を引く。
 //
 // 実 push(git+ssh)は AurPusher(channel/aur_git.go)。ここは生成と RPC probe。
@@ -165,7 +165,7 @@ type AurPusher interface {
 	Push(ctx context.Context, pkgname string, files map[string]string) (commit string, err error)
 }
 
-// AurProbe は AUR RPC で実体の版を引く(04 の実体照合)。
+// AurProbe は AUR RPC で実体の版を引く(実体照合)。
 type AurProbe struct {
 	Base string // 既定 https://aur.archlinux.org
 	HTTP *http.Client

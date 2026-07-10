@@ -1,24 +1,16 @@
 package output
 
 import (
-	"bufio"
-	"os"
 	"regexp"
 	"sort"
-	"strings"
 	"testing"
 )
 
-// codes.go の drift 対策(設計 09「このカタログと実コード定数の一致をテストで担保」)。
-// コードの drift も agent 出力の drift と同じ思想で防ぐ(05)。
-
-// docCatalogPath は人間向け正準カタログ(09)。doc/wip は gitignore のため CI には無い。
-// 在るとき(ローカル)だけ doc⇔code 一致を検証し、無いときは skip する。
-const docCatalogPath = "../../doc/wip/wharfy/design/09_error_catalog.md"
+// codes.go の drift 対策。コードの drift も agent 出力の drift と同じ思想で防ぐ。
 
 // expectedCodes は Catalog の正準コード一覧(ソート済み)。
-// CI(doc 不在)でも追加・削除を検知できるよう、コードとは別に固定しておく golden。
-// 変更時はここも更新する→契約変更がレビューに乗る(05 の golden snapshot と同思想)。
+// 追加・削除を検知できるよう、コードとは別に固定しておく golden。
+// 変更時はここも更新する→契約変更がレビューに乗る(agent の golden snapshot と同思想)。
 var expectedCodes = []string{
 	"auth_failed",
 	"build_failed",
@@ -79,74 +71,6 @@ func TestCatalogMatchesGolden(t *testing.T) {
 	if !equalStrings(got, expectedCodes) {
 		t.Errorf("Catalog codes drifted from expectedCodes.\n got: %v\nwant: %v\n(update expectedCodes if this change is intentional)", got, expectedCodes)
 	}
-}
-
-// TestCatalogMatchesDoc: 09 の人間向けカタログと code 定数が一致する(doc 在るときのみ)。
-func TestCatalogMatchesDoc(t *testing.T) {
-	f, err := os.Open(docCatalogPath)
-	if os.IsNotExist(err) {
-		t.Skipf("catalog doc not present (%s); skipping doc⇔code match", docCatalogPath)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	docCodes := parseDocCodes(t, f)
-	code := catalogCodes()
-
-	for c, kind := range docCodes {
-		k, ok := code[c]
-		if !ok {
-			t.Errorf("code %q is in catalog doc (09) but not in codes.go Catalog", c)
-			continue
-		}
-		if k != kind {
-			t.Errorf("code %q kind mismatch: doc=%q codes.go=%q", c, kind, k)
-		}
-	}
-	for c := range code {
-		if _, ok := docCodes[c]; !ok {
-			t.Errorf("code %q is in codes.go Catalog but not in catalog doc (09)", c)
-		}
-	}
-}
-
-// parseDocCodes は 09 のマークダウン表から「第1列の `code`」だけを抜き、
-// 直近の見出し(警告/エラー)から kind を決める。
-func parseDocCodes(t *testing.T, f *os.File) map[string]CodeKind {
-	t.Helper()
-	firstCell := regexp.MustCompile("^`([a-z][a-z0-9_]*)`$")
-	out := map[string]CodeKind{}
-	var kind CodeKind
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		switch {
-		case strings.HasPrefix(line, "#") && strings.Contains(line, "警告"):
-			kind = KindWarning
-			continue
-		case strings.HasPrefix(line, "#") && strings.Contains(line, "エラー"):
-			kind = KindError
-			continue
-		}
-		if !strings.HasPrefix(line, "|") || kind == "" {
-			continue
-		}
-		cells := strings.Split(line, "|") // [ "", cell1, cell2, ... ]
-		if len(cells) < 2 {
-			continue
-		}
-		m := firstCell.FindStringSubmatch(strings.TrimSpace(cells[1]))
-		if m == nil {
-			continue // ヘッダ行・区切り行・コード以外の第1列はここで落ちる
-		}
-		out[m[1]] = kind
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return out
 }
 
 func sortedCodes(m map[string]CodeKind) []string {

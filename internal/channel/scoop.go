@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-// scoop.go — Scoop Publisher(owned・即時。設計 02/03/11)。自前 bucket の
+// scoop.go — Scoop Publisher(owned・即時)。自前 bucket の
 // bucket/<project>.json マニフェストを所有する。homebrew と同型: Plan で差分を見せ、
-// Publish で bucket に書き、Probe で bucket 上の版を確認する(04)。
+// Publish で bucket に書き、Probe で bucket 上の版を確認する。
 // Windows は zip アーカイブを参照する(amd64→64bit / arm64→arm64)。
 
 // ScoopArch は 1 アーキの配布(windows)。URL は Releases の zip。
@@ -111,7 +111,7 @@ func (s *Scoop) Plan(ctx context.Context) (PlanItem, error) {
 	return item, nil
 }
 
-// Publish は差分があれば bucket に書く(noop なら書かない)。owned manifest のみ(03)。
+// Publish は差分があれば bucket に書く(noop なら書かない)。owned manifest のみ。
 func (s *Scoop) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 	item, err := s.Plan(ctx)
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *Scoop) Publish(ctx context.Context) (PlanItem, PubResult, error) {
 // RepoExists は自前 bucket リポジトリが在るか(dry-run の予告に使う)。
 func (s *Scoop) RepoExists(ctx context.Context) (bool, error) { return s.Store.Exists(ctx) }
 
-// EnsureRepo は bucket が無ければ作る(--yes の上でのみ・ADR-8)。
+// EnsureRepo は bucket が無ければ作る(--yes の上でのみ)。
 func (s *Scoop) EnsureRepo(ctx context.Context) (bool, error) { return ensureRepo(ctx, s.Store) }
 
 // Probe は bucket 上の manifest の版を返す(実体・04 の照合の基点)。
@@ -217,7 +217,7 @@ func GenerateScoopManifest(in ScoopInput) string {
 
 	var depends []string
 	if len(in.Dependencies) > 0 {
-		depends = sortedDeps(in.Dependencies) // 決定的に sort(02 出力契約)
+		depends = sortedDeps(in.Dependencies) // 決定的に sort(出力契約)
 	}
 	m := scoopManifest{
 		Version:      in.Version,

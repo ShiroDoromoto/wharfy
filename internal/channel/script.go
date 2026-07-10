@@ -8,7 +8,7 @@ import (
 	"regexp"
 )
 
-// script.go — script チャネルの実体照合(設計 04)。Release に同梱した install.sh を取得し、
+// script.go — script チャネルの実体照合。Release に同梱した install.sh を取得し、
 // それが指す版(VERSION="x")を読む。status の記録 vs 実体の照合に使う。
 // install.sh の生成は config パッケージ(所有する生成物)、ここは「実体の読み手」。
 

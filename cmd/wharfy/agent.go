@@ -9,7 +9,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
-// runAgent は ①「聞けば分かる」の一枚出力。registry から生成するので実体とズレない(05)。
+// runAgent は ①「聞けば分かる」の一枚出力。registry から生成するので実体とズレない。
 // --json は schemas/agent.json に valid な AgentDoc を出す。
 func runAgent(asJSON bool) error {
 	doc := registry.BuildAgentDoc(versionLine())
@@ -25,7 +25,7 @@ func runAgent(asJSON bool) error {
 	return nil
 }
 
-// printAgentHuman は人間向けの体裁(samples/cmd_agent.go の runAgent 準拠)。
+// printAgentHuman は人間向けの体裁。
 func printAgentHuman(doc registry.AgentDoc) {
 	fmt.Println("wharfy — ship one binary to every channel. Read this once, then drive.")
 	fmt.Printf("version: %s\n", doc.Version)

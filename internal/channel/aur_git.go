@@ -9,7 +9,7 @@ import (
 )
 
 // aur_git.go — AurPusher の実体。AUR の自前パッケージ git(ssh)を clone し、PKGBUILD/.SRCINFO を
-// commit して push する(設計 03・審査なし)。AUR_SSH_KEY を一時ファイルに置き GIT_SSH_COMMAND で使う。
+// commit して push する(審査なし)。AUR_SSH_KEY を一時ファイルに置き GIT_SSH_COMMAND で使う。
 //
 // 注: 実 AUR へ push するため自動テストでは検証しない(fake AurPusher で orchestration を検証)。
 
