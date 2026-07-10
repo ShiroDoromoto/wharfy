@@ -97,6 +97,12 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return withStaleGeneratorWarning(root, c, publishAll(ctx, c, root, cfg, in, version, tagMissing))
 	}
 
+	// 名指しのチャネルも channels: の集合に閉じる。畳んだチャネルの repo は archive されていることが
+	// 多く、そこへの書き戻しは手書きの廃止告知を潰す。復活は配布者が設定へ書き戻したときにだけ起こる。
+	if config.KnownChannel(args[0]) && !config.HasChannel(cfg, args[0]) {
+		return channelNotConfiguredResult(c, cfg, in, args[0])
+	}
+
 	// 凍結(ship:false)は結果の作り方ではなく入力を変える。据え置く版に差し替えてから発行し、
 	// 何が据え置かれたかを結果に必ず載せる(不在は黙っていると気づかれない)。
 	fz := loadFreeze(root, cfg, args[0])
@@ -113,6 +119,36 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		res.Warnings = append(res.Warnings, freezeWarning(fz))
 	}
 	return res
+}
+
+// channelNotConfiguredResult は channels: に無いチャネルを名指しされたときの拒否。
+// 「まだ publish していない」ではなく「配ると宣言していない」ので、発行せず理由を返す。
+func channelNotConfiguredResult(c registry.Command, cfg config.Config, in config.File, ch string) output.Result {
+	hint := "add '" + ch + "' back to channels: in wharfy.yaml if you mean to distribute it again"
+	if config.IsPrebuilt(in) && !config.PrebuiltCompatible(ch) {
+		hint = ch + " needs the Go toolchain and is dropped in prebuilt (BYO-binary) mode"
+	}
+	item := channel.PlanItem{
+		Channel: ch, Kind: config.Kind(ch), Action: channel.ActionSkip,
+		Reason: "not in channels: — wharfy publishes only what you declared",
+	}
+	res := publishResult(c, ch+" is not in wharfy.yaml channels: — nothing published", false, []channel.PlanItem{item})
+	res.Errors = []output.Problem{{
+		Code:    output.ErrChannelNotConfigured,
+		Message: ch + " is not a configured channel (declared: " + strings.Join(channelNames(cfg), ", ") + ")",
+		Hint:    hint,
+	}}
+	res.Next = []output.NextDo{{Reason: "publish the channels you declared", Do: "wharfy publish --dry-run"}}
+	return res
+}
+
+// channelNames は解決済みチャネルの名前列(拒否理由に「宣言した集合」を載せるため)。
+func channelNames(cfg config.Config) []string {
+	out := make([]string, 0, len(cfg.Channels))
+	for _, ch := range cfg.Channels {
+		out = append(out, ch.Name)
+	}
+	return out
 }
 
 // frozenHoldResult は「配るのを止めた」チャネルの結果。書き込みも release も走らせない。
@@ -1984,7 +2020,7 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 func ownedReleaseDryRun(ctx context.Context, c registry.Command, pub channel.Publisher, version, chName, target string, tagMissing bool) output.Result {
 	item, err := pub.Plan(ctx)
 	if err != nil {
-		return probeFailedResult(c, err)
+		return probeFailedResult(c, chName, err)
 	}
 	// 配線不能(空 architecture など)は skip。壊れたマニフェストを予告せず、理由を surface する(依頼書七通目 §1)。
 	if item.Action == channel.ActionSkip {
@@ -2176,10 +2212,12 @@ func publishResult(c registry.Command, msg string, ok bool, plan []channel.PlanI
 	return res
 }
 
-func probeFailedResult(c registry.Command, err error) output.Result {
-	res := output.New(c.Name, "cannot read the tap", false)
-	res.Errors = []output.Problem{{Code: output.ErrProbeFailed, Message: err.Error(), Hint: "check network or tap visibility"}}
-	res.Next = []output.NextDo{{Reason: "retry once reachable", Do: "wharfy publish homebrew --dry-run"}}
+// probeFailedResult は plan 前の実体照合に失敗したときの結果。next は照合できなかった当のチャネルを
+// 指す(呼び手は owned 全チャネル。homebrew 決め打ちだと、設定に無いチャネルを勧めうる)。
+func probeFailedResult(c registry.Command, chName string, err error) output.Result {
+	res := output.New(c.Name, "cannot read the "+chName+" target", false)
+	res.Errors = []output.Problem{{Code: output.ErrProbeFailed, Message: err.Error(), Hint: "check network or target visibility"}}
+	res.Next = []output.NextDo{{Reason: "retry once reachable", Do: "wharfy publish " + chName + " --dry-run"}}
 	return res
 }
 

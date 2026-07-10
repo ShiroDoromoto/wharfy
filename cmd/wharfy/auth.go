@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 	"github.com/ShiroDoromoto/wharfy/internal/secret"
@@ -110,6 +111,23 @@ func runAuth(_ context.Context, c registry.Command, args []string) output.Result
 
 	res := output.New(c.Name, "saved "+kind.Kind+" token to the OS keychain ("+kind.EnvVar+")", true)
 	res.Data = map[string]any{"kind": kind.Kind, "env_var": kind.EnvVar, "stored": true, "storage": "keychain"}
-	res.Next = []output.NextDo{{Reason: "publish the package channels (token now resolves from keychain)", Do: "wharfy publish apt --yes"}}
+	res.Next = []output.NextDo{{Reason: "publish the package channels (token now resolves from keychain)", Do: packageChannelNextDo()}}
 	return res
+}
+
+// packageChannelNextDo は「このトークンで発行できるチャネル」のうち、設定に在る最初の 1 つを勧める。
+// channels: から外したチャネルを勧めると、publish が拒否する手を案内することになる。
+func packageChannelNextDo() string {
+	root, err := os.Getwd()
+	if err != nil {
+		return "wharfy publish --dry-run"
+	}
+	in, _ := config.Load(root)
+	cfg, _ := config.NewResolver(root).Resolve(in)
+	for _, name := range []string{"apt", "rpm"} {
+		if config.HasChannel(cfg, name) {
+			return "wharfy publish " + name + " --yes"
+		}
+	}
+	return "wharfy publish --dry-run"
 }

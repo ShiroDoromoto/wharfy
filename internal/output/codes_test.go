@@ -15,6 +15,7 @@ var expectedCodes = []string{
 	"auth_failed",
 	"build_failed",
 	"builder_unavailable",
+	"channel_not_configured",
 	"channel_skipped",
 	"checksum_mismatch",
 	"config_invalid",

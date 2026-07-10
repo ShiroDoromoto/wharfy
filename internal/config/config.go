@@ -317,6 +317,12 @@ var channelKind = map[string]string{
 	"homebrew-core": "gated", // 中央キュレーション repo(Homebrew/homebrew-core)への gated PR
 }
 
+// KnownChannel は wharfy が名前を知っているチャネルかを返す(綴り違いと「設定に無い」を分けるため)。
+func KnownChannel(name string) bool {
+	_, ok := channelKind[name]
+	return ok
+}
+
 // Kind はチャネル名から種別を返す。未知は owned 扱い(既定)。
 func Kind(name string) string {
 	if k, ok := channelKind[name]; ok {

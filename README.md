@@ -194,6 +194,12 @@ what it froze — freezing shows up as an absence, and an absence is easy to mis
 
 Writing no `deprecate:` block leaves every generated artifact byte-for-byte identical.
 
+Take a channel **out** of `channels:` and wharfy stops publishing to it — including when you name it:
+`wharfy publish homebrew` on a config without `homebrew` fails with `channel_not_configured` rather
+than writing to a repository you retired (people usually archive it and leave a hand-written notice in
+the last formula). Nothing suggests it either: `next` only ever proposes channels you declared.
+Bringing it back is a deliberate edit to `channels:`, the same explicit gate as every other write.
+
 `release` also writes a static `latest.json` (version + per-OS/arch asset URLs) to the same
 Release, so its stable URL
 `…/releases/latest/download/latest.json` is a vehicle-independent "is there a newer version?"
