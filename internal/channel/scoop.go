@@ -33,9 +33,11 @@ type ScoopInput struct {
 	Dependencies []string // ランタイム依存(manifest の "depends")。空なら出さない
 	Owner, Repo  string   // autoupdate URL の Releases リポジトリ
 	Archives     []ScoopArch
-	App          bool   // GUI app manifest にする(依頼③)
-	AppName      string // shortcut ラベル(表示名)
-	ExeName      string // zip 内 exe 名(既定 <Binary>.exe)
+	// Notice は配布者が書いた告知(D-3)。scoop は "notes" を install / update 時に表示する。
+	Notice  string
+	App     bool   // GUI app manifest にする(依頼③)
+	AppName string // shortcut ラベル(表示名)
+	ExeName string // zip 内 exe 名(既定 <Binary>.exe)
 }
 
 // Scoop は scoop チャネルの Publisher。Bucket は "owner/scoop-<project>"。
@@ -157,6 +159,7 @@ type scoopManifest struct {
 	Architecture map[string]scoopArchEntry `json:"architecture"`
 	Bin          string                    `json:"bin,omitempty"`       // GUI app: top-level bin(portable exe)
 	Shortcuts    [][]string                `json:"shortcuts,omitempty"` // GUI app: Start メニュー登録
+	Notes        []string                  `json:"notes,omitempty"`     // 配布者の告知(1 行 1 要素)
 	Checkver     string                    `json:"checkver,omitempty"`
 	Autoupdate   *scoopAutoupdate          `json:"autoupdate,omitempty"`
 }
@@ -223,6 +226,7 @@ func GenerateScoopManifest(in ScoopInput) string {
 		License:      in.License,
 		Depends:      depends,
 		Architecture: arch,
+		Notes:        noticeLines(in.Notice),
 		Checkver:     "github",
 	}
 	if in.App {

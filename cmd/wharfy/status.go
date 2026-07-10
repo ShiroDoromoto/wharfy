@@ -46,6 +46,8 @@ type statusChannel struct {
 	Drift     *state.Drift `json:"drift,omitempty"`
 	State     string       `json:"state,omitempty"` // gated の申請状態(11A)
 	PR        string       `json:"pr,omitempty"`    // gated の PR URL
+	// Deprecated は畳む宣言(D-3)。宣言が無ければ出ない。
+	Deprecated *config.Deprecation `json:"deprecated,omitempty"`
 }
 
 // runStatus は status を組み立てて出力する(agent 同様 Result envelope と別形)。
@@ -93,11 +95,13 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 
 	for _, ch := range cfg.Channels {
 		cs, warn := assessChannel(ctx, ch, cfg, in, st, probe, tag)
+		cs.Deprecated = ch.Deprecated
 		out.Channels = append(out.Channels, cs)
 		if warn != nil {
 			out.Warnings = append(out.Warnings, *warn)
 		}
 	}
+	out.Warnings = append(out.Warnings, deprecationWarnings(cfg)...)
 	out.Next = statusNext(out.Channels)
 	out.Message = statusMessage(out.Channels)
 
@@ -433,7 +437,26 @@ func printStatusHuman(out statusOutput) {
 		if c.Drift != nil {
 			line += fmt.Sprintf("  ⚠ drift:%s (rec:%s remote:%s)", c.Drift.Kind, c.Drift.Recorded, c.Drift.Remote)
 		}
+		if d := c.Deprecated; d != nil {
+			line += "  ⚠ deprecated"
+			if d.Since != "" {
+				line += " since " + d.Since
+			}
+			if !d.Ship {
+				line += " (frozen)"
+			}
+			if !d.NoticeSurface {
+				// 告知が載らなかったことを黙っていると、配布者は告知したつもりのままになる。
+				line += "; no place for your notice — reaches users only via latest.json"
+			}
+		}
 		fmt.Println(line)
+	}
+	// 宙に浮いた宣言は channels に行が無いので、ここでしか言えない。
+	for _, w := range out.Warnings {
+		if w.Code == output.WarnDeprecateOrphan {
+			fmt.Printf("  ⚠ %s\n", w.Message)
+		}
 	}
 	if len(out.Next) > 0 {
 		fmt.Println("next:")

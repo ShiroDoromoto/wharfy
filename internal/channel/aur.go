@@ -35,7 +35,13 @@ type AurInput struct {
 	Depends     []string // 必須ランタイム依存(depends=(...))。空なら出さない
 	OptDepends  []string // 任意ランタイム依存(optdepends=(...))。空なら出さない
 	Sources     []AurSource
+	// Notice は配布者が書いた告知(D-3)。pkgdesc は 1 行なので運べない。
+	// 空でなければ <pkgname>.install を生成し、pacman が install/upgrade 時に表示する。
+	Notice string
 }
+
+// InstallFileName は告知を運ぶ .install ファイル名(空の告知なら生成しない)。
+func (in AurInput) InstallFileName() string { return in.Package + ".install" }
 
 // aurArch は goarch を Arch の arch に直す(amd64→x86_64 / arm64→aarch64)。
 func aurArch(arch string) string {
@@ -76,6 +82,9 @@ func GeneratePKGBUILD(in AurInput) string {
 	fmt.Fprintf(&b, "license=('%s')\n", aurLicense(in.License))
 	fmt.Fprintf(&b, "provides=('%s')\n", in.Project)
 	fmt.Fprintf(&b, "conflicts=('%s')\n", in.Project)
+	if TrimNotice(in.Notice) != "" {
+		fmt.Fprintf(&b, "install=%s\n", in.InstallFileName())
+	}
 	if deps := sortedDeps(in.Depends); len(deps) > 0 {
 		fmt.Fprintf(&b, "depends=(%s)\n", quoteJoin(deps))
 	}
@@ -105,6 +114,9 @@ func GenerateSRCINFO(in AurInput) string {
 	}
 	fmt.Fprintf(&b, "\tprovides = %s\n", in.Project)
 	fmt.Fprintf(&b, "\tconflicts = %s\n", in.Project)
+	if TrimNotice(in.Notice) != "" {
+		fmt.Fprintf(&b, "\tinstall = %s\n", in.InstallFileName())
+	}
 	for _, dep := range sortedDeps(in.Depends) {
 		fmt.Fprintf(&b, "\tdepends = %s\n", dep)
 	}
@@ -122,10 +134,14 @@ func GenerateSRCINFO(in AurInput) string {
 
 // Files は AUR git に置く {ファイル名: 内容}(PKGBUILD ＋ .SRCINFO)。
 func (in AurInput) Files() map[string]string {
-	return map[string]string{
+	files := map[string]string{
 		"PKGBUILD": GeneratePKGBUILD(in),
 		".SRCINFO": GenerateSRCINFO(in),
 	}
+	if install := GenerateAurInstall(in.Notice); install != "" {
+		files[in.InstallFileName()] = install
+	}
+	return files
 }
 
 // quoteJoin は依存名を PKGBUILD の配列リテラル('a' 'b')に整える。

@@ -21,6 +21,11 @@ const (
 	WarnGoinstallOnlyGo   = "goinstall_only_go"   // goinstall 指定だが Go ターゲットでない
 	WarnTapWillBeCreated  = "tap_will_be_created" // 自前 tap/bucket が未作成で作る予定
 	WarnInitMissing       = "init_missing"        // AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)
+	// WarnDeprecateNoSurface: 畳むと宣言したチャネルに告知を載せる欄が無い(goinstall/container 等)。
+	// 黙って落とすと配布者は「告知したつもり」で気づけないので、載らなかったことを明示する(D-3)。
+	WarnDeprecateNoSurface = "deprecate_no_notice_surface"
+	// WarnDeprecateOrphan: channels に無いチャネルへの deprecate 宣言。告知の更新が止まっている(D-3)。
+	WarnDeprecateOrphan = "deprecate_orphan"
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -72,6 +77,8 @@ var Catalog = []CatalogEntry{
 	{WarnGoinstallOnlyGo, KindWarning, "goinstall 指定だが Go ターゲットでない"},
 	{WarnTapWillBeCreated, KindWarning, "自前 tap/bucket が未作成で作る予定"},
 	{WarnInitMissing, KindWarning, "AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)"},
+	{WarnDeprecateNoSurface, KindWarning, "畳むチャネルに告知を載せる欄が無い(latest.json 経由でのみ届く)"},
+	{WarnDeprecateOrphan, KindWarning, "channels に無いチャネルへの deprecate 宣言(告知の更新が止まっている)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},

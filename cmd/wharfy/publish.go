@@ -285,7 +285,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 
 	res := publishResult(c, fmt.Sprintf("published %d channel(s) at %s", len(items), version), true, items)
 	res.Data = publishData{Applied: true, Plan: items}
-	res.Warnings = warns
+	res.Warnings = append(warns, deprecationWarnings(cfg)...)
 	res.Next = []output.NextDo{{Reason: "verify installs work", Do: "wharfy verify"}}
 	return withInitNudge(res)
 }
@@ -452,7 +452,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		aurDeps, aurOpt := config.AurDeps(in)
 		ai := channel.AurInput{Package: pkg, Project: cfg.Project, Version: version, License: cfg.License,
 			Description: in.Description, Homepage: cfg.Homepage, Maintainer: aurMaintainer(ghOwner),
-			Depends: aurDeps, OptDepends: aurOpt,
+			Depends: aurDeps, OptDepends: aurOpt, Notice: channelNotice(cfg, "aur"),
 			Sources: aurSources(archs, ghOwner, ghRepo, cfg.Project, version)}
 		commit, err := newAurPusher(sshKey).Push(ctx, pkg, ai.Files())
 		if err != nil {
@@ -578,6 +578,7 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 			Maintainer:  aurMaintainer(ghOwner),
 			Depends:     aurDeps,
 			OptDepends:  aurOpt,
+			Notice:      channelNotice(cfg, "aur"),
 			Sources:     aurSources(archs, ghOwner, ghRepo, cfg.Project, version),
 		}
 	}
@@ -1293,6 +1294,7 @@ func prebuiltPackageSpec(cfg config.Config, in config.File, chName, ext, version
 		Version:     version,
 		Maintainer:  pkgMaintainer(cfg),
 		Description: in.Description,
+		Notice:      channelNotice(cfg, chName),
 		Homepage:    cfg.Homepage,
 		License:     cfg.License,
 		Depends:     depends,
@@ -1696,6 +1698,7 @@ func homebrewPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo
 			License:      cfg.License,
 			Version:      version,
 			Dependencies: homebrewDeps(in),
+			Notice:       channelNotice(cfg, "homebrew"),
 			Archives:     formulaArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 		},
 	}
@@ -1711,6 +1714,7 @@ func scoopPublisher(cfg config.Config, in config.File, bucket, bOwner, bRepo, gh
 		Dependencies: scoopDeps(in),
 		Owner:        ghOwner,
 		Repo:         ghRepo,
+		Notice:       channelNotice(cfg, "scoop"),
 		Archives:     scoopArchives(archs, ghOwner, ghRepo, cfg.Project, version),
 	}
 	if cfg.Bundle {
@@ -1824,6 +1828,7 @@ func caskPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, gh
 			Version:   version,
 			AppBundle: caskAppBundle(cfg, in),
 			Notarized: false, // 依頼元は notarize しない方針(依頼⑤)。caveats で Gatekeeper を案内する
+			Notice:    channelNotice(cfg, "cask"),
 			Artifacts: caskArtifacts(archs, ghOwner, ghRepo, version),
 		},
 	}

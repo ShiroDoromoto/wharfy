@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -125,6 +126,7 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 		Prebuilt: prebuilt,
 		Bundle:   bundle,
 	}
+	cfg.OrphanDeprecations = orphanDeprecations(in, cfg.Channels)
 	return cfg, mainErr
 }
 
@@ -214,8 +216,48 @@ func (r *Resolver) resolveChannels(in File, owner, github, project string, prebu
 		default:
 			ch.Target = r.channelTarget(name, in, owner, github, project)
 		}
+		ch.Deprecated = resolveDeprecation(name, in.Deprecate[name])
 		out = append(out, ch)
 	}
+	return out
+}
+
+// resolveDeprecation は deprecate 宣言 1 つを解決する(D-3)。未宣言なら nil を返し、
+// 生成物は 1 バイトも変わらない。文面は逐語で運ぶ(wharfy は言い換えない)。
+func resolveDeprecation(channel string, in *DeprecateInput) *Deprecation {
+	if in == nil {
+		return nil
+	}
+	ship := true // 既定。畳むと決めた瞬間に入手経路が切れると事故になる
+	if in.Ship != nil {
+		ship = *in.Ship
+	}
+	return &Deprecation{
+		Since:         in.Since,
+		Ship:          ship,
+		Message:       in.Message,
+		NoticeSurface: HasNoticeSurface(channel),
+	}
+}
+
+// orphanDeprecations は channels に載っていないチャネルへの deprecate 宣言を名前順で返す。
+// 畳んだうえで channels からも外すと、wharfy はそのチャネルを触らなくなり告知の更新が止まる。
+// 禁じはしない(既存の成果物は残る)が、黙ってもいない。
+func orphanDeprecations(in File, resolved []ResolvedChannel) []string {
+	if len(in.Deprecate) == 0 {
+		return nil
+	}
+	live := make(map[string]bool, len(resolved))
+	for _, ch := range resolved {
+		live[ch.Name] = true
+	}
+	var out []string
+	for name := range in.Deprecate {
+		if !live[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out) // map 反復順は不定。出力を決定的にする
 	return out
 }
 

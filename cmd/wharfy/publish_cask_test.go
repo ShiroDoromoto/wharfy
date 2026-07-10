@@ -87,7 +87,9 @@ func TestPublishCaskApply(t *testing.T) {
 		`name "App"`,
 		`app "App.app"`,
 		"https://github.com/acme/app/releases/download/v0.1.0/App-arm64.dmg",
-		"caveats <<~EOS", // 非 notarized → Gatekeeper 案内(依頼⑤)
+		// 非 notarized → Gatekeeper 案内(依頼⑤)。単一引用ヒアドキュメントで、
+		// 配布者の文面に #{...} があっても Ruby に評価させない。
+		"caveats <<~'EOS'",
 	} {
 		if !strings.Contains(cask, want) {
 			t.Errorf("cask missing %q\n---\n%s", want, cask)

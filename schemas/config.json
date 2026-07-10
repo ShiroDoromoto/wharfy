@@ -5,47 +5,89 @@
   "description": "`wharfy config --json` の出力。解決後の実効設定(既定推測・エスケープハッチ反映済み)を data に返す。生ファイルではない(01_architecture.md / ADR-4)。",
   "type": "object",
   "properties": {
-    "schema_version": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion" },
-    "command": { "const": "config" },
-    "ok": { "type": "boolean" },
-    "message": { "type": "string" },
-    "data": { "$ref": "#/$defs/resolved" },
+    "schema_version": {
+      "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/schemaVersion"
+    },
+    "command": {
+      "const": "config"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "message": {
+      "type": "string"
+    },
+    "data": {
+      "$ref": "#/$defs/resolved"
+    },
     "warnings": {
       "type": "array",
-      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning" }
+      "items": {
+        "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/warning"
+      }
     },
     "errors": {
       "type": "array",
-      "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem" }
+      "items": {
+        "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/problem"
+      }
     },
-    "next": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next" }
+    "next": {
+      "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/next"
+    }
   },
-  "required": ["schema_version", "command", "ok", "data", "next"],
+  "required": [
+    "schema_version",
+    "command",
+    "ok",
+    "data",
+    "next"
+  ],
   "additionalProperties": false,
   "$defs": {
     "resolved": {
       "description": "実効設定。最小 wharfy.yaml から既定を埋めて組み立てた結果。",
       "type": "object",
       "properties": {
-        "project": { "type": "string", "minLength": 1 },
-        "main": { "type": "string", "description": "ビルド対象 main パッケージ。" },
-        "github": { "type": "string", "description": "owner/repo。tap/bucket 既定生成の素。" },
-        "homepage": { "type": "string", "format": "uri" },
-        "license": { "type": "string" },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "main": {
+          "type": "string",
+          "description": "ビルド対象 main パッケージ。"
+        },
+        "github": {
+          "type": "string",
+          "description": "owner/repo。tap/bucket 既定生成の素。"
+        },
+        "homepage": {
+          "type": "string",
+          "format": "uri"
+        },
+        "license": {
+          "type": "string"
+        },
         "channels": {
           "type": "array",
-          "items": { "$ref": "#/$defs/resolvedChannel" }
+          "items": {
+            "$ref": "#/$defs/resolvedChannel"
+          }
         },
         "build": {
           "type": "object",
           "properties": {
             "goos": {
               "type": "array",
-              "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os" }
+              "items": {
+                "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/os"
+              }
             },
             "goarch": {
               "type": "array",
-              "items": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/arch" }
+              "items": {
+                "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/arch"
+              }
             }
           },
           "additionalProperties": false
@@ -53,20 +95,71 @@
         "prebuilt": {
           "type": "boolean",
           "description": "BYO-binary モード。ビルド済みバイナリを配布する(言語非依存・依頼①)。true のとき main は空で、build 行列は持ち込みバイナリの (os,arch) 由来。Go 専用チャネル(goinstall/homebrew-core)は外れる。"
+        },
+        "orphan_deprecations": {
+          "description": "channels に無いチャネルへの deprecate 宣言。畳んだうえで channels からも外すと告知の更新が止まる。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
-      "required": ["project", "channels"],
+      "required": [
+        "project",
+        "channels"
+      ],
       "additionalProperties": false
     },
     "resolvedChannel": {
       "type": "object",
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "kind": { "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind" },
-        "target": { "type": "string", "description": "解決済みの発行先(自前 tap/bucket 等)。apt/rpm では配信(probe/install)URL。" },
-        "push_target": { "type": "string", "description": "apt/rpm のアップロード先(push)URL。配信と別ホスト(fury.io 等)のときのみ。" }
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/channelKind"
+        },
+        "target": {
+          "type": "string",
+          "description": "解決済みの発行先(自前 tap/bucket 等)。apt/rpm では配信(probe/install)URL。"
+        },
+        "push_target": {
+          "type": "string",
+          "description": "apt/rpm のアップロード先(push)URL。配信と別ホスト(fury.io 等)のときのみ。"
+        },
+        "deprecated": {
+          "description": "畳む宣言(解決済み)。宣言が無いチャネルには出ない。",
+          "type": "object",
+          "properties": {
+            "since": {
+              "type": "string"
+            },
+            "ship": {
+              "description": "新版を配り続けるか。false なら最後に配った版で凍結。",
+              "type": "boolean"
+            },
+            "message": {
+              "description": "配布者が書いた告知の文面(逐語)。",
+              "type": "string"
+            },
+            "notice_surface": {
+              "description": "このチャネルが告知を載せる欄(caveats/notes/description 等)を持つか。false なら latest.json 経由でしか届かない。",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ship",
+            "notice_surface"
+          ],
+          "additionalProperties": false
+        }
       },
-      "required": ["name", "kind"],
+      "required": [
+        "name",
+        "kind"
+      ],
       "additionalProperties": false
     }
   }

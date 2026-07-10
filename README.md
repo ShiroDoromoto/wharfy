@@ -145,6 +145,38 @@ exit codes are stable, so a coding agent watching the install can branch on them
 Only these four meanings exist. Anything else that goes wrong is normalized to `1` and says so,
 rather than borrowing a code it does not mean.
 
+## Winding a channel down
+
+Retiring a channel is a **state**, not a deletion. Keep it in `channels:` and say so — remove it and
+wharfy stops touching it, which means it can no longer carry your notice to the users who are still
+on it. You write the words; wharfy decides where they go.
+
+```yaml
+channels: [homebrew, script, goinstall]   # leave it in
+
+deprecate:
+  script:
+    since: "1.4.0"
+    ship: true          # default: keep shipping while you migrate. false freezes the last version
+    message: |
+      The install script is going away in 1.4.0. Please use Homebrew instead.
+```
+
+Your message is carried **verbatim** — wharfy never writes it, rewrites it, or wraps it in its own
+words. It reaches users by two paths, because either one alone leaves someone behind:
+
+| who | how |
+|---|---|
+| people installing now | the channel's own notice field — Homebrew/Cask `caveats`, Scoop `notes`, deb/rpm description, AUR `post_install`, and the install scripts print it after a successful install |
+| people who installed already | `latest.json`, which your CLI already polls for updates — `caveats` only ever appears at install time |
+
+Some channels have nowhere to put a notice: a Go module has no description field, and neither does a
+container image. wharfy will not pretend otherwise — `status` and `publish` tell you that the notice
+did not land there and reaches those users only through `latest.json`. Declaring `deprecate:` for
+such a channel is allowed, not an error; you may decide `latest.json` is enough.
+
+Writing no `deprecate:` block leaves every generated artifact byte-for-byte identical.
+
 `release` also writes a static `latest.json` (version + per-OS/arch asset URLs) to the same
 Release, so its stable URL
 `…/releases/latest/download/latest.json` is a vehicle-independent "is there a newer version?"

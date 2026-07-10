@@ -55,7 +55,13 @@ func (p *GitAurPusher) Push(ctx context.Context, pkgname string, files map[strin
 			return "", err
 		}
 	}
-	if out, err := p.git(ctx, env, repo, "add", "PKGBUILD", ".SRCINFO"); err != nil {
+	// 告知を撤回すると .install は files から消える。repo に残ったままだと pacman が
+	// 古い告知を出し続けるので、生成物に無いものは消す(wharfy が所有する repo)。
+	if err := removeStaleInstall(repo, pkgname, files); err != nil {
+		return "", err
+	}
+	// -A で追加も削除も拾う(名指しだと .install の追加・削除を取りこぼす)。
+	if out, err := p.git(ctx, env, repo, "add", "-A"); err != nil {
 		return "", fmt.Errorf("add: %w: %s", err, out)
 	}
 	if out, err := p.git(ctx, env, repo, "commit", "-m", "wharfy: update "+pkgname); err != nil {
@@ -97,4 +103,18 @@ func trimSpace(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// removeStaleInstall は生成物に含まれない <pkgname>.install を repo から消す。
+// 告知を撤回したのに pacman が出し続ける、を防ぐ。
+func removeStaleInstall(repo, pkgname string, files map[string]string) error {
+	name := pkgname + ".install"
+	if _, keep := files[name]; keep {
+		return nil
+	}
+	err := os.Remove(filepath.Join(repo, name))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

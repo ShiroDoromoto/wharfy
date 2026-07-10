@@ -150,17 +150,7 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 
 	// nfpms: apt(deb)/rpm が有効な時だけ。1 エントリで該当 formats を生成する。
 	if formats := pkgFormats(cfg); len(formats) > 0 {
-		gl.NFPMs = []glNFPM{{
-			ID:          cfg.Project,
-			PackageName: cfg.Project,
-			IDs:         []string{cfg.Project},
-			Homepage:    cfg.Homepage,
-			Description: in.Description,
-			License:     cfg.License,
-			Maintainer:  maintainer(cfg),
-			Formats:     formats,
-			Overrides:   nfpmOverrides(cfg, in),
-		}}
+		gl.NFPMs = nfpmEntries(cfg, in, formats)
 	}
 
 	// release: github(owner/repo)が解決できる時だけ。最終フォールバック列(03)。
@@ -350,4 +340,65 @@ func splitOwnerRepo(s string) (owner, name string, ok bool) {
 		return "", "", false
 	}
 	return s[:i], s[i+1:], true
+}
+
+// nfpmFormatChannel は nfpm の format をチャネル名に戻す(deb→apt / rpm→rpm)。
+func nfpmFormatChannel(format string) string {
+	if format == "deb" {
+		return "apt"
+	}
+	return format
+}
+
+// nfpmEntries は nfpms エントリを組む。
+//
+// 告知(D-3)が無ければ従来どおり 1 エントリで全 formats を出す(生成物は 1 バイトも変わらない)。
+// apt と rpm は別のチャネルなので、片方だけ畳んだときに 1 エントリを共有していると
+// 告知がもう片方のパッケージにも載ってしまう。そのときだけ format ごとに分ける。
+func nfpmEntries(cfg Config, in File, formats []string) []glNFPM {
+	base := func(id string, fs []string, desc string, ov map[string]glNFPMOverride) glNFPM {
+		return glNFPM{
+			ID:          id,
+			PackageName: cfg.Project,
+			IDs:         []string{cfg.Project},
+			Homepage:    cfg.Homepage,
+			Description: desc,
+			License:     cfg.License,
+			Maintainer:  maintainer(cfg),
+			Formats:     fs,
+			Overrides:   ov,
+		}
+	}
+	anyNotice := false
+	for _, f := range formats {
+		if channelNotice(cfg, nfpmFormatChannel(f)) != "" {
+			anyNotice = true
+		}
+	}
+	if !anyNotice {
+		return []glNFPM{base(cfg.Project, formats, in.Description, nfpmOverrides(cfg, in))}
+	}
+
+	all := nfpmOverrides(cfg, in)
+	out := make([]glNFPM, 0, len(formats))
+	for _, f := range formats {
+		var ov map[string]glNFPMOverride
+		if o, ok := all[f]; ok {
+			ov = map[string]glNFPMOverride{f: o}
+		}
+		out = append(out, base(cfg.Project+"-"+f, []string{f}, describeWithNotice(in.Description, channelNotice(cfg, nfpmFormatChannel(f))), ov))
+	}
+	return out
+}
+
+// describeWithNotice は description に告知を続ける。deb/rpm には注記専用の欄が無い。
+// post-install scriptlet は失敗するとインストールを壊すので使わない。
+func describeWithNotice(desc, notice string) string {
+	if notice == "" {
+		return desc
+	}
+	if desc == "" {
+		return notice
+	}
+	return desc + "\n\n" + notice
 }

@@ -29,6 +29,8 @@ type FormulaInput struct {
 	Version      string   // 先頭 v なしの版(例: 1.4.0)
 	Dependencies []string // ランタイム依存(depends_on "<dep>")。空なら出さない
 	Archives     []ArchiveRef
+	// Notice は配布者が書いた告知(D-3)。空なら caveats を出さない。逐語で運ぶ。
+	Notice string
 }
 
 // GenerateFormula は formula 文字列を生成する。darwin/linux の arm/intel を持つ分だけ出す。
@@ -64,6 +66,10 @@ func GenerateFormula(in FormulaInput) string {
 
 	fmt.Fprintf(&b, "  def install\n    bin.install %q\n  end\n\n", binary)
 	fmt.Fprintf(&b, "  test do\n    assert_match %q, shell_output(\"#{bin}/%s version\")\n  end\n", in.Version, binary)
+	if TrimNotice(in.Notice) != "" {
+		b.WriteString("\n")
+		writeRubyCaveats(&b, "  ", in.Notice)
+	}
 	b.WriteString("end\n")
 	return b.String()
 }

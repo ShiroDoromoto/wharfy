@@ -34,7 +34,8 @@ func TestGenerateCaskArchSplit(t *testing.T) {
 		`desc "a demo GUI"`,
 		`homepage "https://github.com/acme/demo"`,
 		`app "Demo.app"`,
-		"caveats <<~EOS",
+		// 単一引用ヒアドキュメント。配布者の文面に #{...} があっても Ruby に評価させない。
+		"caveats <<~'EOS'",
 		"not notarized",
 		"end\n",
 	} {

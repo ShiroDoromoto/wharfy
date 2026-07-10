@@ -17,9 +17,39 @@
     "assets": {
       "description": "OS/CPU(＋パッケージ種別)別のダウンロード URL。キーは `<os>-<arch>`(アーカイブ)または `<os>-<arch>-<kind>`(deb/rpm/dmg/appimage/exe/msi/pkg)。os は macos/linux/windows、arch は x64/arm64/x86。フォールバック導線やアプリ内通知が参照する。",
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "deprecations": {
+      "description": "畳むチャネルの告知(任意)。キーはチャネル名。caveats は install 時にしか出ないので、すでに入れた利用者にはこの経路で届く。文面は配布者のもの。",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "description": "畳み始めた版。",
+            "type": "string"
+          },
+          "ship": {
+            "description": "新版を配り続けるか。false なら最後に配った版で凍結されている。",
+            "type": "boolean"
+          },
+          "message": {
+            "description": "配布者が書いた告知の文面(逐語)。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ship"
+        ],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["version", "assets"],
+  "required": [
+    "version",
+    "assets"
+  ],
   "additionalProperties": false
 }

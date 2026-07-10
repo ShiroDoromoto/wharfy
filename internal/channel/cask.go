@@ -35,6 +35,9 @@ type CaskInput struct {
 	AppBundle string
 	Notarized bool
 	Artifacts []CaskArtifact
+	// Notice は配布者が書いた告知(D-3)。Gatekeeper 案内と同じ caveats に同居する
+	// (Ruby の caveats は後勝ちなので、2 つ書くと先のものが消える)。
+	Notice string
 }
 
 // GenerateCask は cask 文字列を生成する。universal 単独なら top-level url、arm/intel を持つなら
@@ -62,9 +65,14 @@ func GenerateCask(in CaskInput) string {
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "  app %q\n", appBundle)
+	// Gatekeeper 案内(wharfy の言葉)と告知(配布者の言葉)を 1 つの caveats にまとめる。
+	var gatekeeper string
 	if !in.Notarized {
+		gatekeeper = gatekeeperCaveat(name)
+	}
+	if gatekeeper != "" || TrimNotice(in.Notice) != "" {
 		b.WriteString("\n")
-		writeCaskCaveats(&b, name)
+		writeRubyCaveats(&b, "  ", gatekeeper, in.Notice)
 	}
 	b.WriteString("end\n")
 	return b.String()
@@ -96,12 +104,11 @@ func writeCaskArch(b *strings.Builder, block string, a CaskArtifact) {
 	b.WriteString("  end\n")
 }
 
-// writeCaskCaveats は非 notarized バンドルの Gatekeeper 回避手順を案内する(依頼⑤)。
-func writeCaskCaveats(b *strings.Builder, name string) {
-	b.WriteString("  caveats <<~EOS\n")
-	fmt.Fprintf(b, "    %s is self-signed and not notarized. On first launch macOS Gatekeeper\n", name)
-	fmt.Fprintf(b, "    may block it. Right-click %s in Finder and choose Open to run it.\n", name)
-	b.WriteString("  EOS\n")
+// gatekeeperCaveat は非 notarized バンドルの Gatekeeper 回避手順(依頼⑤)。
+func gatekeeperCaveat(name string) string {
+	return fmt.Sprintf(
+		"%s is self-signed and not notarized. On first launch macOS Gatekeeper\nmay block it. Right-click %s in Finder and choose Open to run it.",
+		name, name)
 }
 
 func findCaskArtifact(arts []CaskArtifact, arch string) *CaskArtifact {

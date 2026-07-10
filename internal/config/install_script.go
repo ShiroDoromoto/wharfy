@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,64 @@ const (
 	InstallScriptName    = "install.sh"
 	InstallScriptRelPath = WharfyDirName + "/" + InstallScriptName
 )
+
+// channelNotice は指定チャネルに宣言された告知の文面を返す(無ければ空)。
+func channelNotice(cfg Config, channel string) string {
+	for _, ch := range cfg.Channels {
+		if ch.Name == channel && ch.Deprecated != nil {
+			return strings.TrimSpace(ch.Deprecated.Message)
+		}
+	}
+	return ""
+}
+
+// shNoticeEchoes は告知を sh の echo 行に直す(1 行 1 echo・stderr)。
+// 各行はシングルクォートで括るので $var も `cmd` も評価されない。文面中の ' は '\” で閉じ直す。
+// ヒアドキュメントを使わないのは、終端子が文面と衝突する余地を残さないため。
+func shNoticeEchoes(notice, indent string) string {
+	if notice == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(notice, "\n") {
+		fmt.Fprintf(&b, "%secho '%s' >&2\n", indent, strings.ReplaceAll(line, "'", `'\''`))
+	}
+	return b.String()
+}
+
+// ps1NoticeEchoes は告知を PowerShell の Write-Host 行に直す。
+// 単一引用文字列なので $var は展開されない。文面中のアポストロフィは 2 つ重ねて escape する。
+//
+// 非 ASCII の行は base64 にして実行時に UTF-8 として復元する。Windows 同梱の PowerShell 5.1 は
+// BOM の無いスクリプトを ANSI コードページで読むため、日本語やアクセント付き文字を直接書くと
+// 読み込んだ時点で壊れる(実機で U+7573 が失われることを確認済み)。配布者の言葉を壊さないよう、
+// ソースは ASCII だけに保ち、復元は実行時に行う。
+func ps1NoticeEchoes(notice string) string {
+	if notice == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(notice, "\n") {
+		if isASCII(line) {
+			fmt.Fprintf(&b, "Write-Host '%s'\n", strings.ReplaceAll(line, "'", "''"))
+			continue
+		}
+		// base64 は ASCII なので、ANSI で読まれても壊れない。
+		fmt.Fprintf(&b, "Write-Host ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')))\n",
+			base64.StdEncoding.EncodeToString([]byte(line)))
+	}
+	return b.String()
+}
+
+// isASCII は s が ASCII だけで書かれているか。
+func isASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
 
 // installExitCodeHeader は生成物の冒頭に置く終了コード表を registry から組む。
 // 表を生成物・agent・README で別々に手書きすると必ずずれるので、単一真実は registry。
@@ -161,7 +220,8 @@ case ":$PATH:" in
   *":${PREFIX}/bin:"*) ;;
   *) echo "${PROJECT}: note: ${PREFIX}/bin is not on your PATH; add it: export PATH=\"${PREFIX}/bin:\$PATH\"" >&2 ;;
 esac
-`, cfg.Project, owner, repo, version, InstallURL(cfg), installExitCodeHeader("#"))
+%[7]s`, cfg.Project, owner, repo, version, InstallURL(cfg), installExitCodeHeader("#"),
+		shNoticeEchoes(channelNotice(cfg, "script"), ""))
 }
 
 // InstallPS1Name / InstallPS1RelPath は Windows 向け前提物なしインストーラの場所(.wharfy/ 配下)。
@@ -266,7 +326,8 @@ if (($userPath -split ';') -notcontains $Prefix) {
   Write-Host "${Project}: note: $Prefix is not on your PATH; add it with:"
   Write-Host "  [Environment]::SetEnvironmentVariable('Path', '$Prefix;' + [Environment]::GetEnvironmentVariable('Path','User'), 'User')"
 }
-`, cfg.Project, owner, repo, version, InstallPS1URL(cfg), installExitCodeHeader("#"))
+%[7]s`, cfg.Project, owner, repo, version, InstallPS1URL(cfg), installExitCodeHeader("#"),
+		ps1NoticeEchoes(channelNotice(cfg, "script")))
 }
 
 // InstallPS1URL は install.ps1 の公開 URL。script.base_url 指定時はその配下、

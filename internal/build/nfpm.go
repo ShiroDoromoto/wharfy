@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/goreleaser/nfpm/v2"
 	"github.com/goreleaser/nfpm/v2/files"
@@ -32,6 +33,21 @@ type PackageSpec struct {
 	Depends     []string
 	Recommends  []string
 	Suggests    []string
+	// Notice は配布者が書いた告知(D-3)。deb/rpm には注記専用の欄が無いので description に続ける。
+	// post-install scriptlet は失敗するとインストールを壊すので使わない。
+	Notice string
+}
+
+// describe は description に告知を続ける。告知が無ければ description のまま。
+func (s PackageSpec) describe() string {
+	notice := strings.TrimSpace(s.Notice)
+	if notice == "" {
+		return s.Description
+	}
+	if s.Description == "" {
+		return notice
+	}
+	return s.Description + "\n\n" + notice
 }
 
 // PackagePrebuilt は各 linux バイナリ(arch ごと)から deb/rpm を作り distDir に置く。
@@ -66,7 +82,7 @@ func PackagePrebuilt(root, distDir string, spec PackageSpec, bins []PrebuiltBina
 			Platform:    "linux",
 			Version:     spec.Version,
 			Maintainer:  spec.Maintainer,
-			Description: spec.Description,
+			Description: spec.describe(),
 			Homepage:    spec.Homepage,
 			License:     spec.License,
 			Overridables: nfpm.Overridables{

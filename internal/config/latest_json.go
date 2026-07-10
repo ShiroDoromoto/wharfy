@@ -37,6 +37,35 @@ type latestJSON struct {
 	Version  string            `json:"version"`
 	NotesURL string            `json:"notes_url,omitempty"`
 	Assets   map[string]string `json:"assets"`
+	// Deprecations は畳むチャネルの告知(D-3)。caveats は brew install のときにしか出ないので、
+	// この経路が無いと「すでに入れた人」に届かない。プロダクトの更新チェックがここを読む。
+	Deprecations map[string]latestDeprecation `json:"deprecations,omitempty"`
+}
+
+// latestDeprecation は latest.json に載る告知 1 件。文面は配布者のものを逐語で運ぶ。
+type latestDeprecation struct {
+	Since   string `json:"since,omitempty"`
+	Ship    bool   `json:"ship"`
+	Message string `json:"message,omitempty"`
+}
+
+// latestDeprecations は解決済みチャネルから告知を集める。宣言が無ければ nil(omitempty で消える)。
+func latestDeprecations(cfg Config) map[string]latestDeprecation {
+	var m map[string]latestDeprecation
+	for _, ch := range cfg.Channels {
+		if ch.Deprecated == nil {
+			continue
+		}
+		if m == nil {
+			m = map[string]latestDeprecation{}
+		}
+		m[ch.Name] = latestDeprecation{
+			Since:   ch.Deprecated.Since,
+			Ship:    ch.Deprecated.Ship,
+			Message: ch.Deprecated.Message,
+		}
+	}
+	return m
 }
 
 // GenerateLatestJSON は version と Release 資産から latest.json 本文を返す。
@@ -56,9 +85,10 @@ func GenerateLatestJSON(cfg Config, version string, assets []LatestAsset) (conte
 		m[key] = base + "/" + a.Name
 	}
 	doc := latestJSON{
-		Version:  version,
-		NotesURL: fmt.Sprintf("https://github.com/%s/%s/releases/tag/v%s", owner, repo, version),
-		Assets:   m,
+		Version:      version,
+		NotesURL:     fmt.Sprintf("https://github.com/%s/%s/releases/tag/v%s", owner, repo, version),
+		Assets:       m,
+		Deprecations: latestDeprecations(cfg),
 	}
 	// map キーは encoding/json が辞書順に直列化するので出力は決定的(冪等アップロード向き)。
 	b, err := json.MarshalIndent(doc, "", "  ")

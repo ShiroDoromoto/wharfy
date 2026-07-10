@@ -34,6 +34,19 @@ type File struct {
 	Winget      *WingetIn       `yaml:"winget"`
 	Aur         *AurIn          `yaml:"aur"`
 	Script      *ScriptInput    `yaml:"script"`
+	// Deprecate はチャネルを畳む宣言(D-3)。キーはチャネル名。畳んでも channels からは外さない —
+	// 外すと wharfy がそのチャネルを知らなくなり、告知を運ぶ主体がいなくなる。
+	Deprecate map[string]*DeprecateInput `yaml:"deprecate"`
+}
+
+// DeprecateInput は畳むチャネル 1 つの宣言(D-3)。
+// 文面(Message)は配布者が書く。wharfy は作らないし、言い換えもしない。
+//   - Ship: 新版を配り続けるか。nil=既定 true(移行期間)。false で最後に配った版に凍結。
+//     既定を true にしているのは、畳むと決めた瞬間に入手経路が切れると事故になるから。
+type DeprecateInput struct {
+	Since   string `yaml:"since"`
+	Ship    *bool  `yaml:"ship"`
+	Message string `yaml:"message"`
 }
 
 // RuntimeDep は横断ランタイム依存(B: 実行時に呼ぶ外部ツール)の宣言。1 ツール 1 エントリで、
@@ -207,17 +220,47 @@ type Config struct {
 	// wharfy は Release アップロードと cask 等 GUI チャネルへの配布だけを担う。true のとき
 	// 既定チャネルは GUI 向け(cask/releases)。Prebuilt と同じく Main は不要。
 	Bundle bool `json:"bundle,omitempty"`
+	// OrphanDeprecations は channels に無いチャネルへの deprecate 宣言(名前の昇順)。
+	// 畳んだうえで channels からも外すと告知の更新が止まる。禁じはしないが、黙ってもいない。
+	OrphanDeprecations []string `json:"orphan_deprecations,omitempty"`
 }
 
 // ResolvedChannel は解決済みチャネル 1 つ(名前・種別・発行先)。
 // Target は配信先(probe/install)。PushTarget はアップロード先で、配信と push が別ホストな
 // apt/rpm(fury.io 等)でのみ使う。Target と同一なら省略(omitempty)。
 type ResolvedChannel struct {
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	Target     string `json:"target,omitempty"`
-	PushTarget string `json:"push_target,omitempty"`
+	Name       string       `json:"name"`
+	Kind       string       `json:"kind"`
+	Target     string       `json:"target,omitempty"`
+	PushTarget string       `json:"push_target,omitempty"`
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
+
+// Deprecation は解決済みの「畳む」宣言(D-3)。
+type Deprecation struct {
+	Since   string `json:"since,omitempty"`
+	Ship    bool   `json:"ship"`
+	Message string `json:"message,omitempty"`
+	// NoticeSurface はこのチャネルが告知を載せる欄を持つか(caveats / notes / description 等)。
+	// false のチャネル(goinstall / container 等)では告知は latest.json 経由でしか届かない。
+	// 黙って落とすと配布者は「告知したつもり」で気づけないので、status / publish が明示する。
+	NoticeSurface bool `json:"notice_surface"`
+}
+
+// channelNoticeSurface は配布者の文面を載せる欄を持つチャネル(D-3)。
+// 実際に流し込むのは別タスク(#20)。ここでは「載せられるか」だけを知る。
+var channelNoticeSurface = map[string]bool{
+	"homebrew": true, // caveats
+	"cask":     true, // caveats
+	"scoop":    true, // notes
+	"apt":      true, // package description
+	"rpm":      true, // package description
+	"aur":      true, // pkgdesc
+	"script":   true, // install.sh / install.ps1 の実行時 note
+}
+
+// HasNoticeSurface はチャネルが告知を載せる欄を持つか。
+func HasNoticeSurface(channel string) bool { return channelNoticeSurface[channel] }
 
 // Build は解決後のビルド対象 os/arch。
 type Build struct {
