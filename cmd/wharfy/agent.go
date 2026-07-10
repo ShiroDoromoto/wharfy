@@ -47,6 +47,12 @@ func printAgentHuman(doc registry.AgentDoc) {
 			names = append(names, fmt.Sprintf("%s(%s)", ch.Name, ch.Kind))
 		}
 		fmt.Printf("\nCHANNELS  %s\n", strings.Join(names, " "))
+		// 注記を持つチャネルは、駆動する前に読むべきことを名乗る。
+		for _, ch := range doc.Channels {
+			for _, n := range ch.Notes {
+				fmt.Printf("  %s: %s\n", ch.Name, n)
+			}
+		}
 	}
 	fmt.Println("\nEvery command takes --json and ends with a next: block.")
 	fmt.Printf("START HERE\n  %s\n", doc.Start)

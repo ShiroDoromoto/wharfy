@@ -126,6 +126,25 @@ channels listed here.) By default the script URLs point at the latest GitHub Rel
 `script: { base_url: … }` to advertise `install.sh` from your own domain or CDN instead (the
 install instructions and the `status` probe follow that URL).
 
+**When an install script fails, it hands you the next move.** The scripts are usually the first
+and only thing a user of your project touches, so they never fail silently and never end on a raw
+OS error. A failed download prints the URL, curl's exit code, and a manual download-and-unpack
+recipe; an unwritable prefix prints two runnable one-liners — install where you can write, or run
+the same command elevated. They never retry, never fall back to a mirror, and never elevate for
+you: being unable to write somewhere is a question for the user, not a thing to work around. Their
+exit codes are stable, so a coding agent watching the install can branch on them:
+
+| exit | meaning |
+|---|---|
+| `0` | installed |
+| `1` | unexpected failure — unclassified, please report |
+| `2` | unsupported platform (os/arch) |
+| `3` | download failed (dns / tls / proxy / http error / missing asset) |
+| `4` | cannot write to the install prefix (permission, read-only fs, no space) |
+
+Only these four meanings exist. Anything else that goes wrong is normalized to `1` and says so,
+rather than borrowing a code it does not mean.
+
 `release` also writes a static `latest.json` (version + per-OS/arch asset URLs) to the same
 Release, so its stable URL
 `…/releases/latest/download/latest.json` is a vehicle-independent "is there a newer version?"

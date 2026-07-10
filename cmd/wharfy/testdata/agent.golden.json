@@ -121,7 +121,11 @@
     },
     {
       "name": "script",
-      "kind": "owned"
+      "kind": "owned",
+      "notes": [
+        "on failure the scripts print the cause and the next move; they never retry, never fall back to a mirror, and never elevate",
+        "install.sh / install.ps1 exit codes: 0=installed; 1=unexpected failure — unclassified, please report; 2=unsupported platform (os/arch); 3=download failed (dns / tls / proxy / http error / missing asset); 4=cannot write to the install prefix (permission, read-only fs, no space)"
+      ]
     },
     {
       "name": "winget",

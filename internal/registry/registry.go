@@ -4,8 +4,13 @@
 // agent の一枚出力も「ここから生成」する。手書きの能力一覧は実体とズレるため持たない。
 // 新コマンドはここに足すだけで agent 出力・補完・docs に自動で載る。
 //
-// 依存なし(純データ)。下位層として上位を知らない(依存は上から下への一方向)。
+// 依存なし(純データ + 整形のみ)。下位層として上位を知らない(依存は上から下への一方向)。
 package registry
+
+import (
+	"fmt"
+	"strings"
+)
 
 // Command はレジストリの 1 エントリ。schemas/common.json の commandSpec と同形。
 // agent --json の commands[] はこれの配列(02 出力契約)。
@@ -16,10 +21,43 @@ type Command struct {
 	Next    []string `json:"next,omitempty"` // 既定の次コマンド名。参照先は必ず registry に実在する(05)。
 }
 
-// ChannelRef は agent 出力でのチャネル参照(名前と種別のみ)。schemas/common.json の channelRef。
+// ChannelRef は agent 出力でのチャネル参照。schemas/common.json の channelRef。
+// Notes はそのチャネルを駆動する前に知っておくべき注記(1 行 1 点)。
 type ChannelRef struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"` // owned | gated (common.json channelKind)
+	Name  string   `json:"name"`
+	Kind  string   `json:"kind"` // owned | gated (common.json channelKind)
+	Notes []string `json:"notes,omitempty"`
+}
+
+// InstallExitCode は install.sh / install.ps1 が名乗る終了コードと、その意味。
+//
+// wharfy が所有する生成物の対外契約なので、ここが単一真実になる。生成物のヘッダ・
+// agent 出力・README で別々に書けば必ずずれる(05 drift 対策)。
+type InstallExitCode struct {
+	Code    int
+	Meaning string
+}
+
+// InstallExitCodes は script チャネルの生成物が名乗る終了コード。
+//
+// 3 つだけ意味を持たせ、残りは全部 1 に閉じ込める。閉じ込めないと `set -e` が素通しした
+// 他コマンドの終了コード(tar は致命的エラーで 2 を返す)が意味ありげな値として漏れ、
+// 傍らの coding agent はそれを見て誤った次の一手を選ぶ。
+var InstallExitCodes = []InstallExitCode{
+	{0, "installed"},
+	{1, "unexpected failure — unclassified, please report"},
+	{2, "unsupported platform (os/arch)"},
+	{3, "download failed (dns / tls / proxy / http error / missing asset)"},
+	{4, "cannot write to the install prefix (permission, read-only fs, no space)"},
+}
+
+// InstallExitCodeLine は終了コード規約の 1 行要約(agent の notes 用)。
+func InstallExitCodeLine() string {
+	parts := make([]string, 0, len(InstallExitCodes))
+	for _, e := range InstallExitCodes {
+		parts = append(parts, fmt.Sprintf("%d=%s", e.Code, e.Meaning))
+	}
+	return "install.sh / install.ps1 exit codes: " + strings.Join(parts, "; ")
 }
 
 // AgentDoc は `wharfy agent --json` の出力(schemas/agent.json)。Result envelope とは別形。
@@ -69,7 +107,10 @@ var Channels = []ChannelRef{
 	{Name: "container", Kind: "owned"},
 	{Name: "aur", Kind: "owned"},
 	{Name: "goinstall", Kind: "owned"},
-	{Name: "script", Kind: "owned"},
+	{Name: "script", Kind: "owned", Notes: []string{
+		"on failure the scripts print the cause and the next move; they never retry, never fall back to a mirror, and never elevate",
+		InstallExitCodeLine(),
+	}},
 	{Name: "winget", Kind: "gated"},
 	{Name: "homebrew-core", Kind: "gated"},
 }

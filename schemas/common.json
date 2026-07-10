@@ -112,11 +112,16 @@
       "additionalProperties": false
     },
     "channelRef": {
-      "description": "agent 出力でのチャネル参照(名前と種別のみ)。",
+      "description": "agent 出力でのチャネル参照。notes はそのチャネルを駆動する前に知っておくべき注記。",
       "type": "object",
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "kind": { "$ref": "#/$defs/channelKind" }
+        "kind": { "$ref": "#/$defs/channelKind" },
+        "notes": {
+          "description": "チャネル固有の注記(1 行 1 点)。生成物が名乗る終了コード規約など、そのチャネルを駆動する agent が知っておくべきこと。",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
       },
       "required": ["name", "kind"],
       "additionalProperties": false

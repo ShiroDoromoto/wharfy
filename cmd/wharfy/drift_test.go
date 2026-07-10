@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
@@ -189,4 +191,49 @@ func readSchema(t *testing.T, path string) (id string, doc any) {
 		}
 	}
 	return id, doc
+}
+
+// TestInstallExitCodesSingleSource: 終了コード規約の単一真実は registry。
+// 生成物(install.sh / install.ps1)のヘッダと agent の notes が、そこから組まれていることを見る。
+// 三箇所で手書きすればいずれずれる — ずれた瞬間、傍らの coding agent が誤った次の一手を選ぶ。
+func TestInstallExitCodesSingleSource(t *testing.T) {
+	cfg := config.Config{
+		Project: "widget", Github: "acme/widget-demo",
+		Channels: []config.ResolvedChannel{{Name: "script", Kind: "owned"}},
+	}
+	sh := config.GenerateInstallScript(cfg, "1.2.3")
+	ps1 := config.GenerateInstallPS1(cfg, "1.2.3")
+	for _, e := range registry.InstallExitCodes {
+		want := fmt.Sprintf("#   %d  %s", e.Code, e.Meaning)
+		if !strings.Contains(sh, want) {
+			t.Errorf("install.sh header missing exit code line %q", want)
+		}
+		if !strings.Contains(ps1, want) {
+			t.Errorf("install.ps1 header missing exit code line %q", want)
+		}
+	}
+
+	var script *registry.ChannelRef
+	for i, ch := range registry.Channels {
+		if ch.Name == "script" {
+			script = &registry.Channels[i]
+		}
+	}
+	if script == nil {
+		t.Fatal("script channel missing from registry")
+	}
+	line := registry.InstallExitCodeLine()
+	found := false
+	for _, n := range script.Notes {
+		if n == line {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("script channel notes must carry %q, have %v", line, script.Notes)
+	}
+	// 規約は 0..4 の 5 つだけ。増やすなら生成物の fail()/Fail と cleanup の正規化も直すこと。
+	if len(registry.InstallExitCodes) != 5 {
+		t.Errorf("exit code contract changed (%d entries): update install.sh fail()/cleanup and install.ps1 Fail", len(registry.InstallExitCodes))
+	}
 }
