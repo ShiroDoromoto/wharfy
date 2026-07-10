@@ -127,6 +127,12 @@ func runPowerShellInstall(ctx context.Context, url, binary string, run []string)
 	if err != nil {
 		return nil, err
 	}
+	return runPowerShellInstallWith(ctx, shell, url, binary, run)
+}
+
+// runPowerShellInstallWith は走らせる PowerShell を呼び手が指す。verify は powerShellPath が選んだ
+// 一つを渡すが、テストはホストに在る PowerShell を一つずつ渡して、どれで踏んだかを明示できる。
+func runPowerShellInstallWith(ctx context.Context, shell, url, binary string, run []string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "wharfy-verify-script-")
 	if err != nil {
 		return nil, err
@@ -155,9 +161,14 @@ func runPowerShellInstall(ctx context.Context, url, binary string, run []string)
 	return append(out, runOut...), err
 }
 
+// powerShellNames は install.ps1 を走らせる PowerShell の候補で、並びがそのまま優先順位。
+// Windows PowerShell(powershell)を先に見るのは、それが install.ps1 の本番環境だから
+// ——Windows に最初から入っているのは 5.1 で、利用者の大半はそれで踏む。pwsh(7)は次点。
+var powerShellNames = []string{"powershell", "pwsh"}
+
 // powerShellPath は install.ps1 を走らせる PowerShell を探す。どちらも無ければ errToolMissing。
 func powerShellPath() (string, error) {
-	for _, name := range []string{"powershell", "pwsh"} {
+	for _, name := range powerShellNames {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}

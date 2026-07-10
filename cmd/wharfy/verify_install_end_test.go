@@ -375,26 +375,51 @@ func realPS1Server(t *testing.T, version string) *httptest.Server {
 	return srv
 }
 
-// 本物の install.ps1 を PowerShell で走らせる。ダウンロードまでは行かせない ——このテストは
-// ネットワークに出ないので、arch を潰して installer 自身の分類済み失敗(exit 2)で折り返す。
+// installedPowerShells は powerShellNames のうち、このホストに在るものを優先順に返す。
+// verify は先頭の一つしか使わないが、テストは在るものすべてで install.ps1 を踏む。
+func installedPowerShells() []string {
+	var found []string
+	for _, name := range powerShellNames {
+		if p, err := exec.LookPath(name); err == nil {
+			found = append(found, p)
+		}
+	}
+	return found
+}
+
+// 本物の install.ps1 を、ホストに在る PowerShell の *すべて* で走らせる。ダウンロードまでは
+// 行かせない ——このテストはネットワークに出ないので、arch を潰して installer 自身の
+// 分類済み失敗(exit 2)で折り返す。
 //
 // 踏みたいのは「PowerShell が本文を解釈して走る」ところ: v0.16.0 が配った install.ps1 は
 // `$Project:` を PowerShell が ${drive:name} と読む穴で、まさにこの Fail の一行で壊れていた。
-// CI では ubuntu(PowerShell 7)と windows(Windows PowerShell 5.1)の両方で走る。skip されるのは
-// どちらも無い手元だけ。arch より後ろ(取得・展開・配置・PATH 追記)はどの OS でも踏めていない。
+//
+// どこで何が走るかを、ここに書いておく。かつてこの対応が誰の目にも見えず、「CI では install.ps1 が
+// 一行も走らない」という誤った前提のままタスクが起票された:
+//
+//	windows-latest … powershell(5.1) と pwsh(7) の両方。5.1 が利用者の大半の本番環境。
+//	ubuntu-latest  … pwsh(7) だけ(ランナーに同梱)。本文の構文の壊れを、速い test ジョブで先に捕まえる。
+//	手元 macOS     … どちらも無いので skip。
+//
+// arch より後ろ(取得・展開・配置・PATH 案内)はどの OS でも踏めていない。#52 が引き取る。
 func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
-	if _, err := powerShellPath(); err != nil {
+	shells := installedPowerShells()
+	if len(shells) == 0 {
 		t.Skip("neither powershell nor pwsh is on this host")
 	}
-	t.Setenv("PROCESSOR_ARCHITECTURE", "SPARC")
-	srv := realPS1Server(t, "1.2.0")
+	for _, shell := range shells {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			t.Setenv("PROCESSOR_ARCHITECTURE", "SPARC")
+			srv := realPS1Server(t, "1.2.0")
 
-	out, err := runPowerShellInstall(context.Background(), srv.URL, "demo", nil)
-	if err == nil {
-		t.Fatalf("an unsupported arch must fail the install: %s", out)
-	}
-	if !strings.Contains(string(out), "demo: unsupported arch") {
-		t.Errorf("the installer should name the project and what failed: %s", out)
+			out, err := runPowerShellInstallWith(context.Background(), shell, srv.URL, "demo", nil)
+			if err == nil {
+				t.Fatalf("an unsupported arch must fail the install: %s", out)
+			}
+			if !strings.Contains(string(out), "demo: unsupported arch") {
+				t.Errorf("the installer should name the project and what failed: %s", out)
+			}
+		})
 	}
 }
 

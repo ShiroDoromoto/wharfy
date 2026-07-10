@@ -47,6 +47,8 @@ jobs:
   # Windows でしか踏めない経路を守る。install.ps1 の本文は ubuntu の pwsh でも走る(ランナーに
   # PowerShell 7 が入っている)が、利用者の大半が使う Windows PowerShell 5.1 と、.exe を置いて
   # 起動するまでのパス処理は、ここでしか走らない。v0.16.0 が壊れた install.ps1 を配った穴である。
+  # このランナーには 5.1 と 7 の両方が在り、install.ps1 のテストはその両方で走る
+  # (TestRunPowerShellInstallRunsTheRealPS1 の対応表を見よ)。
   # test ジョブとは別に置く: windows ランナーは遅いので、軽い test を待たせない。
   # -race を付けないのは意図的で、競合は OS に依らないから ubuntu の test ジョブが見る。
   windows-test:
