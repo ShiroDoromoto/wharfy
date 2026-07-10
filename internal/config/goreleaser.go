@@ -14,8 +14,8 @@ import (
 // wharfy が所有する配布物。利用者リポジトリ root には書かず `.wharfy/` キャッシュに置く。
 // version/commit/date は ldflags で自動注入する(tag が唯一の真実)。
 //
-// スライス1 は homebrew 1 本＋releases まで。scoop/apt/rpm 等の横展開と passthrough の
-// deep merge は後段(型を homebrew で固めてから・08 §5)。
+// 生の GoReleaser 断片を混ぜ込むエスケープハッチは持たない(D-7)。生成物は wharfy が作った通りである、
+// という前提の上に status / verify の実体照合が乗っている。
 
 // WharfyDirName は生成物・状態を置くスクラッチ。利用者のソースではないので所有してよい。
 const WharfyDirName = ".wharfy"
