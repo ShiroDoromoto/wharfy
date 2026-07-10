@@ -376,3 +376,35 @@ func TestVerifyCoversReleasesScriptAndGoinstall(t *testing.T) {
 	}
 	validateAgainst(t, resultSchemaID, res)
 }
+
+// --install が踏むのは「そのホストの利用者が踏むインストーラ」。Windows へ配っている install.ps1 が
+// verify から一度も走らない、という穴を塞いだところ。GOOS 依存の分岐は goos を引数に取って締める。
+func TestHostScriptInstallerPicksTheInstallerForTheOS(t *testing.T) {
+	release := "https://github.com/acme/demo/releases/latest/download/install.sh"
+	for _, tc := range []struct {
+		goos, shURL, url, name, tool string
+	}{
+		{"darwin", release, release, "install.sh", "sh"},
+		{"linux", release, release, "install.sh", "sh"},
+		{
+			goos: "windows", shURL: release,
+			url:  "https://github.com/acme/demo/releases/latest/download/install.ps1",
+			name: "install.ps1", tool: "powershell",
+		},
+		{ // script.base_url 配下でも install.ps1 は install.sh の隣にある
+			goos: "windows", shURL: "https://dl.example.com/demo/install.sh",
+			url:  "https://dl.example.com/demo/install.ps1",
+			name: "install.ps1", tool: "powershell",
+		},
+		{ // パスを持たない URL(テストサーバ)でも壊れた URL を組み立てない
+			goos: "windows", shURL: "http://127.0.0.1:8080",
+			url:  "http://127.0.0.1:8080/install.ps1",
+			name: "install.ps1", tool: "powershell",
+		},
+	} {
+		got := hostScriptInstaller(tc.goos, tc.shURL)
+		if got.URL != tc.url || got.Name != tc.name || got.Tool != tc.tool {
+			t.Errorf("%s should install via %s from %s with %s, got %+v", tc.goos, tc.name, tc.url, tc.tool, got)
+		}
+	}
+}

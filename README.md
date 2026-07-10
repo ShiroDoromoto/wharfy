@@ -97,15 +97,17 @@ have more to check than a probe can reach, so they are reported `partial`, never
 `wharfy verify --install` goes the rest of the way and installs for real. `apt`/`rpm` add your repo
 inside a Debian/Fedora container, install the package and run it — a broken dependency or a wrong
 file layout fails there, not on your users' machines. The upload itself can't catch that: it returns
-`200` either way. `script` runs the published `install.sh` into a temporary `PREFIX`, and `goinstall`
-runs `go install` into a temporary `GOBIN`; both then run the binary they installed. Nothing lands on
+`200` either way. `script` runs the installer your users on this host would run — `install.sh` into a
+temporary `PREFIX`, or on Windows the published `install.ps1` into a temporary `WHARFY_PREFIX` — and
+`goinstall` runs `go install` into a temporary `GOBIN`; both then run the binary they installed. The
+probe still reads `install.sh` on every OS: it is the one that carries the version. Nothing lands on
 your `PATH`. `releases` downloads every asset the checksums file lists and hashes it — an upload that
 was cut short, or an asset swapped after the fact, keeps its name and passes the probe, so only the
-`sha256` catches it. When the tool a channel needs is absent (no docker, no `sh`, no `go`), or the
-base image cannot be pulled, that channel is reported `partial` with a warning — never failed. So is
-a `releases` run with no checksums file to compare against. A `goinstall` binary is only required to
-run, not to report the right version: `go install` does not apply your ldflags, so a CLI that injects
-its version says `dev`.
+`sha256` catches it. When the tool a channel needs is absent (no docker, no `sh` / `powershell`, no
+`go`), or the base image cannot be pulled, that channel is reported `partial` with a warning — never
+failed. So is a `releases` run with no checksums file to compare against. A `goinstall` binary is only
+required to run, not to report the right version: `go install` does not apply your ldflags, so a CLI
+that injects its version says `dev`.
 
 If **no** channel could be verified at all, `verify` exits non-zero with `nothing_to_verify` rather
 than reporting a green run it never made.

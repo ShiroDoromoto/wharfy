@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -423,8 +424,11 @@ func mismatchDetail(bad []channel.ChecksumMismatch) string {
 // verifyScript は公開 install.sh が記録どおりの版を入れるかを確かめる。
 //
 // 既定は probe: install.sh を取得し、その本文の VERSION="x" を記録と照合する。--install なら
-// さらに一時 PREFIX へ実際に走らせ、入ったバイナリを起動する ——スクリプトが 404 のアセットを
+// さらに一時の置き場所へ実際に走らせ、入ったバイナリを起動する ——スクリプトが 404 のアセットを
 // 掴んでいても、VERSION の行だけは正しいことがあるので、probe は「入る」ことまでは言えない。
+//
+// 実際に走らせるのは「このホストの利用者が踏むインストーラ」——Windows なら install.ps1。
+// probe が読む VERSION は install.sh にしか無いので、照合は OS によらず install.sh を見る。
 func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
 	url := scriptProbeURL
 	if url == "" {
@@ -455,18 +459,19 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 		return verifyProbedOnly("script", "script "+rs.Version+" probed: install.sh at "+url+" installs "+rs.Version+"; the install was not exercised")
 	}
 
-	out, err := scriptInstall(ctx, url, prebuiltBinaryName(cfg, in), verifyRun(in))
+	inst := hostScriptInstaller(runtime.GOOS, url)
+	out, err := scriptInstall(ctx, inst.URL, prebuiltBinaryName(cfg, in), verifyRun(in))
 	switch {
 	case errors.Is(err, errToolMissing):
-		return verifyPartial("script", "script "+rs.Version+" found at "+url+", but the install was not exercised: sh is not available")
+		return verifyPartial("script", "script "+rs.Version+" found at "+url+", but the install was not exercised: "+inst.Tool+" is not available")
 	case err != nil:
 		return verifyFailure("script",
 			"script "+rs.Version+" is published but installing it failed",
-			"install.sh failed: "+err.Error(),
+			inst.Name+" failed: "+err.Error(),
 			"read the installer output; the release asset it downloads is likely missing or malformed",
 			tail(out, 4000), "wharfy release --yes")
 	}
-	return verifySuccess("script", "script "+rs.Version+" verified: installed from "+url+" into a temporary prefix and ran")
+	return verifySuccess("script", "script "+rs.Version+" verified: installed from "+inst.URL+" into a temporary prefix and ran")
 }
 
 // verifyGoinstall は `go install` が通るかを確かめる。

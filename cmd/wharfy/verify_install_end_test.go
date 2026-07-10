@@ -362,3 +362,36 @@ func TestRunInstalledBinaryFallsBackThroughTheVersionChain(t *testing.T) {
 		t.Errorf("the output of the attempt that worked is returned: %s", out)
 	}
 }
+
+// realPS1Server は config が生成する本物の install.ps1 を配る(Windows の利用者が irm で取るもの)。
+func realPS1Server(t *testing.T, version string) *httptest.Server {
+	t.Helper()
+	script := config.GenerateInstallPS1(config.Config{Project: "demo", Github: "acme/demo"}, version)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(script))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// 本物の install.ps1 を PowerShell で走らせる。ダウンロードまでは行かせない ——このテストは
+// ネットワークに出ないので、arch を潰して installer 自身の分類済み失敗(exit 2)で折り返す。
+//
+// 踏みたいのは「PowerShell が本文を解釈して走る」ところ: v0.16.0 が配った install.ps1 は
+// `$Project:` を PowerShell が ${drive:name} と読む穴で、まさにこの Fail の一行で壊れていた。
+// アセットを取って入れる先までは Windows 実機でしか踏めない(CI に windows ランナーが要る)。
+func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
+	if _, err := powerShellPath(); err != nil {
+		t.Skip("neither powershell nor pwsh is on this host")
+	}
+	t.Setenv("PROCESSOR_ARCHITECTURE", "SPARC")
+	srv := realPS1Server(t, "1.2.0")
+
+	out, err := runPowerShellInstall(context.Background(), srv.URL, "demo", nil)
+	if err == nil {
+		t.Fatalf("an unsupported arch must fail the install: %s", out)
+	}
+	if !strings.Contains(string(out), "demo: unsupported arch") {
+		t.Errorf("the installer should name the project and what failed: %s", out)
+	}
+}
