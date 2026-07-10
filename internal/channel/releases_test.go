@@ -130,6 +130,20 @@ func TestReleasesAuditBareChecksumsName(t *testing.T) {
 	}
 }
 
+// checksums マニフェストが自分自身を載せていても期待集合に数えない。
+// 実在するので Missing には出ず、Expected の数だけが静かに狂う — 名前が版を含むぶん、
+// 固定名で引く delete では取りこぼす。
+func TestReleasesAuditExcludesChecksumsItselfFromExpected(t *testing.T) {
+	srv := releaseServer(t, "v1.2.0", map[string]string{
+		"demo_1.2.0_checksums.txt": "abc123  demo_linux.tar.gz\ndef456  demo_1.2.0_checksums.txt\n",
+		"demo_linux.tar.gz":        "binary",
+	})
+	audit := auditOf(t, srv, "1.2.0")
+	if !reflect.DeepEqual(audit.Expected, []string{"demo_linux.tar.gz"}) {
+		t.Errorf("the manifest must not count itself: %v", audit.Expected)
+	}
+}
+
 // checksums で終わらない資産をマニフェストと取り違えない(demochecksums.txt は別物)。
 func TestReleasesAuditIgnoresLookalikeAssets(t *testing.T) {
 	srv := releaseServer(t, "v1.2.0", map[string]string{
