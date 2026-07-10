@@ -91,7 +91,7 @@ checks that every asset listed in the release's own manifest (`latest.json`, plu
 following that manifest would otherwise hit a `404`. The binaries themselves are not downloaded, and
 a release carrying neither manifest is reported `skipped`, not verified. For `script` it fetches the
 published `install.sh` and matches the version it installs; for `goinstall` it asks the module proxy
-whether your tag resolves; for `apt`/`rpm` it reads the version out of the repo metadata. Those four
+whether your tag resolves; for `apt`/`rpm` it reads the version out of the repo metadata. Those five
 have more to check than a probe can reach, so they are reported `partial`, never `verified`.
 
 `wharfy verify --install` goes the rest of the way and installs for real. `apt`/`rpm` add your repo
@@ -99,10 +99,13 @@ inside a Debian/Fedora container, install the package and run it — a broken de
 file layout fails there, not on your users' machines. The upload itself can't catch that: it returns
 `200` either way. `script` runs the published `install.sh` into a temporary `PREFIX`, and `goinstall`
 runs `go install` into a temporary `GOBIN`; both then run the binary they installed. Nothing lands on
-your `PATH`. When the tool a channel needs is absent (no docker, no `sh`, no `go`), or the base image
-cannot be pulled, that channel is reported `partial` with a warning — never failed. A `goinstall`
-binary is only required to run, not to report the right version: `go install` does not apply your
-ldflags, so a CLI that injects its version says `dev`.
+your `PATH`. `releases` downloads every asset the checksums file lists and hashes it — an upload that
+was cut short, or an asset swapped after the fact, keeps its name and passes the probe, so only the
+`sha256` catches it. When the tool a channel needs is absent (no docker, no `sh`, no `go`), or the
+base image cannot be pulled, that channel is reported `partial` with a warning — never failed. So is
+a `releases` run with no checksums file to compare against. A `goinstall` binary is only required to
+run, not to report the right version: `go install` does not apply your ldflags, so a CLI that injects
+its version says `dev`.
 
 If **no** channel could be verified at all, `verify` exits non-zero with `nothing_to_verify` rather
 than reporting a green run it never made.

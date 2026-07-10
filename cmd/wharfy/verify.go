@@ -336,14 +336,18 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 //
 // 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。どちらも無い旧リリースは
 // 照合の基準を持たないので skip する — 資産の欠落を見ていないのに verified とは言わない(D-4)。
-// 資産本体は落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。
+//
+// 既定は資産本体を落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。名前が在っても
+// 中身が壊れていることはある(アップロードが途中で切れた・後から差し替えられた)。--install なら
+// 資産を落として checksums マニフェストの sha256 と突き合わせ、そこまで見る。
 func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
 	repo := firstNonEmptyStr(ch.Target, rec.Target)
 	owner, name, ok := splitOwnerName(repo)
 	if !ok {
 		return verifyOutcome{}, errString("releases target is unresolved: " + repo)
 	}
-	audit, perr := newReleasesProbe(owner, name).Audit(ctx, rec.Version)
+	probe := newReleasesProbe(owner, name)
+	audit, perr := probe.Audit(ctx, rec.Version)
 	if perr != nil {
 		return probeFailedOutcome("releases", perr), nil
 	}
@@ -371,10 +375,49 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.Pu
 			"assets listed in the release manifest are not on the release",
 			"re-run release to upload the missing assets; users following the manifest hit a 404",
 			strings.Join(audit.Missing, "\n"), "wharfy release --yes"), nil
-	default:
-		return verifySuccess("releases", "releases "+rec.Version+" verified: all "+strconv.Itoa(len(audit.Expected))+
-			" assets listed in "+strings.Join(audit.Manifests, " and ")+" exist on the release at "+repo), nil
 	}
+
+	present := "releases " + rec.Version + ": all " + strconv.Itoa(len(audit.Expected)) +
+		" assets listed in " + strings.Join(audit.Manifests, " and ") + " exist on the release at " + repo
+	if !flagInstall {
+		return verifyProbedOnly("releases", present+"; the assets were not downloaded, so their contents are unchecked"), nil
+	}
+	return verifyReleaseChecksums(ctx, probe, audit, present), nil
+}
+
+// verifyReleaseChecksums は --install のときに資産を落として sha256 を検算する。
+//
+// sha を載せるのは checksums マニフェストだけなので、latest.json しか持たない Release では検算
+// できない。それを緑と呼ぶと「中身を確かめた」という嘘になるので partial に落とす —— --install を
+// 頼まれて、頼まれた仕事をしていないため(verifyPartial の作法)。
+func verifyReleaseChecksums(ctx context.Context, probe *channel.ReleasesProbe, audit channel.ReleaseAudit, present string) verifyOutcome {
+	if len(audit.Checksums) == 0 {
+		return verifyPartial("releases", present+", but their contents were not checked: "+
+			"the release carries no *_"+channel.ManifestChecksums+", so there are no sha256 to compare against")
+	}
+	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+	bad, err := probe.VerifyChecksums(cctx, audit)
+	if err != nil {
+		return probeFailedOutcome("releases", err)
+	}
+	if len(bad) > 0 {
+		return verifyFailure("releases",
+			strconv.Itoa(len(bad))+" of "+strconv.Itoa(len(audit.Checksums))+" release assets do not match their sha256",
+			"the assets on the release differ from what the checksums manifest says they are",
+			"re-run release to upload the assets again; users downloading them get something other than what was built",
+			mismatchDetail(bad), "wharfy release --yes")
+	}
+	return verifySuccess("releases", present+", and all "+strconv.Itoa(len(audit.Checksums))+
+		" of them match their sha256")
+}
+
+func mismatchDetail(bad []channel.ChecksumMismatch) string {
+	lines := make([]string, 0, len(bad))
+	for _, m := range bad {
+		lines = append(lines, m.String())
+	}
+	return strings.Join(lines, "\n")
 }
 
 // verifyScript は公開 install.sh が記録どおりの版を入れるかを確かめる。

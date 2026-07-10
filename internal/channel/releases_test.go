@@ -2,7 +2,9 @@ package channel
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -180,5 +182,95 @@ func TestReleasesAuditReleaseNotFound(t *testing.T) {
 	}
 	if audit.Found {
 		t.Errorf("audit = %+v", audit)
+	}
+}
+
+// checksumsBody は assets の本文から GoReleaser 形式の checksums マニフェストを組む。
+func checksumsBody(assets map[string]string, names ...string) string {
+	var b strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&b, "%x  %s\n", sha256.Sum256([]byte(assets[n])), n)
+	}
+	return b.String()
+}
+
+// 落とした資産の sha256 が checksums と一致する → 食い違いなし。
+func TestVerifyChecksumsAllMatch(t *testing.T) {
+	assets := map[string]string{"demo_linux.tar.gz": "bin", "demo_windows.zip": "exe"}
+	assets["demo_1.2.0_checksums.txt"] = checksumsBody(assets, "demo_linux.tar.gz", "demo_windows.zip")
+	srv := releaseServer(t, "v1.2.0", assets)
+
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	bad, err := p.VerifyChecksums(context.Background(), auditOf(t, srv, "1.2.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 0 {
+		t.Errorf("assets that hash to what the manifest says must not be reported: %+v", bad)
+	}
+}
+
+// マニフェストを書いた後に中身が変わった資産は食い違いとして返る。名前は在るので Audit では
+// 捕まらない ——検算だけが捕まえられる壊れ方。
+func TestVerifyChecksumsReportsMismatch(t *testing.T) {
+	assets := map[string]string{"demo_linux.tar.gz": "bin", "demo_windows.zip": "exe"}
+	assets["demo_1.2.0_checksums.txt"] = checksumsBody(assets, "demo_linux.tar.gz", "demo_windows.zip")
+	assets["demo_windows.zip"] = "tampered"
+	srv := releaseServer(t, "v1.2.0", assets)
+
+	audit := auditOf(t, srv, "1.2.0")
+	if len(audit.Missing) != 0 {
+		t.Fatalf("the tampered asset is still present by name: %+v", audit)
+	}
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	bad, err := p.VerifyChecksums(context.Background(), audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) != 1 || bad[0].Asset != "demo_windows.zip" {
+		t.Fatalf("only the tampered asset should be reported: %+v", bad)
+	}
+	if bad[0].Want == bad[0].Got || bad[0].Want == "" || bad[0].Got == "" {
+		t.Errorf("the mismatch must carry both sha256: %+v", bad[0])
+	}
+}
+
+// checksums に載っていても Release に実在しない資産は飛ばす(Audit が Missing で報告済み)。
+// 落としにいけば 404 で probe ごと落ちるので、欠損を検算の失敗にすり替えないため。
+func TestVerifyChecksumsSkipsMissingAssets(t *testing.T) {
+	assets := map[string]string{"demo_linux.tar.gz": "bin"}
+	assets["demo_1.2.0_checksums.txt"] = checksumsBody(
+		map[string]string{"demo_linux.tar.gz": "bin", "demo_windows.zip": "exe"},
+		"demo_linux.tar.gz", "demo_windows.zip")
+	srv := releaseServer(t, "v1.2.0", assets)
+
+	audit := auditOf(t, srv, "1.2.0")
+	if len(audit.Missing) != 1 || audit.Missing[0] != "demo_windows.zip" {
+		t.Fatalf("the absent asset should be Missing: %+v", audit)
+	}
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	bad, err := p.VerifyChecksums(context.Background(), audit)
+	if err != nil {
+		t.Fatalf("a missing asset must not turn into a probe error: %v", err)
+	}
+	if len(bad) != 0 {
+		t.Errorf("the present asset matches; the absent one is not a mismatch: %+v", bad)
+	}
+}
+
+// latest.json しか無い Release は sha を持たない → 検算する対象がゼロ(呼び手が partial にする)。
+func TestVerifyChecksumsWithoutChecksumsManifest(t *testing.T) {
+	srv := releaseServer(t, "v1.2.0", map[string]string{
+		ManifestLatestJSON:  latestJSONBody("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	audit := auditOf(t, srv, "1.2.0")
+	if len(audit.Checksums) != 0 {
+		t.Fatalf("latest.json carries no sha256: %+v", audit.Checksums)
+	}
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	bad, err := p.VerifyChecksums(context.Background(), audit)
+	if err != nil || len(bad) != 0 {
+		t.Errorf("nothing to compare = no mismatch, no error: bad=%+v err=%v", bad, err)
 	}
 }
