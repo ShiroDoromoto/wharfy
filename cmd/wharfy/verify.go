@@ -26,6 +26,9 @@ import (
 // repo を足し、install して実行まで踏む。供給側(hosted repo への push)はアップロードが 200 を返せば
 // 成功するので、生成した deb/rpm の依存やファイル配置が壊れていても気づけない。踏むのは利用者になる。
 //
+// `wharfy verify [channel]` は対象を 1 チャネルに絞る。channels: に無い名前は publish と同じ
+// channel_not_configured で拒む。
+//
 // docker が無ければ apt/rpm のコンテナ検証だけを skip する(docker 不在は verify の失敗ではない)。
 // 一つも検証できなかったときは ok=false(nothing_to_verify)。「確かめられなかった」を緑で返すと、
 // CI がそれを「配布は健全」と読んでしまう(D-4)。
@@ -72,8 +75,10 @@ var (
 )
 
 // runVerify は channels: にあるチャネルの到達性・整合性を確認する(verify)。
+// 引数でチャネルを1つ名指しできる(省略時は channels: の全部)。apt/rpm はコンテナを起こすので、
+// 1 チャネルを直している間は他を走らせない方が反復が軽い。
 // 未発行・未対応のチャネルは skip として checks に載せ、一つも検証できなければ ok=false を返す。
-func runVerify(ctx context.Context, c registry.Command, _ []string) output.Result {
+func runVerify(ctx context.Context, c registry.Command, args []string) output.Result {
 	root, err := os.Getwd()
 	if err != nil {
 		return internalError(c, err)
@@ -82,9 +87,18 @@ func runVerify(ctx context.Context, c registry.Command, _ []string) output.Resul
 	cfg, _ := config.NewResolver(root).Resolve(in)
 	st, _ := state.Load(root, cfg.Project)
 
+	targets := cfg.Channels
+	if len(args) > 0 {
+		sel, ok := selectChannel(cfg, args[0])
+		if !ok {
+			return verifyChannelNotConfigured(c, cfg, in, args[0])
+		}
+		targets = []config.ResolvedChannel{sel}
+	}
+
 	var outcomes []verifyOutcome
 	var unpublished []string
-	for _, ch := range cfg.Channels {
+	for _, ch := range targets {
 		rec, published := publishedRecord(st, ch.Name)
 		if !published {
 			unpublished = append(unpublished, ch.Name)
@@ -105,6 +119,34 @@ func runVerify(ctx context.Context, c registry.Command, _ []string) output.Resul
 		}
 	}
 	return verifyResult(c, outcomes, unpublished)
+}
+
+// selectChannel は名指しされたチャネルを channels: から引く。
+func selectChannel(cfg config.Config, name string) (config.ResolvedChannel, bool) {
+	for _, ch := range cfg.Channels {
+		if ch.Name == name {
+			return ch, true
+		}
+	}
+	return config.ResolvedChannel{}, false
+}
+
+// verifyChannelNotConfigured は名指しされたチャネルが channels: に無いときの拒否。publish と同じ
+// 語彙で断る(D-4: 宣言した集合だけが対象)。畳んだチャネルを検証して緑を返さないため。
+//
+// publish は「未実装チャネル」へのディスパッチを持つので綴り違いをそこで拾うが、verify の対象は
+// 常に channels: 由来なので、綴り違いも「設定に無い」に落ちる。直し方だけ hint で分ける
+// ——書き戻せと言われても、そんな名前のチャネルは存在しない。
+func verifyChannelNotConfigured(c registry.Command, cfg config.Config, in config.File, name string) output.Result {
+	res := output.New(c.Name, name+" is not in wharfy.yaml channels: — nothing verified", false)
+	res.Data = verifyData{Checks: []verifyCheck{}}
+	prob := channelNotConfiguredProblem(cfg, in, name)
+	if !config.KnownChannel(name) {
+		prob.Hint = "there is no wharfy channel named '" + name + "' — check the spelling"
+	}
+	res.Errors = []output.Problem{prob}
+	res.Next = []output.NextDo{{Reason: "verify the channels you declared", Do: "wharfy verify"}}
+	return res
 }
 
 // publishedRecord は state から発行済みの記録を返す(版が空なら未発行扱い)。

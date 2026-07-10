@@ -124,22 +124,28 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 // channelNotConfiguredResult は channels: に無いチャネルを名指しされたときの拒否。
 // 「まだ publish していない」ではなく「配ると宣言していない」ので、発行せず理由を返す。
 func channelNotConfiguredResult(c registry.Command, cfg config.Config, in config.File, ch string) output.Result {
-	hint := "add '" + ch + "' back to channels: in wharfy.yaml if you mean to distribute it again"
-	if config.IsPrebuilt(in) && !config.PrebuiltCompatible(ch) {
-		hint = ch + " needs the Go toolchain and is dropped in prebuilt (BYO-binary) mode"
-	}
 	item := channel.PlanItem{
 		Channel: ch, Kind: config.Kind(ch), Action: channel.ActionSkip,
 		Reason: "not in channels: — wharfy publishes only what you declared",
 	}
 	res := publishResult(c, ch+" is not in wharfy.yaml channels: — nothing published", false, []channel.PlanItem{item})
-	res.Errors = []output.Problem{{
+	res.Errors = []output.Problem{channelNotConfiguredProblem(cfg, in, ch)}
+	res.Next = []output.NextDo{{Reason: "publish the channels you declared", Do: "wharfy publish --dry-run"}}
+	return res
+}
+
+// channelNotConfiguredProblem は「その名前は channels: に無い」理由を組む(publish / verify 共用)。
+// 拒む語彙を二度書かないため——どちらのコマンドでも、宣言した集合だけが対象という規則は同じ(D-4)。
+func channelNotConfiguredProblem(cfg config.Config, in config.File, ch string) output.Problem {
+	hint := "add '" + ch + "' back to channels: in wharfy.yaml if you mean to distribute it again"
+	if config.IsPrebuilt(in) && !config.PrebuiltCompatible(ch) {
+		hint = ch + " needs the Go toolchain and is dropped in prebuilt (BYO-binary) mode"
+	}
+	return output.Problem{
 		Code:    output.ErrChannelNotConfigured,
 		Message: ch + " is not a configured channel (declared: " + strings.Join(channelNames(cfg), ", ") + ")",
 		Hint:    hint,
-	}}
-	res.Next = []output.NextDo{{Reason: "publish the channels you declared", Do: "wharfy publish --dry-run"}}
-	return res
+	}
 }
 
 // channelNames は解決済みチャネルの名前列(拒否理由に「宣言した集合」を載せるため)。

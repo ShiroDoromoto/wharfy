@@ -87,6 +87,10 @@ layout fails there, not on your users' machines. The upload itself can't catch t
 never failed. If **no** channel could be verified at all, `verify` exits non-zero with
 `nothing_to_verify` rather than reporting a green run it never made.
 
+`wharfy verify apt` narrows the run to a single channel — useful while you fix one, since the
+container steps are slow. A name absent from `channels:` is refused with `channel_not_configured`,
+exactly as `wharfy publish <channel>` refuses it.
+
 Every command also takes `--json` and ends with a `next:` block. **The authoritative,
 always-current list of commands and channels is `wharfy agent` itself** — this README does
 not duplicate it (a generated map can't go stale; a hand-written table can).

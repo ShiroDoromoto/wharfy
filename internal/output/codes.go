@@ -51,7 +51,7 @@ const (
 	ErrInitWriteFailed    = "init_write_failed"    // init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)
 	ErrConsentRequired    = "consent_required"     // strict gated への申請に明示同意が必要(未同意)
 	ErrPublishFailed      = "publish_failed"       // チャネルへの発行失敗
-	// ErrChannelNotConfigured: wharfy.yaml の channels: に無いチャネルを名指しで publish しようとした。
+	// ErrChannelNotConfigured: wharfy.yaml の channels: に無いチャネルを名指しで publish / verify しようとした。
 	// 畳んだチャネルへの発行は、配布者が設定へ書き戻したときにだけ起こる(配布は明示ゲート)。
 	ErrChannelNotConfigured = "channel_not_configured"
 	ErrChecksumMismatch     = "checksum_mismatch" // manifest の sha256 が実アセットと不一致(#10 自己検査)
@@ -109,7 +109,7 @@ var Catalog = []CatalogEntry{
 	{ErrInitWriteFailed, KindError, "init で AGENTS.md / CLAUDE.md の読み書きに失敗(権限等)"},
 	{ErrConsentRequired, KindError, "strict gated への申請に明示同意が必要(未同意)"},
 	{ErrPublishFailed, KindError, "チャネルへの発行失敗"},
-	{ErrChannelNotConfigured, KindError, "channels: に無いチャネルを名指しで publish しようとした"},
+	{ErrChannelNotConfigured, KindError, "channels: に無いチャネルを名指しで publish / verify しようとした"},
 	{ErrChecksumMismatch, KindError, "manifest の sha256 が実アセットと不一致(自己検査)"},
 	{ErrProbeFailed, KindError, "実体照合に失敗"},
 	{ErrNetworkError, KindError, "一時的なネットワーク失敗"},

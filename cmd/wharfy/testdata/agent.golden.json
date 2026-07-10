@@ -76,7 +76,8 @@
     },
     {
       "name": "verify",
-      "summary": "install from each channel and run it"
+      "summary": "install from each channel and run it",
+      "args": "[channel]"
     },
     {
       "name": "version",
