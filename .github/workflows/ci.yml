@@ -5,7 +5,8 @@ name: ci
 #  - registry 不整合・next: リンク切れ・コード不整合で落ちる (drift_test / codes_test)
 # test ジョブは goreleaser/ネットワーク不要(Builder/Archiver/TapStore を fake 化済み)。
 # docker-verify ジョブだけは実 docker と実ネットワークを使う。
-# windows-test ジョブは、Windows でしか走らないコードを走らせるためだけに在る。
+# windows-test / macos-test ジョブは、その OS でしか走らないコードを走らせるためだけに在る。
+# wharfy が配布を語る OS は、CI が実際に踏む(D-11)。語るだけで踏まない OS を残さない。
 
 on:
   push:
@@ -53,6 +54,23 @@ jobs:
   # -race を付けないのは意図的で、競合は OS に依らないから ubuntu の test ジョブが見る。
   windows-test:
     runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test
+        run: go test ./...
+
+  # macOS でしか踏めない経路を守る。install.sh を実際に走らせるテストは ubuntu では GNU coreutils で
+  # 通るが、macOS の利用者が踏むのは BSD の install / tar / uname で、uname -m の答えも違う(arm64)。
+  # wharfy が自分自身を配っている主チャネルは Homebrew(macOS)であり、そこが手元でしか踏まれて
+  # いなかった。test ジョブとは別に置く理由は windows-test と同じ。
+  macos-test:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
 

@@ -364,8 +364,9 @@ go vet ./...
 ```
 
 CI runs gofmt / vet / build / `go test -race` on every push and PR, and repeats `go test` on
-`windows-latest` as its own job — only there is `install.ps1` run by the Windows PowerShell your
-users actually have.
+`windows-latest` and `macos-latest` as their own jobs. Every OS wharfy claims to ship to is an OS CI
+actually walks: only on Windows is `install.ps1` run by the PowerShell your users have, and only on
+macOS does `install.sh` meet the BSD `install` / `tar` / `uname` it will meet in the wild.
 
 One suite is behind a build tag, because it needs a real docker and a real network. It builds
 deliberately broken `.deb` and `.rpm` packages — an unmet dependency, a binary off `PATH` — serves

@@ -421,9 +421,10 @@ func installedPowerShells() []string {
 // どこで何が走るかを、ここに書いておく。かつてこの対応が誰の目にも見えず、「CI では install.ps1 が
 // 一行も走らない」という誤った前提のままタスクが起票された:
 //
-//	windows-latest … powershell(5.1) と pwsh(7) の両方。5.1 が利用者の大半の本番環境。
-//	ubuntu-latest  … pwsh(7) だけ(ランナーに同梱)。本文の構文の壊れを、速い test ジョブで先に捕まえる。
-//	手元 macOS     … どちらも無いので skip。
+//	windows-latest            … powershell(5.1) と pwsh(7) の両方。5.1 が利用者の大半の本番環境。
+//	ubuntu-latest/macos-latest … pwsh(7) だけ(どちらのランナーにも同梱)。install.ps1 を踏む
+//	                             Windows 利用者は居ないが、本文の構文の壊れをここで先に捕まえられる。
+//	pwsh の無い手元            … skip。
 //
 // arch より後ろ(取得・展開・配置・起動)は TestRunPowerShellInstallInstallsAndLaunchesTheBinary が踏む。
 func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
