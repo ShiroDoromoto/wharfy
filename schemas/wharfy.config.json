@@ -449,6 +449,27 @@
       },
       "additionalProperties": false
     },
+    "verify": {
+      "type": "object",
+      "description": "verify のコンテナ検証の調整。未指定なら apt=debian:12 / rpm=fedora:40 で起動確認は --version → version → --help。",
+      "properties": {
+        "images": {
+          "type": "object",
+          "description": "チャネル名 → ベースイメージ。実際に配る先(ubuntu, rocky 等)で確かめたいときに書く。",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "run": {
+          "type": "array",
+          "description": "入ったバイナリに渡す起動確認の引数。既定の推測を受け付けない CLI(サブコマンド必須等)で書く。",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "container": {
       "type": "object",
       "description": "OCI イメージ(owned, 即時)。push トークンは GITHUB_TOKEN(packages:write)を env で。",

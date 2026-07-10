@@ -45,7 +45,7 @@ func moduleProxyServer(t *testing.T, found bool) *httptest.Server {
 }
 
 // swapScriptInstall は install.sh の実行を差し替える(ホストで走らせない)。
-func swapScriptInstall(t *testing.T, run func(ctx context.Context, url, binary string) ([]byte, error)) {
+func swapScriptInstall(t *testing.T, run func(ctx context.Context, url, binary string, runArgs []string) ([]byte, error)) {
 	t.Helper()
 	old := scriptInstall
 	scriptInstall = run
@@ -53,7 +53,7 @@ func swapScriptInstall(t *testing.T, run func(ctx context.Context, url, binary s
 }
 
 // swapGoinstallInstall は go install の実行を差し替える。
-func swapGoinstallInstall(t *testing.T, run func(ctx context.Context, path, tag string) ([]byte, error)) {
+func swapGoinstallInstall(t *testing.T, run func(ctx context.Context, path, tag string, runArgs []string) ([]byte, error)) {
 	t.Helper()
 	old := goinstallInstall
 	goinstallInstall = run
@@ -74,7 +74,7 @@ func TestVerifyScriptProbesOnlyByDefault(t *testing.T) {
 	srv := installScriptServer(t, "1.2.0")
 	chdir(t, scratchScript(t, "1.2.0"))
 	defer swapScriptProbeURL(srv.URL)()
-	swapScriptInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapScriptInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		t.Fatal("the default verify must not run install.sh")
 		return nil, nil
 	})
@@ -130,7 +130,7 @@ func TestVerifyScriptInstallRuns(t *testing.T) {
 	withInstall(t)
 	defer swapScriptProbeURL(srv.URL)()
 	var gotURL, gotBinary string
-	swapScriptInstall(t, func(_ context.Context, url, binary string) ([]byte, error) {
+	swapScriptInstall(t, func(_ context.Context, url, binary string, _ []string) ([]byte, error) {
 		gotURL, gotBinary = url, binary
 		return []byte("demo 1.2.0"), nil
 	})
@@ -154,7 +154,7 @@ func TestVerifyScriptInstallFailureIsVerifyFailed(t *testing.T) {
 	chdir(t, scratchScript(t, "1.2.0"))
 	withInstall(t)
 	defer swapScriptProbeURL(srv.URL)()
-	swapScriptInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapScriptInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		return []byte("download failed: 404"), errors.New("exit status 3")
 	})
 
@@ -167,13 +167,38 @@ func TestVerifyScriptInstallFailureIsVerifyFailed(t *testing.T) {
 	}
 }
 
+// verify.run はコンテナだけの設定ではない。ホストで入れたバイナリの起動確認にも同じ引数を渡す
+// ——サブコマンド必須の CLI が、apt では通って script では壊れている、と報告されてはいけない。
+func TestVerifyScriptInstallHonoursVerifyRun(t *testing.T) {
+	srv := installScriptServer(t, "1.2.0")
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [script]\ngithub: acme/demo\nverify:\n  run: [status, --quiet]\n")
+	recordPublishFor(t, root, "script", "1.2.0", "acme/demo release:install.sh")
+	chdir(t, root)
+	withInstall(t)
+	defer swapScriptProbeURL(srv.URL)()
+	var gotRun []string
+	swapScriptInstall(t, func(_ context.Context, _, _ string, runArgs []string) ([]byte, error) {
+		gotRun = runArgs
+		return []byte("ok"), nil
+	})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("verify should be ok: %+v", res)
+	}
+	if len(gotRun) != 2 || gotRun[0] != "status" || gotRun[1] != "--quiet" {
+		t.Errorf("the launch check on the host must use verify.run: %v", gotRun)
+	}
+}
+
 // sh が無い環境(Windows 等)で --install を頼まれた → 失敗ではなく partial。何を入れれば踏めるか言う。
 func TestVerifyScriptWithoutShellIsPartial(t *testing.T) {
 	srv := installScriptServer(t, "1.2.0")
 	chdir(t, scratchScript(t, "1.2.0"))
 	withInstall(t)
 	defer swapScriptProbeURL(srv.URL)()
-	swapScriptInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapScriptInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		return nil, errToolMissing
 	})
 
@@ -205,7 +230,7 @@ func TestVerifyGoinstallProbesWithoutPublishRecord(t *testing.T) {
 	proxy := moduleProxyServer(t, true)
 	chdir(t, scratchGoinstall(t, "v1.2.0"))
 	defer swapGoinstallProxy(proxy.URL)()
-	swapGoinstallInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapGoinstallInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		t.Fatal("the default verify must not run go install")
 		return nil, nil
 	})
@@ -260,7 +285,7 @@ func TestVerifyGoinstallInstallRuns(t *testing.T) {
 	withInstall(t)
 	defer swapGoinstallProxy(proxy.URL)()
 	var gotPath, gotTag string
-	swapGoinstallInstall(t, func(_ context.Context, path, tag string) ([]byte, error) {
+	swapGoinstallInstall(t, func(_ context.Context, path, tag string, _ []string) ([]byte, error) {
 		gotPath, gotTag = path, tag
 		return []byte("demo dev"), nil
 	})
@@ -283,7 +308,7 @@ func TestVerifyGoinstallWithoutGoIsPartial(t *testing.T) {
 	chdir(t, scratchGoinstall(t, "v1.2.0"))
 	withInstall(t)
 	defer swapGoinstallProxy(proxy.URL)()
-	swapGoinstallInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapGoinstallInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		return nil, errToolMissing
 	})
 
@@ -303,7 +328,7 @@ func TestVerifyGoinstallBuildFailureIsVerifyFailed(t *testing.T) {
 	chdir(t, scratchGoinstall(t, "v1.2.0"))
 	withInstall(t)
 	defer swapGoinstallProxy(proxy.URL)()
-	swapGoinstallInstall(t, func(context.Context, string, string) ([]byte, error) {
+	swapGoinstallInstall(t, func(context.Context, string, string, []string) ([]byte, error) {
 		return []byte("undefined: Foo"), errors.New("exit status 1")
 	})
 

@@ -96,13 +96,27 @@ inside a Debian/Fedora container, install the package and run it — a broken de
 file layout fails there, not on your users' machines. The upload itself can't catch that: it returns
 `200` either way. `script` runs the published `install.sh` into a temporary `PREFIX`, and `goinstall`
 runs `go install` into a temporary `GOBIN`; both then run the binary they installed. Nothing lands on
-your `PATH`. When the tool a channel needs is absent (no docker, no `sh`, no `go`), that channel is
-reported `partial` with a warning — never failed. A `goinstall` binary is only required to run, not
-to report the right version: `go install` does not apply your ldflags, so a CLI that injects its
-version says `dev`.
+your `PATH`. When the tool a channel needs is absent (no docker, no `sh`, no `go`), or the base image
+cannot be pulled, that channel is reported `partial` with a warning — never failed. A `goinstall`
+binary is only required to run, not to report the right version: `go install` does not apply your
+ldflags, so a CLI that injects its version says `dev`.
 
 If **no** channel could be verified at all, `verify` exits non-zero with `nothing_to_verify` rather
 than reporting a green run it never made.
+
+Two `--install` defaults can be moved. `verify.images` picks the base image per channel — verify where
+you actually ship, not where wharfy guessed. `verify.run` replaces the launch check, which otherwise
+guesses `--version`, then `version`, then `--help`; a CLI that requires a subcommand would fail all
+three and be reported broken when it is not. Both apply wherever the binary is launched — in the
+container for `apt`/`rpm`, on your machine for `script` and `goinstall`.
+
+```yaml
+verify:
+  images:
+    apt: ubuntu:24.04
+    rpm: rockylinux:9
+  run: [status, --quiet]   # runs `<binary> status --quiet` after installing
+```
 
 `wharfy verify apt` narrows the run to a single channel — useful while you fix one, since the
 `--install` steps are slow. A name absent from `channels:` is refused with `channel_not_configured`,

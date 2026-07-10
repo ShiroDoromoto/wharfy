@@ -198,19 +198,32 @@ func rpmRepoServer(t *testing.T, pkg, version string) *httptest.Server {
 // scratchLinuxRepo は apt/rpm チャネル 1 本の wharfy.yaml を持つリポを作り、発行記録を書く。
 func scratchLinuxRepo(t *testing.T, name, repo, recorded string) string {
 	t.Helper()
+	return scratchLinuxRepoWith(t, name, repo, recorded, "")
+}
+
+// scratchLinuxRepoWith は scratchLinuxRepo に wharfy.yaml の追記(verify: など)を足す。
+func scratchLinuxRepoWith(t *testing.T, name, repo, recorded, extraYAML string) string {
+	t.Helper()
 	root := scratchModule(t)
-	writeConfig(t, root, "project: demo\nchannels: ["+name+"]\n"+name+":\n  repo: "+repo+"\n")
+	writeConfig(t, root, "project: demo\nchannels: ["+name+"]\n"+name+":\n  repo: "+repo+"\n"+extraYAML)
 	recordPublishFor(t, root, name, recorded, repo)
 	return root
 }
 
 // swapDocker は docker の有無とコンテナ実行を差し替える(実 docker を叩かせない)。
+// run は `docker run` だけを受け持つ。イメージの取得(`docker pull`)は既定で成功させ、
+// そこを試したいテストだけが swapDockerPullFails で落とす。
 func swapDocker(t *testing.T, available bool, run func(ctx context.Context, args ...string) ([]byte, error)) {
 	t.Helper()
 	oldAvail, oldRun := dockerAvailable, dockerRun
 	dockerAvailable = func() bool { return available }
 	if run != nil {
-		dockerRun = run
+		dockerRun = func(ctx context.Context, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "pull" {
+				return nil, nil
+			}
+			return run(ctx, args...)
+		}
 	}
 	t.Cleanup(func() { dockerAvailable, dockerRun = oldAvail, oldRun })
 }
@@ -222,6 +235,26 @@ func withInstall(t *testing.T) {
 	old := flagInstall
 	flagInstall = true
 	t.Cleanup(func() { flagInstall = old })
+}
+
+// swapDockerPullFails は `docker pull` が落ちる docker を差し替える(`docker run` は届かない)。
+func swapDockerPullFails(t *testing.T, out string) {
+	t.Helper()
+	swapDockerRaw(t, true, func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "pull" {
+			return []byte(out), errors.New("exit status 1")
+		}
+		t.Fatalf("the container must not run when the image could not be pulled: %v", args)
+		return nil, nil
+	})
+}
+
+// swapDockerRaw は pull を取り繕わずに docker 呼び出しをそのまま渡す(呼び出しの並びを見たいテスト用)。
+func swapDockerRaw(t *testing.T, available bool, run func(ctx context.Context, args ...string) ([]byte, error)) {
+	t.Helper()
+	oldAvail, oldRun := dockerAvailable, dockerRun
+	dockerAvailable, dockerRun = func() bool { return available }, run
+	t.Cleanup(func() { dockerAvailable, dockerRun = oldAvail, oldRun })
 }
 
 // checksOf は verify の data からチャネル別の結果を取り出す。
@@ -378,20 +411,123 @@ func TestVerifyRpmInstallsWithDnf(t *testing.T) {
 	}
 }
 
-// 設定由来の値をコンテナのシェルへ素通しさせない。
+// 配る先が debian でないなら、そこで確かめないと検証が的外れになる。verify.images で名指しできる。
+func TestVerifyUsesConfiguredImage(t *testing.T) {
+	srv := aptRepoServer(t, "demo", "1.2.0")
+	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: ubuntu:24.04\n"))
+	withInstall(t)
+	var pulled, ran []string
+	swapDockerRaw(t, true, func(_ context.Context, a ...string) ([]byte, error) {
+		if a[0] == "pull" {
+			pulled = a
+			return nil, nil
+		}
+		ran = a
+		return []byte("demo 1.2.0"), nil
+	})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the configured image should verify ok: %+v", res)
+	}
+	if len(pulled) != 2 || pulled[1] != "ubuntu:24.04" {
+		t.Errorf("the configured image must be pulled before the run: %v", pulled)
+	}
+	if len(ran) < 3 || ran[2] != "ubuntu:24.04" {
+		t.Fatalf("the container must run on the configured image: %v", ran)
+	}
+	if !strings.Contains(res.Data.(verifyData).Checks[0].Message, "ubuntu:24.04") {
+		t.Errorf("the message should name the image that was exercised: %+v", res.Data)
+	}
+}
+
+// --version も version も --help も受け付けない CLI がある。起動確認は verify.run で置き換えられる。
+func TestVerifyUsesConfiguredRunArgs(t *testing.T) {
+	srv := aptRepoServer(t, "demo", "1.2.0")
+	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  run: [status, --quiet]\n"))
+	withInstall(t)
+	var args []string
+	swapDocker(t, true, func(_ context.Context, a ...string) ([]byte, error) { args = a; return []byte("ok"), nil })
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the configured launch check should verify ok: %+v", res)
+	}
+	script := args[len(args)-1]
+	if !strings.Contains(script, "demo status --quiet") {
+		t.Errorf("the launch check should be the configured command:\n%s", script)
+	}
+	if strings.Contains(script, "--help") {
+		t.Errorf("the default fallback chain should be gone once run is set:\n%s", script)
+	}
+}
+
+// イメージを引けないのは配布の壊れではない(docker 不在と同じ)。failed ではなく partial に寄せる。
+func TestVerifyPartialWhenImageCannotBePulled(t *testing.T) {
+	srv := aptRepoServer(t, "demo", "1.2.0")
+	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: example.invalid/nope:1\n"))
+	withInstall(t)
+	swapDockerPullFails(t, "Error response from daemon: manifest unknown")
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("an image that cannot be pulled is not a verify failure: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Fatalf("apt check should be partial: %+v", ck)
+	}
+	if !strings.Contains(ck[0].Message, "example.invalid/nope:1") {
+		t.Errorf("the message should name the image that could not be pulled: %+v", ck[0])
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// 設定の書き間違いは検証環境の都合ではない。コンテナを起こす前に verify_failed で落とす。
+func TestVerifyRejectsUnsafeConfiguredImage(t *testing.T) {
+	srv := aptRepoServer(t, "demo", "1.2.0")
+	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: \"debian:12;id\"\n"))
+	withInstall(t)
+	swapDockerRaw(t, true, func(_ context.Context, a ...string) ([]byte, error) {
+		t.Fatalf("docker must not be touched with an unusable image: %v", a)
+		return nil, nil
+	})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("an unusable verify image should be verify_failed: %+v", res)
+	}
+}
+
+// 設定由来の値をコンテナのシェルへ素通しさせない。イメージ名と起動確認の引数も設定由来なので同じ扱い。
 func TestVerifyRejectsUnsafeContainerInputs(t *testing.T) {
-	for _, tc := range []struct{ name, repo, pkg, binary string }{
-		{"non-http repo", "ftp://example.com/deb", "demo", "demo"},
-		{"shell metachar in repo", "https://example.com/$(id)", "demo", "demo"},
-		{"space in package name", "https://example.com/deb", "demo pkg", "demo"},
-		{"leading dash in binary", "https://example.com/deb", "demo", "-rf"},
+	ok := containerVerify{channel: "apt", image: "debian:12", repo: "https://apt.example.com/user/", pkg: "demo", binary: "demo"}
+	for _, tc := range []struct {
+		name string
+		mut  func(*containerVerify)
+	}{
+		{"non-http repo", func(cv *containerVerify) { cv.repo = "ftp://example.com/deb" }},
+		{"shell metachar in repo", func(cv *containerVerify) { cv.repo = "https://example.com/$(id)" }},
+		{"space in package name", func(cv *containerVerify) { cv.pkg = "demo pkg" }},
+		{"leading dash in binary", func(cv *containerVerify) { cv.binary = "-rf" }},
+		{"empty image", func(cv *containerVerify) { cv.image = "" }},
+		{"shell metachar in image", func(cv *containerVerify) { cv.image = "debian:12;id" }},
+		{"shell metachar in run arg", func(cv *containerVerify) { cv.run = []string{"$(id)"} }},
+		{"space in run arg", func(cv *containerVerify) { cv.run = []string{"repo status"} }},
 	} {
-		if err := checkShellSafe(tc.repo, tc.pkg, tc.binary); err == nil {
+		cv := ok
+		tc.mut(&cv)
+		if err := cv.checkShellSafe(); err == nil {
 			t.Errorf("%s: expected rejection", tc.name)
 		}
 	}
-	if err := checkShellSafe("https://apt.example.com/user/", "demo", "demo"); err != nil {
+	if err := ok.checkShellSafe(); err != nil {
 		t.Errorf("a plain https repo should pass: %v", err)
+	}
+	withRun := ok
+	withRun.run = []string{"repo", "--status", "-q"}
+	if err := withRun.checkShellSafe(); err != nil {
+		t.Errorf("subcommands and flags should pass: %v", err)
 	}
 }
 

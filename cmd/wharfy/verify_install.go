@@ -36,7 +36,7 @@ var (
 
 // runScriptInstall は公開 install.sh を取得し、一時 PREFIX へ実インストールして、入ったバイナリを
 // 起動する。利用者が `curl … | sh` で踏む経路と同じものを、書き込み先だけ一時ディレクトリに向けて走らせる。
-func runScriptInstall(ctx context.Context, url, binary string) ([]byte, error) {
+func runScriptInstall(ctx context.Context, url, binary string, run []string) ([]byte, error) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		return nil, errToolMissing
 	}
@@ -64,7 +64,7 @@ func runScriptInstall(ctx context.Context, url, binary string) ([]byte, error) {
 	if err != nil {
 		return out, err
 	}
-	runOut, err := runInstalledBinary(cctx, filepath.Join(prefix, "bin", binary))
+	runOut, err := runInstalledBinary(cctx, filepath.Join(prefix, "bin", binary), run)
 	return append(out, runOut...), err
 }
 
@@ -72,7 +72,7 @@ func runScriptInstall(ctx context.Context, url, binary string) ([]byte, error) {
 //
 // go.mod を持たない一時ディレクトリで走らせる: `go install path@version` はカレントの module に
 // 縛られない形なので、wharfy を動かしているプロジェクトの依存を巻き込まない。
-func runGoinstallInstall(ctx context.Context, installPath, tag string) ([]byte, error) {
+func runGoinstallInstall(ctx context.Context, installPath, tag string, run []string) ([]byte, error) {
 	if _, err := exec.LookPath("go"); err != nil {
 		return nil, errToolMissing
 	}
@@ -96,7 +96,7 @@ func runGoinstallInstall(ctx context.Context, installPath, tag string) ([]byte, 
 	if err != nil {
 		return out, err
 	}
-	runOut, err := runInstalledBinary(cctx, installed)
+	runOut, err := runInstalledBinary(cctx, installed, run)
 	return append(out, runOut...), err
 }
 
@@ -119,19 +119,24 @@ func soleBinary(gobin string) (string, error) {
 	return filepath.Join(gobin, files[0]), nil
 }
 
-// runInstalledBinary は入ったバイナリが起動するかを見る。--version → version → --help の順に試し、
-// どれか 1 つが通れば「動いた」とみなす(サブコマンドの名前はプロジェクトによる。依存不足やパス誤り
-// ならどれも起動しない)。コンテナ検証の aptVerifyScript と同じ作法。
+// runInstalledBinary は入ったバイナリが起動するかを見る。run(wharfy.yaml の verify.run)が在ればそれを、
+// 無ければ --version → version → --help の順に試し、どれか 1 つが通れば「動いた」とみなす(サブコマンドの
+// 名前はプロジェクトによる。依存不足やパス誤りならどれも起動しない)。コンテナ検証と同じ作法・同じ設定を使う
+// ——ホストで踏むかコンテナで踏むかで「動いた」の意味が変わってはいけない。
 //
 // 版の一致は見ない。`go install` は wharfy の ldflags を通さないので、版を注入している CLI は dev と
 // 名乗る。一致で判定すると偽陰性になる(依頼者の指摘)。判定は「入って、起動する」まで。
-func runInstalledBinary(ctx context.Context, path string) ([]byte, error) {
+func runInstalledBinary(ctx context.Context, path string, run []string) ([]byte, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("the installer reported success but %s is not there: %w", path, err)
 	}
+	attempts := [][]string{{"--version"}, {"version"}, {"--help"}}
+	if len(run) > 0 {
+		attempts = [][]string{run}
+	}
 	var last []byte
 	var lastErr error
-	for _, args := range [][]string{{"--version"}, {"version"}, {"--help"}} {
+	for _, args := range attempts {
 		out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
 		if err == nil {
 			return out, nil

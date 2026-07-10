@@ -79,8 +79,9 @@ var (
 	dockerRun = func(ctx context.Context, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	}
-	// verifyImages は apt/rpm を確かめるベースイメージ。利用者の環境の代表として debian/fedora を踏む。
-	verifyImages = map[string]string{"apt": "debian:12", "rpm": "fedora:40"}
+	// defaultVerifyImages は apt/rpm を確かめるベースイメージの既定。利用者の環境の代表として
+	// debian/fedora を踏む。実際に配る先が違うなら wharfy.yaml の verify.images で名指しする。
+	defaultVerifyImages = map[string]string{"apt": "debian:12", "rpm": "fedora:40"}
 	// verifyTimeout は実インストール 1 本の上限。apt-get update / dnf のメタデータ取得も、
 	// go install の初回ビルドも遅い。
 	verifyTimeout = 10 * time.Minute
@@ -114,7 +115,7 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		// goinstall は何も push しないチャネルなので publish 記録を持たない。基準は git のタグ
 		// (status と同じ)。記録の有無で判定すると、正しく配れているのに未発行として飛ばしてしまう。
 		if ch.Name == "goinstall" {
-			outcomes = append(outcomes, verifyGoinstall(ctx, root, cfg))
+			outcomes = append(outcomes, verifyGoinstall(ctx, root, cfg, in))
 			continue
 		}
 		rec, published := publishedRecord(st, ch.Name)
@@ -408,7 +409,7 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 		return verifyProbedOnly("script", "script "+rs.Version+" probed: install.sh at "+url+" installs "+rs.Version+"; the install was not exercised")
 	}
 
-	out, err := scriptInstall(ctx, url, prebuiltBinaryName(cfg, in))
+	out, err := scriptInstall(ctx, url, prebuiltBinaryName(cfg, in), verifyRun(in))
 	switch {
 	case errors.Is(err, errToolMissing):
 		return verifyPartial("script", "script "+rs.Version+" found at "+url+", but the install was not exercised: sh is not available")
@@ -429,7 +430,7 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 //
 // 版の一致は判定に使わない。go install は wharfy の ldflags を通さないので、版を注入している CLI は
 // dev と名乗る ——一致で判定すると偽陰性になる。
-func verifyGoinstall(ctx context.Context, root string, cfg config.Config) verifyOutcome {
+func verifyGoinstall(ctx context.Context, root string, cfg config.Config, in config.File) verifyOutcome {
 	mod := channelTargetByName(cfg, "goinstall")
 	if mod == "" {
 		return verifySkip("goinstall", "goinstall skipped: the module path is unresolved (needs a go.mod)")
@@ -454,7 +455,7 @@ func verifyGoinstall(ctx context.Context, root string, cfg config.Config) verify
 		return verifyProbedOnly("goinstall", "goinstall "+tag+" probed: the module proxy has "+mod+"@"+tag+"; `go install` was not exercised")
 	}
 
-	out, err := goinstallInstall(ctx, path, tag)
+	out, err := goinstallInstall(ctx, path, tag, verifyRun(in))
 	switch {
 	case errors.Is(err, errToolMissing):
 		return verifyPartial("goinstall", "goinstall "+tag+" is on the module proxy, but the install was not exercised: go is not available")
@@ -508,16 +509,51 @@ func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.
 	if !dockerAvailable() {
 		return verifyPartial(name, name+" "+rs.Version+" found in "+repo+", but the install was not exercised: docker is not available")
 	}
-	image := verifyImages[name]
-	out, err := containerInstall(ctx, name, repo, pkg, binary)
+	cv := containerVerify{channel: name, image: verifyImage(in, name), repo: repo, pkg: pkg, binary: binary, run: verifyRun(in)}
+
+	// 設定の書き間違いは検証環境の都合ではないので、コンテナを起こす前に落とす。
+	if err := cv.checkShellSafe(); err != nil {
+		return verifyFailure(name,
+			name+" cannot be verified in a container: "+err.Error(),
+			"the verify settings in wharfy.yaml are not usable: "+err.Error(),
+			"fix verify.images / verify.run (or the repo url) in wharfy.yaml",
+			"", "wharfy verify "+name)
+	}
+
+	// イメージを先に引く。引けないのは配布の壊れではなく検証環境の話なので、partial に寄せる
+	// (docker 不在と同じ扱い)。ここで分けないと、名指ししたイメージを引けないことが
+	// 「パッケージが入らない」に化けて配布者を誤診させる。
+	if out, err := cv.pull(ctx); err != nil {
+		return verifyPartial(name, name+" "+rs.Version+" found in "+repo+
+			", but the install was not exercised: image "+cv.image+" could not be pulled: "+tail(out, 400))
+	}
+	out, err := cv.install(ctx)
 	if err != nil {
 		return verifyFailure(name,
-			name+" "+rs.Version+" is in the repo but installing it in "+image+" failed",
+			name+" "+rs.Version+" is in the repo but installing it in "+cv.image+" failed",
 			"install from the repo failed: "+err.Error(),
 			"read the container output; the package's dependencies or file layout are likely wrong",
 			tail(out, 4000), "wharfy publish "+name+" --yes")
 	}
-	return verifySuccess(name, name+" "+rs.Version+" verified: installed from "+repo+" in "+image+" and ran")
+	return verifySuccess(name, name+" "+rs.Version+" verified: installed from "+repo+" in "+cv.image+" and ran")
+}
+
+// verifyImage は apt/rpm を確かめるベースイメージを引く(verify.images > 既定)。
+func verifyImage(in config.File, name string) string {
+	if in.Verify != nil {
+		if img := in.Verify.Images[name]; img != "" {
+			return img
+		}
+	}
+	return defaultVerifyImages[name]
+}
+
+// verifyRun はコンテナで入れたバイナリに渡す起動確認の引数を引く(空なら既定の連鎖)。
+func verifyRun(in config.File) []string {
+	if in.Verify == nil {
+		return nil
+	}
+	return in.Verify.Run
 }
 
 // probeLinuxRepo は hosted repo のメタデータから pkg の最新版を読む(status と同じ照合器)。
@@ -528,28 +564,44 @@ func probeLinuxRepo(ctx context.Context, name, repo, pkg string) (channel.Remote
 	return (&channel.AptProbe{Repo: repo}).Probe(ctx, pkg)
 }
 
-// containerInstall は使い捨てコンテナで repo を足し、install → 実行まで走らせる。
+// containerVerify は apt/rpm 1 チャネルをコンテナで確かめる 1 回分の材料。
+type containerVerify struct {
+	channel string   // "apt" / "rpm"
+	image   string   // ベースイメージ(verify.images で置き換え可)
+	repo    string   // 配信 URL
+	pkg     string   // パッケージ名
+	binary  string   // 入るはずのバイナリ名
+	run     []string // 起動確認の引数(空なら既定の連鎖)
+}
+
+// pull はベースイメージを引く。install と分けるのは、引けなかったことを failed ではなく
+// partial として扱うため(配布の壊れではない)。
+func (cv containerVerify) pull(ctx context.Context) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+	return dockerRun(cctx, "pull", cv.image)
+}
+
+// install は使い捨てコンテナで repo を足し、install → 実行まで走らせる。
 // 出力は失敗時の診断に返す(成功しても捨てない)。
-func containerInstall(ctx context.Context, name, repo, pkg, binary string) ([]byte, error) {
-	if err := checkShellSafe(repo, pkg, binary); err != nil {
+func (cv containerVerify) install(ctx context.Context) ([]byte, error) {
+	if err := cv.checkShellSafe(); err != nil {
 		return nil, err
 	}
-	script := aptVerifyScript(repo, pkg, binary)
-	if name == "rpm" {
-		script = rpmVerifyScript(repo, pkg, binary)
+	script := cv.aptScript()
+	if cv.channel == "rpm" {
+		script = cv.rpmScript()
 	}
 	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	return dockerRun(cctx, "run", "--rm", verifyImages[name], "bash", "-lc", script)
+	return dockerRun(cctx, "run", "--rm", cv.image, "bash", "-lc", script)
 }
 
-// aptVerifyScript は debian 系コンテナで repo を足し、install して実行するシェル。
+// aptScript は debian 系コンテナで repo を足し、install して実行するシェル。
 //
 // trusted=yes で署名検証を外す。ここで見たいのは「パッケージが入って動くか」であり、
 // 鍵を配れているかは repo ホスト側の話なので切り離す。
-// 実行は --version → version → --help の順に試し、どれか 1 つが通れば「動いた」とみなす
-// (サブコマンドの名前はプロジェクトによる。依存不足やパス誤りならどれも起動しない)。
-func aptVerifyScript(repo, pkg, binary string) string {
+func (cv containerVerify) aptScript() string {
 	return fmt.Sprintf(`set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -558,12 +610,12 @@ echo 'deb [trusted=yes] %s /' > /etc/apt/sources.list.d/wharfy-verify.list
 apt-get update -qq
 apt-get install -y -qq %s
 command -v %s
-%s --version || %s version || %s --help
-`, repo, pkg, binary, binary, binary, binary)
+%s
+`, cv.repo, cv.pkg, cv.binary, cv.launchCheck())
 }
 
-// rpmVerifyScript は fedora 系コンテナで repo を足し、install して実行するシェル。
-func rpmVerifyScript(repo, pkg, binary string) string {
+// rpmScript は fedora 系コンテナで repo を足し、install して実行するシェル。
+func (cv containerVerify) rpmScript() string {
 	return fmt.Sprintf(`set -eu
 cat > /etc/yum.repos.d/wharfy-verify.repo <<'EOF'
 [wharfy-verify]
@@ -574,26 +626,58 @@ gpgcheck=0
 EOF
 dnf install -y -q %s
 command -v %s
-%s --version || %s version || %s --help
-`, repo, pkg, binary, binary, binary, binary)
+%s
+`, cv.repo, cv.pkg, cv.binary, cv.launchCheck())
+}
+
+// launchCheck は入ったバイナリが動くことを確かめる 1 行。
+//
+// run が空なら --version → version → --help の順に試し、どれか 1 つが通れば「動いた」とみなす
+// (サブコマンドの名前はプロジェクトによる。依存不足やパス誤りならどれも起動しない)。
+// この推測を受け付けない CLI — サブコマンド必須、引数無しで対話に入る — は verify.run で名指しする。
+func (cv containerVerify) launchCheck() string {
+	if len(cv.run) == 0 {
+		return fmt.Sprintf("%s --version || %s version || %s --help", cv.binary, cv.binary, cv.binary)
+	}
+	return cv.binary + " " + strings.Join(cv.run, " ")
 }
 
 // shellSafeName はコンテナ内のシェルにそのまま渡してよい名前(パッケージ名・バイナリ名)。
 var shellSafeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
+// shellSafeArg は起動確認の引数。名前に加えて先頭のハイフン(--version, -h)とサブコマンドを通す。
+var shellSafeArg = regexp.MustCompile(`^-{0,2}[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+
+// shellSafeImage はベースイメージの参照(registry/name:tag, @sha256:... まで)。
+var shellSafeImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+
 // checkShellSafe は設定由来の値をシェルスクリプトへ埋める前に検査する。
 // wharfy.yaml は利用者のものだが、書き間違いがコンテナ内で任意コマンドになるのは事故なので断る。
-func checkShellSafe(repo, pkg, binary string) error {
-	if !strings.HasPrefix(repo, "http://") && !strings.HasPrefix(repo, "https://") {
-		return errString("repo must be an http(s) url to verify in a container: " + repo)
+func (cv containerVerify) checkShellSafe() error {
+	if !strings.HasPrefix(cv.repo, "http://") && !strings.HasPrefix(cv.repo, "https://") {
+		return errString("repo must be an http(s) url to verify in a container: " + cv.repo)
 	}
-	if strings.ContainsAny(repo, " \t\n\r'\"`$\\") {
-		return errString("repo url cannot be passed to a shell safely: " + repo)
+	if strings.ContainsAny(cv.repo, " \t\n\r'\"`$\\") {
+		return errString("repo url cannot be passed to a shell safely: " + cv.repo)
 	}
-	for _, s := range []string{pkg, binary} {
+	for _, s := range []string{cv.pkg, cv.binary} {
 		if !shellSafeName.MatchString(s) {
 			return errString("name cannot be passed to a shell safely: " + s)
 		}
+	}
+	for _, a := range cv.run {
+		if !shellSafeArg.MatchString(a) {
+			return errString("verify.run argument cannot be passed to a shell safely: " + a)
+		}
+	}
+	return checkImageSafe(cv.image)
+}
+
+// checkImageSafe はベースイメージ名を docker へ渡す前に検査する。docker はシェルを通さないが、
+// 空や `-` 始まりはフラグに化けるし、打ち間違いは早く断る方が診断しやすい。
+func checkImageSafe(image string) error {
+	if !shellSafeImage.MatchString(image) {
+		return errString("verify image is not a usable image reference: " + image)
 	}
 	return nil
 }
