@@ -380,7 +380,8 @@ func realPS1Server(t *testing.T, version string) *httptest.Server {
 //
 // 踏みたいのは「PowerShell が本文を解釈して走る」ところ: v0.16.0 が配った install.ps1 は
 // `$Project:` を PowerShell が ${drive:name} と読む穴で、まさにこの Fail の一行で壊れていた。
-// アセットを取って入れる先までは Windows 実機でしか踏めない(CI に windows ランナーが要る)。
+// CI では ubuntu(PowerShell 7)と windows(Windows PowerShell 5.1)の両方で走る。skip されるのは
+// どちらも無い手元だけ。arch より後ろ(取得・展開・配置・PATH 追記)はどの OS でも踏めていない。
 func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
 	if _, err := powerShellPath(); err != nil {
 		t.Skip("neither powershell nor pwsh is on this host")

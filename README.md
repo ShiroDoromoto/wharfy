@@ -363,7 +363,9 @@ go test ./...     # unit + drift + schema-validation tests (no goreleaser/networ
 go vet ./...
 ```
 
-CI runs gofmt / vet / build / `go test -race` on every push and PR.
+CI runs gofmt / vet / build / `go test -race` on every push and PR, and repeats `go test` on
+`windows-latest` as its own job — only there is `install.ps1` run by the Windows PowerShell your
+users actually have.
 
 One suite is behind a build tag, because it needs a real docker and a real network. It builds
 deliberately broken `.deb` and `.rpm` packages — an unmet dependency, a binary off `PATH` — serves

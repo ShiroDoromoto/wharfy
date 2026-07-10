@@ -5,6 +5,7 @@ name: ci
 #  - registry 不整合・next: リンク切れ・コード不整合で落ちる (drift_test / codes_test)
 # test ジョブは goreleaser/ネットワーク不要(Builder/Archiver/TapStore を fake 化済み)。
 # docker-verify ジョブだけは実 docker と実ネットワークを使う。
+# windows-test ジョブは、Windows でしか走らないコードを走らせるためだけに在る。
 
 on:
   push:
@@ -42,6 +43,24 @@ jobs:
 
       - name: go test (race)
         run: go test -race ./...
+
+  # Windows でしか踏めない経路を守る。install.ps1 の本文は ubuntu の pwsh でも走る(ランナーに
+  # PowerShell 7 が入っている)が、利用者の大半が使う Windows PowerShell 5.1 と、.exe を置いて
+  # 起動するまでのパス処理は、ここでしか走らない。v0.16.0 が壊れた install.ps1 を配った穴である。
+  # test ジョブとは別に置く: windows ランナーは遅いので、軽い test を待たせない。
+  # -race を付けないのは意図的で、競合は OS に依らないから ubuntu の test ジョブが見る。
+  windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test
+        run: go test ./...
 
   # 実 docker で deb/rpm を本当に install して起動まで踏む(build tag dockerverify)。
   # test ジョブとは別に置く: イメージ取得と install で分単位かかるので、軽い test を待たせない。
