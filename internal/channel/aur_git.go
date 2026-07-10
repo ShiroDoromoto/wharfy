@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // aur_git.go — AurPusher の実体。AUR の自前パッケージ git(ssh)を clone し、PKGBUILD/.SRCINFO を
 // commit して push する(審査なし)。AUR_SSH_KEY を一時ファイルに置き GIT_SSH_COMMAND で使う。
 //
-// 注: 実 AUR へ push するため自動テストでは検証しない(fake AurPusher で orchestration を検証)。
+// 注: 実 AUR へは push できないので、テストは Host に file:// のローカル repo を挿して確かめる
+// (publish 側の orchestration は fake AurPusher で検証)。
 
 // GitAurPusher は git+ssh で AUR に push する。
 type GitAurPusher struct {
@@ -64,9 +66,18 @@ func (p *GitAurPusher) Push(ctx context.Context, pkgname string, files map[strin
 	if out, err := p.git(ctx, env, repo, "add", "-A"); err != nil {
 		return "", fmt.Errorf("add: %w: %s", err, out)
 	}
+	// 内容が同じなら commit は「変更なし」で失敗する。それは異常ではなく冪等な再実行なので、
+	// commit も push もせず現在の HEAD を返す(告知だけを載せ直す凍結 publish はここを毎回通る)。
+	staged, err := p.git(ctx, env, repo, "status", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("status: %w: %s", err, staged)
+	}
+	if trimSpace(staged) == "" {
+		head, _ := p.git(ctx, env, repo, "rev-parse", "HEAD")
+		return trimSpace(head), nil
+	}
 	if out, err := p.git(ctx, env, repo, "commit", "-m", "wharfy: update "+pkgname); err != nil {
-		// 変更なし(冪等)なら commit は失敗する。push せず空 commit を返す。
-		return "", fmt.Errorf("commit (maybe no changes): %w: %s", err, out)
+		return "", fmt.Errorf("commit: %w: %s", err, out)
 	}
 	if out, err := p.git(ctx, env, repo, "push", "origin", "HEAD:master"); err != nil {
 		return "", fmt.Errorf("push: %w: %s", err, out)
@@ -75,10 +86,15 @@ func (p *GitAurPusher) Push(ctx context.Context, pkgname string, files map[strin
 	return trimSpace(out), nil
 }
 
+// host は clone/push する git remote の前置き。既定は AUR の ssh。スキーム付きの Host は
+// そのまま使う(file:// のローカル repo など、ssh 以外の remote も指せる)。
 func (p *GitAurPusher) host() string {
 	h := p.Host
 	if h == "" {
 		h = "aur@aur.archlinux.org"
+	}
+	if strings.Contains(h, "://") {
+		return h
 	}
 	return "ssh://" + h
 }
