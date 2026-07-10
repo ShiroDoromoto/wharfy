@@ -86,13 +86,13 @@ is never verified, and its old record no longer makes `verify` green).
 
 By default it installs nothing: it probes each channel over the network, so you can run it on every
 CI build. For `homebrew` it reads the formula off the tap and matches the version; for `releases` it
-checks that every asset listed in the release's own manifest (`latest.json`, plus `checksums.txt`
-when GoReleaser wrote one) really exists on the release — a user following that manifest would
-otherwise hit a `404`. The binaries themselves are not downloaded, and a release carrying neither
-manifest is reported `skipped`, not verified. For `script` it fetches the published `install.sh` and
-matches the version it installs; for `goinstall` it asks the module proxy whether your tag resolves;
-for `apt`/`rpm` it reads the version out of the repo metadata. Those four have more to check than a
-probe can reach, so they are reported `partial`, never `verified`.
+checks that every asset listed in the release's own manifest (`latest.json`, plus the checksums file
+`<project>_<version>_checksums.txt` when GoReleaser wrote one) really exists on the release — a user
+following that manifest would otherwise hit a `404`. The binaries themselves are not downloaded, and
+a release carrying neither manifest is reported `skipped`, not verified. For `script` it fetches the
+published `install.sh` and matches the version it installs; for `goinstall` it asks the module proxy
+whether your tag resolves; for `apt`/`rpm` it reads the version out of the repo metadata. Those four
+have more to check than a probe can reach, so they are reported `partial`, never `verified`.
 
 `wharfy verify --install` goes the rest of the way and installs for real. `apt`/`rpm` add your repo
 inside a Debian/Fedora container, install the package and run it — a broken dependency or a wrong

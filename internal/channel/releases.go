@@ -6,8 +6,8 @@ package channel
 // 起きる。利用者はダウンロード時に 404 を踏むが、配布者は release が成功した記憶しか持たない。
 //
 // 照合の基準になる資産マニフェストは、wharfy 自身が書く latest.json(os/arch → ダウンロード URL)。
-// GoReleaser 経路なら checksums.txt もあるので、在れば両方を合わせて期待集合にする。
-// wharfy のネイティブ経路(BYO-binary)は checksums.txt を発行しないので、これを主にはできない(D-4)。
+// GoReleaser 経路なら checksums マニフェストもあるので、在れば両方を合わせて期待集合にする。
+// wharfy のネイティブ経路(BYO-binary)はこれを発行しないので、主にはできない(D-4)。
 //
 // バイナリ本体は落とさない — 資産名の実在照合まで(D-4)。sha256 の検算は verify --install の範囲。
 
@@ -25,8 +25,18 @@ import (
 // 資産マニフェストの名前(Release アセットとして上がっている)。
 const (
 	ManifestLatestJSON = "latest.json"
-	ManifestChecksums  = "checksums.txt"
+	// ManifestChecksums は GoReleaser の checksums マニフェストの素名。実際の資産名は既定の
+	// name_template `{{ .ProjectName }}_{{ .Version }}_checksums.txt` が効いてプロジェクト名と版を
+	// 含むので、固定名では実リリースに一度も当たらない(D-5)。拾うのは isChecksumsManifest。
+	ManifestChecksums = "checksums.txt"
 )
+
+// isChecksumsManifest は Release 資産の名前が checksums マニフェストかを判定する。
+// 既定の name_template が付ける `<project>_<version>_` 前置と、name_template を素名に潰した
+// 配布者の両方を拾う。
+func isChecksumsManifest(name string) bool {
+	return name == ManifestChecksums || strings.HasSuffix(name, "_"+ManifestChecksums)
+}
 
 // ReleasesProbe は tag のリリースからアセット名一覧とマニフェストを読む Probe 専用の型。
 type ReleasesProbe struct {
@@ -39,8 +49,8 @@ type ReleasesProbe struct {
 // ReleaseAudit は 1 つの Release に対する実在照合の結果。
 type ReleaseAudit struct {
 	Found     bool     // その tag の Release が在るか
-	Manifests []string // 照合に使えたマニフェスト(空なら照合不能 = skip)
-	Version   string   // latest.json が名乗る版(checksums.txt しか無ければ空)
+	Manifests []string // 照合に使えたマニフェストの資産名(空なら照合不能 = skip)
+	Version   string   // latest.json が名乗る版(checksums しか無ければ空)
 	Expected  []string // マニフェストが載せる資産名(昇順)
 	Missing   []string // そのうち Release に実在しないもの(昇順)
 }
@@ -100,19 +110,21 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 			expected[path.Base(u)] = true
 		}
 	}
-	if url, ok := present[ManifestChecksums]; ok {
-		names, err := p.fetchChecksumNames(ctx, url)
+	for _, name := range checksumsAssets(present) {
+		names, err := p.fetchChecksumNames(ctx, present[name])
 		if err != nil {
 			return ReleaseAudit{}, err
 		}
-		audit.Manifests = append(audit.Manifests, ManifestChecksums)
+		audit.Manifests = append(audit.Manifests, name)
 		for _, n := range names {
 			expected[n] = true
 		}
 	}
 	// マニフェスト自身は自分を載せない。載っていても欠損には数えない。
 	delete(expected, ManifestLatestJSON)
-	delete(expected, ManifestChecksums)
+	for _, m := range audit.Manifests {
+		delete(expected, m)
+	}
 
 	for name := range expected {
 		audit.Expected = append(audit.Expected, name)
@@ -123,6 +135,19 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 	sort.Strings(audit.Expected)
 	sort.Strings(audit.Missing)
 	return audit, nil
+}
+
+// checksumsAssets は Release に上がっている checksums マニフェストの資産名を昇順で返す。
+// 名前が版を含むので呼び手が当てにいけない — 資産一覧の側から拾う。
+func checksumsAssets(present map[string]string) []string {
+	var names []string
+	for name := range present {
+		if isChecksumsManifest(name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // releaseByTag は tag の Release を引く(404 は found=false・エラーではない)。
