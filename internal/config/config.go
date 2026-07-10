@@ -34,9 +34,20 @@ type File struct {
 	Winget      *WingetIn       `yaml:"winget"`
 	Aur         *AurIn          `yaml:"aur"`
 	Script      *ScriptInput    `yaml:"script"`
+	Verify      *VerifyInput    `yaml:"verify"`
 	// Deprecate はチャネルを畳む宣言(D-3)。キーはチャネル名。畳んでも channels からは外さない —
 	// 外すと wharfy がそのチャネルを知らなくなり、告知を運ぶ主体がいなくなる。
 	Deprecate map[string]*DeprecateInput `yaml:"deprecate"`
+}
+
+// VerifyInput は verify のコンテナ検証を配布者の実態に寄せる設定。どちらも未指定で従来どおり。
+//   - Images: チャネル名 → ベースイメージ。既定は debian/fedora だが、実際に配る先が
+//     ubuntu / rocky なら、そこで通ることを確かめないと検証が的外れになる。
+//   - Run: 入ったバイナリに渡す起動確認の引数。既定は --version → version → --help の連鎖で、
+//     どれも受け付けない CLI(サブコマンド必須など)は誤って落ちる。そこを名指しで置き換える。
+type VerifyInput struct {
+	Images map[string]string `yaml:"images"`
+	Run    []string          `yaml:"run"`
 }
 
 // DeprecateInput は畳むチャネル 1 つの宣言(D-3)。

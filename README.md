@@ -87,9 +87,22 @@ are not downloaded, and a release carrying neither manifest is reported `skipped
 For `apt`/`rpm` it also adds your repo inside a
 Debian/Fedora container, installs the package and runs it — a broken dependency or a wrong file
 layout fails there, not on your users' machines. The upload itself can't catch that: it returns
-`200` either way. Without docker the container step is not run: the channel is reported `partial`,
-never failed. If **no** channel could be verified at all, `verify` exits non-zero with
-`nothing_to_verify` rather than reporting a green run it never made.
+`200` either way. Without docker, or when the base image cannot be pulled, the container step is not
+run: the channel is reported `partial`, never failed. If **no** channel could be verified at all,
+`verify` exits non-zero with `nothing_to_verify` rather than reporting a green run it never made.
+
+Both container defaults can be moved. `verify.images` picks the base image per channel — verify where
+you actually ship, not where wharfy guessed. `verify.run` replaces the launch check, which otherwise
+guesses `--version`, then `version`, then `--help`; a CLI that requires a subcommand would fail all
+three and be reported broken when it is not.
+
+```yaml
+verify:
+  images:
+    apt: ubuntu:24.04
+    rpm: rockylinux:9
+  run: [status, --quiet]   # runs `<binary> status --quiet` inside the container
+```
 
 `wharfy verify apt` narrows the run to a single channel — useful while you fix one, since the
 container steps are slow. A name absent from `channels:` is refused with `channel_not_configured`,
