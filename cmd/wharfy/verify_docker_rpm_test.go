@@ -3,7 +3,7 @@
 // verify_docker_rpm_test.go — verify の rpm 側を実 docker で踏む回帰テスト(deb 側は verify_docker_test.go)。
 //
 // rpm を deb と別ファイルにしたのは足場が違うから: deb の flat repo は Packages を手で書けるが、
-// rpm は repodata(repomd.xml → primary.xml.gz)が要り、それを作る createrepo_c はホスト(macOS)に無い。
+// rpm は repodata(repomd.xml → primary.xml)が要り、それを作る createrepo_c はホスト(macOS)に無い。
 // 検証に使うのと同じ fedora コンテナの中で作る ——実際に配布者が持つのと同じ、本物のメタデータになる。
 //
 //	go test -tags dockerverify ./cmd/wharfy/ -run TestDockerVerifyRpm -timeout 20m
@@ -127,11 +127,11 @@ func buildRpm(t *testing.T, root, repoDir, pkg, binary string, depends []string)
 // 生成物は root 所有で残るため、最後にホストの uid へ返す(t.TempDir の後片付けが落ちないように)。
 func createRepodata(t *testing.T, repoDir string) {
 	t.Helper()
-	// gz を明示する。createrepo_c の既定は zstd だが RpmProbe は読めない(#43)。fury など実際の
-	// hosted repo は gz か非圧縮を配るので、ここで踏みたいのはその経路。
+	// 圧縮は既定(zstd)のまま。createrepo_c が実際に吐く primary.xml.zst を RpmProbe が読めることを
+	// ここで踏む。fury など hosted repo が配る gz/非圧縮は internal/channel の単体テストが見る。
 	script := fmt.Sprintf(`set -eu
 dnf install -y -q createrepo_c
-createrepo_c --general-compress-type=gz /repo
+createrepo_c /repo
 chown -R %d:%d /repo/repodata`, os.Getuid(), os.Getgid())
 	cmd := exec.CommandContext(context.Background(), "docker", "run", "--rm",
 		"-v", repoDir+":/repo", defaultVerifyImages["rpm"], "bash", "-lc", script)

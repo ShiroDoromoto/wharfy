@@ -1,15 +1,21 @@
 package channel
 
 import (
+	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/ulikunitz/xz"
 )
 
 // linuxrepo.go — apt/rpm hosted repo の実体照合。best-effort: 慣習的なメタデータ
@@ -81,7 +87,7 @@ func stanzaIsPackage(stanza, pkg string) bool {
 	return false
 }
 
-// RpmProbe は repomd.xml → primary.xml(.gz) を辿り、package の版を読む。
+// RpmProbe は repomd.xml → primary.xml(圧縮ありうる)を辿り、package の版を読む。
 type RpmProbe struct {
 	Repo string // rpm.repo(yum/dnf repo root)
 	HTTP *http.Client
@@ -105,7 +111,7 @@ func (p *RpmProbe) Probe(ctx context.Context, pkg string) (RemoteState, error) {
 		} `xml:"data"`
 	}
 	if err := xml.Unmarshal(repomd, &md); err != nil {
-		return RemoteState{}, err
+		return RemoteState{}, fmt.Errorf("parse repodata/repomd.xml: %w", err)
 	}
 	href := ""
 	for _, d := range md.Data {
@@ -124,10 +130,8 @@ func (p *RpmProbe) Probe(ctx context.Context, pkg string) (RemoteState, error) {
 	if !ok {
 		return RemoteState{Found: false}, nil
 	}
-	if strings.HasSuffix(href, ".gz") {
-		if raw, err = gunzip(raw); err != nil {
-			return RemoteState{}, err
-		}
+	if raw, err = decompressPrimary(href, raw); err != nil {
+		return RemoteState{}, err
 	}
 	var primary struct {
 		Packages []struct {
@@ -138,7 +142,7 @@ func (p *RpmProbe) Probe(ctx context.Context, pkg string) (RemoteState, error) {
 		} `xml:"package"`
 	}
 	if err := xml.Unmarshal(raw, &primary); err != nil {
-		return RemoteState{}, err
+		return RemoteState{}, fmt.Errorf("parse %s: %w", href, err)
 	}
 	// primary は過去版も載りうる(flat repo)。マッチするうち最も高い版を返す。
 	latest := ""
@@ -178,13 +182,45 @@ func httpGet(ctx context.Context, cl *http.Client, url string) ([]byte, bool, er
 	}
 }
 
-func gunzip(b []byte) ([]byte, error) {
-	r, err := gzip.NewReader(strings.NewReader(string(b)))
-	if err != nil {
-		return nil, err
+// decompressPrimary は primary の href の拡張子から圧縮形式を見分けて展開する。
+// createrepo_c は --general-compress-type で gz/xz/zstd(既定 zstd)を選べ、fury 等は非圧縮の
+// primary.xml を配る。形式を推測せず拡張子で決め打ちし、知らない形式は生バイトを XML として
+// 読ませずここで断る(そうしないと「XML が壊れている」という原因を指さない誤りになる)。
+func decompressPrimary(href string, raw []byte) ([]byte, error) {
+	var r io.Reader
+	switch ext := path.Ext(href); ext {
+	case ".xml":
+		return raw, nil
+	case ".gz":
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("decompress %s: %w", href, err)
+		}
+		defer zr.Close()
+		r = zr
+	case ".xz":
+		xr, err := xz.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("decompress %s: %w", href, err)
+		}
+		r = xr
+	case ".zst", ".zstd":
+		zr, err := zstd.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("decompress %s: %w", href, err)
+		}
+		defer zr.Close()
+		r = zr
+	case ".bz2":
+		r = bzip2.NewReader(bytes.NewReader(raw))
+	default:
+		return nil, fmt.Errorf("primary %s: unsupported compression %q (supported: .xml, .gz, .xz, .zst, .bz2)", href, ext)
 	}
-	defer r.Close()
-	return io.ReadAll(r)
+	out, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("decompress %s: %w", href, err)
+	}
+	return out, nil
 }
 
 // compareDotted はドット区切りの数値部を順に比べ -1/0/1 を返す(state.compareVersions と同方針)。
