@@ -396,11 +396,22 @@ func statusNext(channels []statusChannel) []output.NextDo {
 			})
 		}
 	}
-	// homebrew が未発行なら発行を促す。
+	// 未発行の owned チャネルは発行を促す(homebrew だけを特別扱いしない)。勧める集合は channels: に閉じる
+	// ＝畳んだチャネルは status にも next にも出ない。除くもの:
+	//   - gated: 審査待ちであって publish が答えではない
+	//   - goinstall / releases: publish が発行物を持たない(梱包ゼロ / release が上げる)
+	//   - 凍結(ship:false): 最後に配った版で据え置くと決めたチャネル
 	for _, c := range channels {
-		if c.Name == "homebrew" && !c.Published && c.Drift == nil {
-			next = append(next, output.NextDo{Reason: "homebrew not published", Do: "wharfy publish homebrew"})
+		if c.Published || c.Drift != nil || c.Kind != channel.KindOwned {
+			continue
 		}
+		if c.Name == "goinstall" || c.Name == "releases" {
+			continue
+		}
+		if c.Deprecated != nil && !c.Deprecated.Ship {
+			continue
+		}
+		next = append(next, output.NextDo{Reason: c.Name + " not published", Do: "wharfy publish " + c.Name})
 	}
 	if len(next) == 0 {
 		next = append(next, output.NextDo{Reason: "verify install works", Do: "wharfy verify"})
