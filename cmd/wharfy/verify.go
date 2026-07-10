@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,9 @@ import (
 // 行動の根拠にしない — 設定から外したチャネルの古い記録が残っていても検証しない。畳んだ tap を
 // 検証して緑を返し、現行チャネルを一つも見ていない、という嘘をつかないため。
 //
-// homebrew は自前 tap の formula の有無と版を照合する。apt/rpm はそれに加えて Linux コンテナで
+// homebrew は自前 tap の formula の有無と版を照合する。releases は Release の資産マニフェスト
+// (latest.json / checksums.txt)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。
+// apt/rpm はそれに加えて Linux コンテナで
 // repo を足し、install して実行まで踏む。供給側(hosted repo への push)はアップロードが 200 を返せば
 // 成功するので、生成した deb/rpm の依存やファイル配置が壊れていても気づけない。踏むのは利用者になる。
 //
@@ -94,6 +97,12 @@ func runVerify(ctx context.Context, c registry.Command, _ []string) output.Resul
 		switch ch.Name {
 		case "homebrew":
 			oc, err := verifyHomebrew(ctx, cfg, ch, rec)
+			if err != nil {
+				return internalError(c, err)
+			}
+			outcomes = append(outcomes, oc)
+		case "releases":
+			oc, err := verifyReleases(ctx, ch, rec)
 			if err != nil {
 				return internalError(c, err)
 			}
@@ -232,6 +241,56 @@ func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedCh
 			"", "wharfy publish homebrew --yes"), nil
 	default:
 		return verifySuccess("homebrew", "homebrew "+rs.Version+" verified: formula present at "+tap+", version matches record"), nil
+	}
+}
+
+// newReleasesProbe は Release の照合器を組む末端(テストで差し替える)。
+var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
+	return &channel.ReleasesProbe{Owner: owner, Repo: repo, Token: os.Getenv("GITHUB_TOKEN")}
+}
+
+// verifyReleases は Release に「配ったはずの資産」が実在するかを照合する。
+//
+// 期待集合は wharfy 自身が書く latest.json(在れば checksums.txt も)。どちらも無い旧リリースは
+// 照合の基準を持たないので skip する — 資産の欠落を見ていないのに verified とは言わない(D-4)。
+// 資産本体は落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。
+func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
+	repo := firstNonEmptyStr(ch.Target, rec.Target)
+	owner, name, ok := splitOwnerName(repo)
+	if !ok {
+		return verifyOutcome{}, errString("releases target is unresolved: " + repo)
+	}
+	audit, perr := newReleasesProbe(owner, name).Audit(ctx, rec.Version)
+	if perr != nil {
+		return probeFailedOutcome("releases", perr), nil
+	}
+	switch {
+	case !audit.Found:
+		return verifyFailure("releases",
+			"releases recorded "+rec.Version+" but "+repo+" has no release tagged v"+rec.Version,
+			"published release not found",
+			"re-run release to cut the tag and upload its assets",
+			"", "wharfy release --yes"), nil
+	case len(audit.Manifests) == 0:
+		return verifySkip("releases",
+			"releases skipped: v"+rec.Version+" carries neither "+channel.ManifestLatestJSON+
+				" nor "+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
+	case audit.Version != "" && audit.Version != rec.Version:
+		return verifyFailure("releases",
+			channel.ManifestLatestJSON+" on v"+rec.Version+" says "+audit.Version+", expected "+rec.Version,
+			"the release manifest names a different version than the published record",
+			"re-run release so the release and its "+channel.ManifestLatestJSON+" agree",
+			"", "wharfy release --yes"), nil
+	case len(audit.Missing) > 0:
+		return verifyFailure("releases",
+			"releases "+rec.Version+" is missing "+strconv.Itoa(len(audit.Missing))+" of "+
+				strconv.Itoa(len(audit.Expected))+" assets listed in "+strings.Join(audit.Manifests, " and "),
+			"assets listed in the release manifest are not on the release",
+			"re-run release to upload the missing assets; users following the manifest hit a 404",
+			strings.Join(audit.Missing, "\n"), "wharfy release --yes"), nil
+	default:
+		return verifySuccess("releases", "releases "+rec.Version+" verified: all "+strconv.Itoa(len(audit.Expected))+
+			" assets listed in "+strings.Join(audit.Manifests, " and ")+" exist on the release at "+repo), nil
 	}
 }
 

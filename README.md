@@ -80,7 +80,11 @@ re-uploading. `wharfy publish` with no prior `release` still works — it runs t
 `verify` checks the channels in your `channels:` from the consumer's side — that list is what
 decides the scope, not the publish history in `state.json` (a channel you dropped from the config
 is never verified, and its old record no longer makes `verify` green). For `homebrew` it reads the
-formula off the tap and matches the version; for `apt`/`rpm` it also adds your repo inside a
+formula off the tap and matches the version; for `releases` it checks that every asset listed in the
+release's own manifest (`latest.json`, plus `checksums.txt` when GoReleaser wrote one) really exists
+on the release — a user following that manifest would otherwise hit a `404`. The binaries themselves
+are not downloaded, and a release carrying neither manifest is reported `skipped`, not verified.
+For `apt`/`rpm` it also adds your repo inside a
 Debian/Fedora container, installs the package and runs it — a broken dependency or a wrong file
 layout fails there, not on your users' machines. The upload itself can't catch that: it returns
 `200` either way. Without docker the container step is not run: the channel is reported `partial`,

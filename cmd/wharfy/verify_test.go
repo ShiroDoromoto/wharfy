@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -349,6 +350,150 @@ func TestVerifyRejectsUnsafeContainerInputs(t *testing.T) {
 	}
 	if err := checkShellSafe("https://apt.example.com/user/", "demo", "demo"); err != nil {
 		t.Errorf("a plain https repo should pass: %v", err)
+	}
+}
+
+// ghReleaseServer は tag の Release とアセット本体(name → 中身)を返す最小の GitHub API。
+func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/acme/demo/releases/tags/"+tag:
+			list := make([]map[string]string, 0, len(assets))
+			for name := range assets {
+				list = append(list, map[string]string{"name": name, "browser_download_url": srv.URL + "/dl/" + name})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"assets": list})
+		case strings.HasPrefix(r.URL.Path, "/dl/"):
+			body, ok := assets[strings.TrimPrefix(r.URL.Path, "/dl/")]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(body))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// scratchReleases は releases チャネル 1 本のリポを作り、発行記録を書く。
+func scratchReleases(t *testing.T, recorded string) string {
+	t.Helper()
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [releases]\ngithub: acme/demo\n")
+	recordPublishFor(t, root, "releases", recorded, "acme/demo")
+	return root
+}
+
+// swapReleasesProbe は Release 照合器を httptest に向ける(実 GitHub を叩かせない)。
+func swapReleasesProbe(t *testing.T, apiURL string) {
+	t.Helper()
+	old := newReleasesProbe
+	newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
+		return &channel.ReleasesProbe{Owner: owner, Repo: repo, API: apiURL}
+	}
+	t.Cleanup(func() { newReleasesProbe = old })
+}
+
+// latestJSON は version と資産名から latest.json 本文を組む。
+func latestJSON(version string, names ...string) string {
+	assets := map[string]string{}
+	for i, n := range names {
+		assets["k"+string(rune('a'+i))] = "https://github.com/acme/demo/releases/download/v" + version + "/" + n
+	}
+	b, _ := json.Marshal(map[string]any{"version": version, "assets": assets})
+	return string(b)
+}
+
+// latest.json が載せる資産がすべて Release に在る → verified。
+func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"install.sh":        "VERSION=\"1.2.0\"",
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a release whose assets all exist should verify ok: %+v", res)
+	}
+	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusOK {
+		t.Errorf("releases check should be verified: %+v", ck)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// latest.json に載る資産が Release に無い → verify_failed(利用者はその URL で 404 を踏む)。
+func TestVerifyReleasesMissingAssetFails(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz", "demo_windows.zip"),
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a missing asset should be verify_failed: %+v", res)
+	}
+	if !strings.Contains(res.Errors[0].Detail, "demo_windows.zip") {
+		t.Errorf("the missing asset should be named in the detail: %+v", res.Errors[0])
+	}
+	if !hasNextDo(res, "wharfy release --yes") {
+		t.Errorf("missing assets are fixed by re-running release: %+v", res.Next)
+	}
+}
+
+// latest.json が名乗る版が記録と食い違う → verify_failed(古い版の資産を配っている)。
+func TestVerifyReleasesManifestVersionMismatch(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{"latest.json": latestJSON("1.1.0")})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a manifest naming another version should be verify_failed: %+v", res)
+	}
+}
+
+// tag ごと不在 → verify_failed(到達できないのではなく、配ったはずのものが無い)。
+func TestVerifyReleasesReleaseAbsentFails(t *testing.T) {
+	srv := ghReleaseServer(t, "v9.9.9", map[string]string{})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("an absent release should be verify_failed, not probe_failed: %+v", res)
+	}
+}
+
+// マニフェストの無い旧リリースは照合の基準を持たない → skip(緑にしない)。
+// 検証が 1 つも走らないので ok=false(nothing_to_verify)のまま。
+func TestVerifyReleasesWithoutManifestSkips(t *testing.T) {
+	srv := ghReleaseServer(t, "v0.9.0", map[string]string{"demo_linux.tar.gz": "bin"})
+	chdir(t, scratchReleases(t, "0.9.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrNothingToVerify {
+		t.Fatalf("an unverifiable release must not be green: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusSkipped {
+		t.Fatalf("releases should be skipped: %+v", ck)
+	}
+	if !strings.Contains(ck[0].Message, channel.ManifestLatestJSON) {
+		t.Errorf("the skip must say why it could not check: %q", ck[0].Message)
+	}
+	if len(res.Warnings) == 0 || res.Warnings[0].Code != output.WarnChannelSkipped {
+		t.Errorf("skipping the check must be visible as a warning: %+v", res.Warnings)
 	}
 }
 
