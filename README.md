@@ -55,6 +55,9 @@ channels: [homebrew, releases, script, goinstall]
 # add owned channels that need infra explicitly: scoop, apt, rpm, container, aur, winget
 ```
 
+Keys wharfy does not know are refused (`config_invalid`), naming the key and the line — a
+misspelled key never runs on the defaults while you believe it took effect.
+
 Once, so future agents don't reinvent your release: `wharfy init --yes` writes a small managed
 block to `AGENTS.md` and `CLAUDE.md` telling agents to run `wharfy agent` instead of guessing
 release steps. Without `--yes` it previews; on a file you already have, it appends one block

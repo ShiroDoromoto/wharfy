@@ -96,7 +96,10 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 	if err != nil {
 		return internalError(c, err)
 	}
-	in, _ := config.Load(root)
+	in, loadErr := config.Load(root)
+	if loadErr != nil {
+		return configInvalidResult(c, loadErr)
+	}
 	cfg, _ := config.NewResolver(root).Resolve(in)
 	st, _ := state.Load(root, cfg.Project)
 

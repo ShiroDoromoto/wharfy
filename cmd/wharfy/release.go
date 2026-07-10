@@ -33,7 +33,10 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if err != nil {
 		return internalError(c, err)
 	}
-	in, _ := config.Load(root)
+	in, loadErr := config.Load(root)
+	if loadErr != nil {
+		return configInvalidResult(c, loadErr)
+	}
 	cfg, rerr := config.NewResolver(root).Resolve(in)
 	var ambiguous *config.AmbiguousMainError
 	if errors.As(rerr, &ambiguous) {

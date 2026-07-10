@@ -122,7 +122,7 @@ func packageChannelNextDo() string {
 	if err != nil {
 		return "wharfy publish --dry-run"
 	}
-	in, _ := config.Load(root)
+	in, _ := config.Load(root) // 案内を組むだけなので、読めなければ既定の一手に落ちる(auth は止めない)
 	cfg, _ := config.NewResolver(root).Resolve(in)
 	for _, name := range []string{"apt", "rpm"} {
 		if config.HasChannel(cfg, name) {

@@ -1,11 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -50,6 +53,11 @@ func NewResolver(root string) *Resolver {
 }
 
 // Load は root の wharfy.yaml を読む。無ければ空 File(エラーなし＝ほぼ空で動く前提)。
+//
+// 未知キーは受け付けない(schemas/wharfy.config.json の additionalProperties: false と同じ契約)。
+// 黙って無視すると、`verify: bogus: 1` と綴り違いを書いた配布者は何も言われないまま既定で走り、
+// 設定したつもりのものが効いていないことに気づけない。入力は助言でも、書いたキーは効くか断るかの
+// どちらかでなければならない。
 func Load(root string) (File, error) {
 	path := filepath.Join(root, ConfigFileName)
 	b, err := os.ReadFile(path)
@@ -59,11 +67,94 @@ func Load(root string) (File, error) {
 	if err != nil {
 		return File{}, err
 	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
 	var f File
-	if err := yaml.Unmarshal(b, &f); err != nil {
-		return File{}, fmt.Errorf("%s: %w", ConfigFileName, err)
+	if err := dec.Decode(&f); err != nil {
+		if errors.Is(err, io.EOF) {
+			return File{}, nil // 空ファイル(コメントだけ)は空 File と同じ
+		}
+		return File{}, &InvalidError{Msg: ConfigFileName + ": " + namedUnknownKeys(err)}
 	}
 	return f, nil
+}
+
+// InvalidError は wharfy.yaml が読めないこと(構文の誤り・未知キー)。CLI 層がこれを
+// output.ErrConfigInvalid に変換して停止する。推測で進めてはいけない —— 設定が読めていないのに
+// 既定で release すれば、配布者が書いたつもりの設定は一つも効かないまま実物が出ていく。
+type InvalidError struct {
+	Msg string
+}
+
+func (e *InvalidError) Error() string { return e.Msg }
+
+// namedUnknownKeys は yaml.v3 の未知キー報告を利用者の言葉に直す。
+// yaml.v3 は "line 5: field bogus not found in type config.VerifyInput" と Go の型名で言う。
+// 配布者が書いたのは wharfy.yaml であって Go の構造体ではないので、型名はそれが現れるブロック名
+// (verify: 等)に直す。同じ型が複数のブロックに現れる(apt/rpm の RepoInput)ときは、どちらとも
+// 言えないのでブロック名を落とす ——行番号があれば場所は分かる。
+func namedUnknownKeys(err error) string {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return err.Error()
+	}
+	blocks := blockNamesByType()
+	msgs := make([]string, 0, len(te.Errors))
+	for _, m := range te.Errors {
+		sub := unknownFieldRe.FindStringSubmatch(m)
+		if sub == nil {
+			msgs = append(msgs, m)
+			continue
+		}
+		line, key, typ := sub[1], sub[2], sub[3]
+		msg := fmt.Sprintf("line %s: unknown key %q", line, key)
+		if block := blocks[typ]; block != "" {
+			msg += " in " + block + ":"
+		}
+		msgs = append(msgs, msg)
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// unknownFieldRe は yaml.v3 の未知キー報告 1 行。
+var unknownFieldRe = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
+
+// blockNamesByType は File から辿れる構造体の型名 → wharfy.yaml でのブロック名を引く表を作る。
+// 手書きの表を持つと File にキーを足したときに黙ってずれるので、File から導く。
+// 2 か所以上から辿れる型は "" にして、嘘のブロック名を出さない。
+func blockNamesByType() map[string]string {
+	names := map[string]string{}
+	var walk func(t reflect.Type, block string)
+	walk = func(t reflect.Type, block string) {
+		for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Map {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct || t.Name() == "" || t.PkgPath() == "" {
+			return
+		}
+		if block != "" {
+			key := t.PkgPath()[strings.LastIndex(t.PkgPath(), "/")+1:] + "." + t.Name()
+			if prev, seen := names[key]; seen && prev != block {
+				names[key] = "" // 複数のブロックから辿れる型は名指しできない
+			} else if !seen {
+				names[key] = block
+			}
+		}
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name := strings.Split(f.Tag.Get("yaml"), ",")[0]
+			if name == "" || name == "-" {
+				continue
+			}
+			child := name
+			if block != "" {
+				child = block + "." + name
+			}
+			walk(f.Type, child)
+		}
+	}
+	walk(reflect.TypeOf(File{}), "")
+	return names
 }
 
 // Resolve は解決順(フラグ＞env＞明示値＞推測)のうち、明示値＞推測を組み立てる。

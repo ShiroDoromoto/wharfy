@@ -74,7 +74,11 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	if err != nil {
 		return statusOutput{}, err
 	}
-	in, _ := config.Load(root)
+	// 読めない wharfy.yaml で status を出すと、既定で推測した姿を実態として報告してしまう。
+	in, loadErr := config.Load(root)
+	if loadErr != nil {
+		return statusOutput{}, loadErr
+	}
 	// main が曖昧でも status は出せる(channels は解決済み)。
 	cfg, _ := config.NewResolver(root).Resolve(in)
 	st, _ := state.Load(root, cfg.Project)

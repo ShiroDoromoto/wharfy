@@ -8,8 +8,9 @@
 // 失敗は code-agnostic な型で返し、Result への変換(コード付与)は CLI 層で行う。
 package config
 
-// File は wharfy.yaml の入力(schemas/wharfy.config.json に対応・助言)。全フィールド省略可。
-// 未知キーは yaml.v3 が無視する(入力は厳密契約ではない)。スライス1 で解決に使うキーを持つ。
+// File は wharfy.yaml の入力(schemas/wharfy.config.json に対応・助言)。全フィールド省略可だが、
+// 書いたキーはここに在るものに限る —— Load は未知キーを config_invalid で断る(綴り違いが黙って
+// 無視されると、設定したつもりのものが効かない)。スライス1 で解決に使うキーを持つ。
 type File struct {
 	Project     string          `yaml:"project"`
 	Binary      string          `yaml:"binary"`

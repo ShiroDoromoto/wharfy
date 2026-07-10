@@ -22,7 +22,10 @@ func runSign(ctx context.Context, c registry.Command, _ []string) output.Result 
 	if err != nil {
 		return internalError(c, err)
 	}
-	in, _ := config.Load(root)
+	in, loadErr := config.Load(root)
+	if loadErr != nil {
+		return configInvalidResult(c, loadErr)
+	}
 	cfg, _ := config.NewResolver(root).Resolve(in) // main 曖昧でも sign は出せる(ビルドしない)
 
 	goos := config.DefaultGOOS

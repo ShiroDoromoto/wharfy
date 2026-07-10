@@ -503,17 +503,6 @@
       },
       "additionalProperties": false
     },
-    "passthrough": {
-      "type": "object",
-      "description": "エスケープハッチ。生 GoReleaser 断片等。ここだけ自由(契約外・安定保証外)。",
-      "properties": {
-        "goreleaser": {
-          "type": "string",
-          "description": "生 .goreleaser.yaml 断片。生成設定に deep merge(最後勝ち)。"
-        }
-      },
-      "additionalProperties": true
-    },
     "deprecate": {
       "description": "チャネルを畳む宣言。キーはチャネル名。畳んでも channels からは外さない — 外すと wharfy が告知を運べなくなる。文面は配布者が書き、wharfy は加工しない。",
       "type": "object",

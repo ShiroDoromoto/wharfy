@@ -34,7 +34,7 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 		res.Errors = []output.Problem{{
 			Code:    output.ErrConfigInvalid,
 			Message: loadErr.Error(),
-			Hint:    "fix wharfy.yaml; see schemas/wharfy.config.json for known keys",
+			Hint:    configInvalidHint,
 		}}
 		res.Next = []output.NextDo{{Reason: "fix the file then re-run", Do: "wharfy config"}}
 		return res
@@ -66,6 +66,23 @@ func runConfig(_ context.Context, c registry.Command, _ []string) output.Result 
 	res.Next = []output.NextDo{{Reason: "build with this config", Do: "wharfy build"}}
 	return res
 }
+
+// configInvalidResult は読めない wharfy.yaml で停止する envelope(config 以外の全コマンド共通)。
+// config だけは best-effort で推測した実効設定を見せる(上の runConfig)。他は進まない ——
+// 設定が読めていないことに気づかないまま、既定で build / release / publish が走ってはいけない。
+func configInvalidResult(c registry.Command, err error) output.Result {
+	res := output.New(c.Name, "wharfy.yaml is invalid", false)
+	res.Errors = []output.Problem{{
+		Code:    output.ErrConfigInvalid,
+		Message: err.Error(),
+		Hint:    configInvalidHint,
+	}}
+	res.Next = []output.NextDo{{Reason: "see the resolved config once the file parses", Do: "wharfy config"}}
+	return res
+}
+
+// configInvalidHint は wharfy.yaml が読めないときの次の一手(既知キーの一覧はスキーマが持つ)。
+const configInvalidHint = "fix wharfy.yaml; see schemas/wharfy.config.json for known keys"
 
 // internalError は想定外を envelope に包む(internal)。
 func internalError(c registry.Command, err error) output.Result {

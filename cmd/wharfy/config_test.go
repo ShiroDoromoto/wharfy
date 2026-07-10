@@ -8,6 +8,7 @@ import (
 
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
+	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
 const configSchemaID = "https://wharfy.io/schemas/v1/config.json"
@@ -110,4 +111,45 @@ func TestConfigInvalidValidatesSchema(t *testing.T) {
 	}}
 	res.Next = []output.NextDo{{Reason: "fix the file then re-run", Do: "wharfy config"}}
 	validateAgainst(t, configSchemaID, res)
+}
+
+// TestCommandsStopOnAnInvalidConfig: 読めない wharfy.yaml では、推測で進まず config_invalid で止まる。
+// 綴り違いを黙って無視されるより悪いのは、無視された結果 build / release / publish が既定で
+// 走り出すことである(設定したつもりのものが一つも効かないまま実物が出ていく)。
+func TestCommandsStopOnAnInvalidConfig(t *testing.T) {
+	runners := map[string]func(context.Context, registry.Command) output.Result{
+		"build":   func(ctx context.Context, c registry.Command) output.Result { return runBuild(ctx, c, nil) },
+		"release": func(ctx context.Context, c registry.Command) output.Result { return runRelease(ctx, c, nil) },
+		"publish": func(ctx context.Context, c registry.Command) output.Result { return runPublish(ctx, c, nil) },
+		"sign":    func(ctx context.Context, c registry.Command) output.Result { return runSign(ctx, c, nil) },
+		"verify":  func(ctx context.Context, c registry.Command) output.Result { return runVerify(ctx, c, nil) },
+	}
+	for name, run := range runners {
+		t.Run(name, func(t *testing.T) {
+			root := scratchModule(t)
+			writeConfig(t, root, "project: demo\nchannles: [homebrew]\n")
+			chdir(t, root)
+
+			res := run(context.Background(), mustLookup(t, name))
+			if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrConfigInvalid {
+				t.Fatalf("%s must stop on an unreadable wharfy.yaml: %+v", name, res)
+			}
+			if !strings.Contains(res.Errors[0].Message, `unknown key "channles"`) {
+				t.Errorf("the offending key should reach the caller: %+v", res.Errors[0])
+			}
+		})
+	}
+}
+
+// status も同じ: 推測した姿を実態として報告してはいけない。
+func TestStatusStopsOnAnInvalidConfig(t *testing.T) {
+	root := scratchModule(t)
+	writeConfig(t, root, "verify:\n  bogus: 1\n")
+	chdir(t, root)
+
+	_, err := buildStatus(context.Background(), false)
+	var invalid *config.InvalidError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("status must not report an inferred config as the truth: %v", err)
+	}
 }

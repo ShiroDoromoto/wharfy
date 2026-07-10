@@ -68,7 +68,10 @@ func runBuild(ctx context.Context, c registry.Command, _ []string) output.Result
 		return internalError(c, err)
 	}
 
-	in, _ := config.Load(root) // 不正でも推測で進めず、解決の main 確定を優先(下で扱う)
+	in, loadErr := config.Load(root)
+	if loadErr != nil {
+		return configInvalidResult(c, loadErr)
+	}
 	cfg, rerr := config.NewResolver(root).Resolve(in)
 	var ambiguous *config.AmbiguousMainError
 	if errors.As(rerr, &ambiguous) {
