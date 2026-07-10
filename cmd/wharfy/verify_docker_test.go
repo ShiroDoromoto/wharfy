@@ -79,9 +79,11 @@ type debSpec struct {
 }
 
 // runDockerVerifyApt は spec の deb を含む apt repo を立て、その repo を配る wharfy.yaml で verify を走らせる。
+// 既定の verify は probe だけなので、コンテナを踏むために --install を立てる。
 func runDockerVerifyApt(t *testing.T, spec debSpec) output.Result {
 	t.Helper()
 	requireDocker(t)
+	withInstall(t)
 
 	pkg := "demo"
 	binary := spec.binaryName
