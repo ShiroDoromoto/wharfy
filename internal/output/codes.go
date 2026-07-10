@@ -29,6 +29,10 @@ const (
 	// WarnDeprecateFrozen: ship:false のチャネルを最後に配った版で据え置いた(D-3)。凍結は
 	// 「新版が出ない」という不在の形で現れるので、何が据え置かれたのかを publish のたびに言う。
 	WarnDeprecateFrozen = "deprecate_frozen"
+	// WarnStaleGenerator: 実行中の wharfy が、これからリリースする repo の HEAD からビルドされていない。
+	// 生成物(install.sh / formula / cask …)は実行中のバイナリが作るので、HEAD で直した生成器が
+	// 成果物に入らない。wharfy 自身をリリースするときだけ起きうる(module path が一致する repo)。
+	WarnStaleGenerator = "stale_generator"
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -83,6 +87,7 @@ var Catalog = []CatalogEntry{
 	{WarnDeprecateNoSurface, KindWarning, "畳むチャネルに告知を載せる欄が無い(latest.json 経由でのみ届く)"},
 	{WarnDeprecateOrphan, KindWarning, "channels に無いチャネルへの deprecate 宣言(告知の更新が止まっている)"},
 	{WarnDeprecateFrozen, KindWarning, "ship:false のチャネルを最後に配った版で据え置いた"},
+	{WarnStaleGenerator, KindWarning, "実行中の wharfy が repo の HEAD からビルドされていない(生成物が古い生成器で作られる)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},

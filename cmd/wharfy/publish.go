@@ -94,7 +94,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 
 	// 引数なし = 全チャネル一括(release は 1 回・多重 release 衝突を避ける)。
 	if len(args) == 0 {
-		return publishAll(ctx, c, root, cfg, in, version, tagMissing)
+		return withStaleGeneratorWarning(root, c, publishAll(ctx, c, root, cfg, in, version, tagMissing))
 	}
 
 	// 凍結(ship:false)は結果の作り方ではなく入力を変える。据え置く版に差し替えてから発行し、
@@ -108,7 +108,7 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 			version = fz.Version
 		}
 	}
-	res := publishChannel(ctx, c, root, cfg, in, version, tagMissing, args[0], fz)
+	res := withStaleGeneratorWarning(root, c, publishChannel(ctx, c, root, cfg, in, version, tagMissing, args[0], fz))
 	if fz != nil {
 		res.Warnings = append(res.Warnings, freezeWarning(fz))
 	}

@@ -63,7 +63,7 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 			}
 		}
 		res.Next = append(next, output.NextDo{Reason: "upload the release", Do: "wharfy release --yes"})
-		return res
+		return withStaleGeneratorWarning(root, c, res)
 	}
 
 	// apply: tag/token が要る(release は実アップロード)。
@@ -120,7 +120,7 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	res := output.New(c.Name, "released "+cfg.Project+" "+version+": "+strconv.Itoa(len(archs))+" artifact(s) → "+cfg.Github, true)
 	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs}
 	res.Next = nextFromSpec(c) // publish
-	return withInitNudge(res)
+	return withInitNudge(withStaleGeneratorWarning(root, c, res))
 }
 
 // byoRelease は BYO モード(prebuilt=CLI / bundle=GUI)の実リリース。両方宣言されていれば
