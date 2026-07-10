@@ -4,6 +4,7 @@
 // だから wharfy 自身の repo を古い wharfy でリリースすると、HEAD で直したばかりの生成器が
 // 成果物に入らない(v0.16.0 の install.ps1 が、直っていたのに壊れたまま配られた)。
 // release / publish の入口でこれを検知し、HEAD からビルドし直す手順を next に出す。
+// plan(--yes なし)では警告どまり、apply(--yes)では実アップロードの前に拒否する。
 //
 // 対象は「実行中バイナリと同じ module を宣言する repo」に限る。他人のプロジェクトでは
 // 生成器は常に別リポの wharfy が持つので、この食い違いは原理的に起きない。
@@ -105,8 +106,9 @@ func shortRevision(rev string) string {
 	return rev
 }
 
-// withStaleGeneratorWarning は版ズレを結果に載せる。止めずに警告どまりにするのは、
-// 意図して手元の版で配る場面もあるため(判断は人間に残す)。ズレていなければ何も足さない。
+// withStaleGeneratorWarning は版ズレを結果に載せる。plan 経路(--yes なし)では警告どまりでよい——
+// まだ何も配っておらず、読んだ人間が建て直すか進むかを選べるため。ズレていなければ何も足さない。
+// apply 経路は staleGeneratorRefusal が先に止めるので、ここに届く apply は明示上書き済みのものだけ。
 func withStaleGeneratorWarning(root string, c registry.Command, res output.Result) output.Result {
 	msg := staleGeneratorMessage(selfModulePath(), selfRevision(), moduleOfDir(root), gitHeadRevision(root))
 	if msg == "" {
@@ -118,4 +120,37 @@ func withStaleGeneratorWarning(root string, c registry.Command, res output.Resul
 		Do:     "go build -o /tmp/wharfy ./cmd/wharfy && /tmp/wharfy " + c.Name,
 	})
 	return res
+}
+
+// staleGeneratorRefusal は apply(--yes)を版ズレのまま走らせようとしたときの拒否(2 番目の戻り値が true)。
+//
+// 警告では防げない: --yes は非対話なので、警告が読まれる頃には古い生成器が作った install.ps1 や
+// formula がもう GitHub Release に上がっている。判断できる時点は「アップロードの前」しかない。
+// 意図して手元の版で配る運用のために --allow-stale-generator を逃げ道に残す(配布は明示ゲート)。
+// 発火するのは wharfy 自身の repo だけ(staleGeneratorMessage が module path で絞る)。
+func staleGeneratorRefusal(root string, c registry.Command) (output.Result, bool) {
+	if flagAllowStale {
+		return output.Result{}, false
+	}
+	msg := staleGeneratorMessage(selfModulePath(), selfRevision(), moduleOfDir(root), gitHeadRevision(root))
+	if msg == "" {
+		return output.Result{}, false
+	}
+	res := output.New(c.Name, "refusing to "+c.Name+" with a stale generator", false)
+	res.Errors = []output.Problem{{
+		Code:    output.ErrStaleGeneratorBlocked,
+		Message: msg,
+		Hint:    "build from HEAD and rerun, or pass --allow-stale-generator to ship what the running binary generates",
+	}}
+	res.Next = []output.NextDo{
+		{
+			Reason: "generate artifacts with the generator at HEAD, not the installed wharfy",
+			Do:     "go build -o /tmp/wharfy ./cmd/wharfy && /tmp/wharfy " + c.Name + " --yes",
+		},
+		{
+			Reason: "intentionally ship the running binary's generators",
+			Do:     "wharfy " + c.Name + " --yes --allow-stale-generator",
+		},
+	}
+	return res, true
 }

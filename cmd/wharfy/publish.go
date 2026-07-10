@@ -95,6 +95,14 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	}
 	version, tagMissing := publishVersion(root)
 
+	// apply(--yes)は tap/bucket へ実際に書く。マニフェストも実行中のバイナリが生成するので、
+	// 版ズレのまま書けば古い生成器の産物が配られる。書く前に止める(plan は警告どまり)。
+	if flagYes {
+		if res, blocked := staleGeneratorRefusal(root, c); blocked {
+			return res
+		}
+	}
+
 	// 引数なし = 全チャネル一括(release は 1 回・多重 release 衝突を避ける)。
 	if len(args) == 0 {
 		return withStaleGeneratorWarning(root, c, publishAll(ctx, c, root, cfg, in, version, tagMissing))

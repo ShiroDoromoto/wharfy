@@ -17,12 +17,13 @@ var errNotOK = errors.New("command reported ok=false")
 
 // 共通グローバルフラグ(CLI 層)。全コマンドが受ける。
 var (
-	flagJSON      bool
-	flagDryRun    bool
-	flagYes       bool
-	flagNoProbe   bool
-	flagInstall   bool
-	flagAckReview bool
+	flagJSON       bool
+	flagDryRun     bool
+	flagYes        bool
+	flagNoProbe    bool
+	flagInstall    bool
+	flagAckReview  bool
+	flagAllowStale bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -41,6 +42,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&flagNoProbe, "no-probe", false, "status: read records only; do not probe channel reality")
 	root.PersistentFlags().BoolVar(&flagInstall, "install", false, "verify: install from each channel and run it (default: probe only)")
 	root.PersistentFlags().BoolVar(&flagAckReview, "acknowledge-review", false, "strict gated channels (e.g. homebrew-core): acknowledge you meet the acceptance criteria before opening a PR")
+	root.PersistentFlags().BoolVar(&flagAllowStale, "allow-stale-generator", false, "release/publish --yes: ship artifacts made by the running wharfy even though it is not built from this repo's HEAD")
 
 	for _, c := range registry.Commands {
 		root.AddCommand(newCommand(c))
