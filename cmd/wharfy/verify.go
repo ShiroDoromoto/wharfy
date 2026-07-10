@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,16 +24,22 @@ import (
 // 行動の根拠にしない — 設定から外したチャネルの古い記録が残っていても検証しない。畳んだ tap を
 // 検証して緑を返し、現行チャネルを一つも見ていない、という嘘をつかないため。
 //
+// 既定は probe だけ ——ネットワーク越しの照合で終わり、何もインストールしない(D-4)。CI で毎回
+// 叩けるように軽く保つ。実インストールまで踏むのは `--install` を明示したときに限る(人間の決定)。
+//
 // homebrew は自前 tap の formula の有無と版を照合する。releases は Release の資産マニフェスト
-// (latest.json / checksums.txt)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。
-// apt/rpm はそれらに加えて Linux コンテナで repo を足し、install して実行まで踏む。供給側
-// (hosted repo への push)はアップロードが 200 を返せば成功するので、生成した deb/rpm の依存や
-// ファイル配置が壊れていても気づけない。踏むのは利用者になる。
+// (latest.json / checksums.txt)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。この 2 つは
+// verify が踏める最大をここで踏み切っている。残る apt / rpm / script / goinstall には「実際に入れて
+// 動かす」余地があり、既定ではそこを踏まないので partial に落とす。
+//
+// `--install` はその余地を踏む。apt/rpm は使い捨てコンテナで repo を足して install する。script は
+// 一時 PREFIX へ install.sh を、goinstall は一時 GOBIN へ go install を走らせる(→ verify_install.go)。
+// 供給側(hosted repo への push、Release へのアップロード)はアップロードが 200 を返せば成功するので、
+// 生成物の依存やファイル配置が壊れていても気づけない。踏むのは利用者になる。
 //
 // `wharfy verify [channel]` は対象を 1 チャネルに絞る。channels: に無い名前は publish と同じ
 // channel_not_configured で拒む。
 //
-// docker が無ければ apt/rpm のコンテナ検証だけを skip する(docker 不在は verify の失敗ではない)。
 // 一つも検証できなかったときは ok=false(nothing_to_verify)。「確かめられなかった」を緑で返すと、
 // CI がそれを「配布は健全」と読んでしまう(D-4)。
 
@@ -50,8 +57,9 @@ type verifyData struct {
 
 const (
 	verifyStatusOK = "verified"
-	// verifyStatusPartial は「検証は走ったが、最後まで踏めなかった」(例: repo の版は照合したが
-	// docker が無く install を試せない)。失敗ではないので ok は落とさないが、verified とも呼ばない。
+	// verifyStatusPartial は「検証は走ったが、最後まで踏めなかった」。--install を付けなかった
+	// (既定・probe まで)か、付けたが道具が無かった(docker / sh / go 不在)かのどちらか。失敗ではない
+	// ので ok は落とさないが、verified とも呼ばない。
 	// 検証対象ゼロ(nothing_to_verify)の判定では「走った」側に数える。
 	verifyStatusPartial = "partial"
 	verifyStatusFailed  = "failed"
@@ -74,13 +82,14 @@ var (
 	// defaultVerifyImages は apt/rpm を確かめるベースイメージの既定。利用者の環境の代表として
 	// debian/fedora を踏む。実際に配る先が違うなら wharfy.yaml の verify.images で名指しする。
 	defaultVerifyImages = map[string]string{"apt": "debian:12", "rpm": "fedora:40"}
-	// verifyTimeout はコンテナ 1 本の上限。apt-get update / dnf のメタデータ取得は遅い。
+	// verifyTimeout は実インストール 1 本の上限。apt-get update / dnf のメタデータ取得も、
+	// go install の初回ビルドも遅い。
 	verifyTimeout = 10 * time.Minute
 )
 
 // runVerify は channels: にあるチャネルの到達性・整合性を確認する(verify)。
-// 引数でチャネルを1つ名指しできる(省略時は channels: の全部)。apt/rpm はコンテナを起こすので、
-// 1 チャネルを直している間は他を走らせない方が反復が軽い。
+// 引数でチャネルを1つ名指しできる(省略時は channels: の全部)。--install はコンテナやインストーラを
+// 起こすので、1 チャネルを直している間は他を走らせない方が反復が軽い。
 // 未発行・未対応のチャネルは skip として checks に載せ、一つも検証できなければ ok=false を返す。
 func runVerify(ctx context.Context, c registry.Command, args []string) output.Result {
 	root, err := os.Getwd()
@@ -103,6 +112,12 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 	var outcomes []verifyOutcome
 	var unpublished []string
 	for _, ch := range targets {
+		// goinstall は何も push しないチャネルなので publish 記録を持たない。基準は git のタグ
+		// (status と同じ)。記録の有無で判定すると、正しく配れているのに未発行として飛ばしてしまう。
+		if ch.Name == "goinstall" {
+			outcomes = append(outcomes, verifyGoinstall(ctx, root, cfg, in))
+			continue
+		}
 		rec, published := publishedRecord(st, ch.Name)
 		if !published {
 			unpublished = append(unpublished, ch.Name)
@@ -122,6 +137,8 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 				return internalError(c, err)
 			}
 			outcomes = append(outcomes, oc)
+		case "script":
+			outcomes = append(outcomes, verifyScript(ctx, cfg, in, rec))
 		case "apt", "rpm":
 			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, rec))
 		default:
@@ -216,9 +233,29 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 		})
 		res.Next = nothingToVerifyNext(unpublished)
 	default:
-		res.Next = []output.NextDo{{Reason: "distribution looks consistent; review overall state", Do: "wharfy status"}}
+		res.Next = verifiedNext(checks)
 	}
 	return res
+}
+
+// verifiedNext は緑のときの次の一手。probe で止まったチャネルが残っているなら、まず実インストール
+// を勧める ——「verify が緑」と「利用者が入れられる」は別の主張で、後者は --install でしか言えない。
+func verifiedNext(checks []verifyCheck) []output.NextDo {
+	var next []output.NextDo
+	if !flagInstall && hasStatus(checks, verifyStatusPartial) {
+		next = append(next, output.NextDo{Reason: "the installs were probed but never exercised", Do: "wharfy verify --install"})
+	}
+	return append(next, output.NextDo{Reason: "distribution looks consistent; review overall state", Do: "wharfy status"})
+}
+
+// hasStatus は checks にその状態が 1 つでもあるか。
+func hasStatus(checks []verifyCheck, status string) bool {
+	for _, ck := range checks {
+		if ck.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 // nothingToVerifyNext は検証対象ゼロのときの次の一手。channels: にあるチャネルだけを勧める
@@ -337,12 +374,108 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.Pu
 	}
 }
 
+// verifyScript は公開 install.sh が記録どおりの版を入れるかを確かめる。
+//
+// 既定は probe: install.sh を取得し、その本文の VERSION="x" を記録と照合する。--install なら
+// さらに一時 PREFIX へ実際に走らせ、入ったバイナリを起動する ——スクリプトが 404 のアセットを
+// 掴んでいても、VERSION の行だけは正しいことがあるので、probe は「入る」ことまでは言えない。
+func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
+	url := scriptProbeURL
+	if url == "" {
+		url = config.InstallURL(cfg)
+	}
+	if url == "" {
+		return verifySkip("script", "script skipped: the install.sh url is unresolved (set github: owner/repo or script.base_url)")
+	}
+	rs, perr := (&channel.Script{InstallURL: url}).Probe(ctx)
+	if perr != nil {
+		return probeFailedOutcome("script", perr)
+	}
+	switch {
+	case !rs.Found:
+		return verifyFailure("script",
+			"script recorded "+rec.Version+" but no install.sh at "+url,
+			"published install.sh not found",
+			"re-run release to upload install.sh to the release",
+			"", "wharfy release --yes")
+	case rs.Version != rec.Version:
+		return verifyFailure("script",
+			"install.sh at "+url+" installs "+rs.Version+", expected "+rec.Version,
+			"the published install.sh installs a different version than the published record",
+			"re-run release so the release and its install.sh agree",
+			"", "wharfy release --yes")
+	}
+	if !flagInstall {
+		return verifyProbedOnly("script", "script "+rs.Version+" probed: install.sh at "+url+" installs "+rs.Version+"; the install was not exercised")
+	}
+
+	out, err := scriptInstall(ctx, url, prebuiltBinaryName(cfg, in), verifyRun(in))
+	switch {
+	case errors.Is(err, errToolMissing):
+		return verifyPartial("script", "script "+rs.Version+" found at "+url+", but the install was not exercised: sh is not available")
+	case err != nil:
+		return verifyFailure("script",
+			"script "+rs.Version+" is published but installing it failed",
+			"install.sh failed: "+err.Error(),
+			"read the installer output; the release asset it downloads is likely missing or malformed",
+			tail(out, 4000), "wharfy release --yes")
+	}
+	return verifySuccess("script", "script "+rs.Version+" verified: installed from "+url+" into a temporary prefix and ran")
+}
+
+// verifyGoinstall は `go install` が通るかを確かめる。
+//
+// 発行物を push しないチャネルなので publish 記録が無い。基準は git の現タグで、module proxy に
+// その版が在るかを照合する(既定)。--install なら一時 GOBIN へ実際に go install し、起動まで見る。
+//
+// 版の一致は判定に使わない。go install は wharfy の ldflags を通さないので、版を注入している CLI は
+// dev と名乗る ——一致で判定すると偽陰性になる。
+func verifyGoinstall(ctx context.Context, root string, cfg config.Config, in config.File) verifyOutcome {
+	mod := channelTargetByName(cfg, "goinstall")
+	if mod == "" {
+		return verifySkip("goinstall", "goinstall skipped: the module path is unresolved (needs a go.mod)")
+	}
+	tag := gitCurrentTag(root)
+	if tag == "" {
+		return verifyNotRun("goinstall", "goinstall skipped: no tag; `go install` resolves no version")
+	}
+	path := joinModuleMain(mod, cfg.Main)
+	rs, perr := (&channel.GoInstall{Module: mod, InstallPath: path, Version: tag, Proxy: goinstallProxy}).Probe(ctx)
+	if perr != nil {
+		return probeFailedOutcome("goinstall", perr)
+	}
+	if !rs.Found {
+		return verifyFailure("goinstall",
+			"the module proxy has no "+mod+"@"+tag+", so `go install` resolves no version",
+			"the published tag is not on the module proxy",
+			"push the tag and ensure the repo is public; the proxy fetches it on first request",
+			"", "git push --tags")
+	}
+	if !flagInstall {
+		return verifyProbedOnly("goinstall", "goinstall "+tag+" probed: the module proxy has "+mod+"@"+tag+"; `go install` was not exercised")
+	}
+
+	out, err := goinstallInstall(ctx, path, tag, verifyRun(in))
+	switch {
+	case errors.Is(err, errToolMissing):
+		return verifyPartial("goinstall", "goinstall "+tag+" is on the module proxy, but the install was not exercised: go is not available")
+	case err != nil:
+		return verifyFailure("goinstall",
+			"goinstall "+tag+" is on the module proxy but `go install "+path+"@"+tag+"` failed",
+			"go install failed: "+err.Error(),
+			"read the output; the module likely does not build at this tag, or "+path+" is not a main package",
+			tail(out, 4000), "go install "+path+"@"+tag)
+	}
+	return verifySuccess("goinstall", "goinstall "+tag+" verified: `go install "+path+"@"+tag+"` installed into a temporary GOBIN and ran")
+}
+
 // verifyLinuxRepo は apt/rpm を二段で確かめる。
 //
-//  1. hosted repo のメタデータに記録どおりの版が載っているか(供給側)。
-//  2. その repo を足したコンテナで install し、入ったバイナリが動くか(消費側)。
+//  1. hosted repo のメタデータに記録どおりの版が載っているか(供給側・既定)。
+//  2. その repo を足したコンテナで install し、入ったバイナリが動くか(消費側・--install)。
 //
-// 2 が無いと、依存不足やパス誤りのパッケージをアップロード成功のまま配ってしまう。
+// 2 が無いと、依存不足やパス誤りのパッケージをアップロード成功のまま配ってしまう。だが 2 はイメージ
+// の pull と install で数分かかるので、既定では踏まない(D-4: verify の既定は probe)。
 func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
 	name := ch.Name
 	repo := firstNonEmptyStr(ch.Target, rec.Target)
@@ -370,6 +503,9 @@ func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.
 			"", "wharfy publish "+name+" --yes")
 	}
 
+	if !flagInstall {
+		return verifyProbedOnly(name, name+" "+rs.Version+" probed: "+repo+" serves "+rs.Version+"; the install was not exercised")
+	}
 	if !dockerAvailable() {
 		return verifyPartial(name, name+" "+rs.Version+" found in "+repo+", but the install was not exercised: docker is not available")
 	}
@@ -552,13 +688,20 @@ func verifySuccess(name, msg string) verifyOutcome {
 	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusOK, Message: msg}}
 }
 
-// verifyPartial は検証の一部だけを踏めたチャネル。踏めなかった事実を warning に残す
-// (配布者は docker を入れれば最後まで確かめられる)。
+// verifyPartial は --install を頼まれたのに道具が無くて踏めなかったチャネル。頼まれた仕事をして
+// いないので warning に残す(配布者は docker / sh / go を入れれば最後まで確かめられる)。
 func verifyPartial(name, msg string) verifyOutcome {
 	return verifyOutcome{
 		check:   verifyCheck{Channel: name, Status: verifyStatusPartial, Message: msg},
 		warning: &output.Warning{Code: output.WarnChannelSkipped, Message: msg},
 	}
+}
+
+// verifyProbedOnly は既定(--install 無し)の probe で止めたチャネル。実インストールを踏んでいない
+// ので verified とは呼ばないが、配布者が選んだ既定どおりに動いただけなので warning は出さない
+// ——毎回の verify が warning を吐けば、本当の warning が埋もれる。--install は next で案内する。
+func verifyProbedOnly(name, msg string) verifyOutcome {
+	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusPartial, Message: msg}}
 }
 
 func verifyFailure(name, msg, problem, hint, detail, next string) verifyOutcome {
@@ -570,7 +713,7 @@ func verifyFailure(name, msg, problem, hint, detail, next string) verifyOutcome 
 }
 
 // verifySkip は検証を飛ばした事実を warning として残す。ok は落とさないが、黙って通してもいない。
-// 配布者が手を打てる skip(docker を入れる・repo を設定する)だけがここを通る。
+// 配布者が設定で手を打てる skip(repo・install.sh の url・module path が引けない)だけがここを通る。
 func verifySkip(name, msg string) verifyOutcome {
 	return verifyOutcome{
 		check:   verifyCheck{Channel: name, Status: verifyStatusSkipped, Message: msg},

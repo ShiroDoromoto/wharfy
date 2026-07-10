@@ -76,7 +76,7 @@
     },
     {
       "name": "verify",
-      "summary": "install from each channel and run it",
+      "summary": "check each channel from the consumer side (--install: install from it and run it)",
       "args": "[channel]"
     },
     {

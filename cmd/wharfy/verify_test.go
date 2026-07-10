@@ -24,13 +24,15 @@ func writeConfig(t *testing.T, root, yaml string) {
 	}
 }
 
-// recordPublishFor は state に 1 チャネル分の発行記録を書く(verify の前提)。
+// recordPublishFor は state に 1 チャネル分の発行記録を足す(verify の前提)。
+// 既存の記録は残す ——複数チャネルを配ったプロジェクトを組み立てられるように。
 func recordPublishFor(t *testing.T, root, channelName, version, target string) {
 	t.Helper()
 	st, _ := state.Load(root, "demo")
-	st.Publish = map[string]state.PublishRecord{
-		channelName: {Version: version, Target: target, At: "t"},
+	if st.Publish == nil {
+		st.Publish = map[string]state.PublishRecord{}
 	}
+	st.Publish[channelName] = state.PublishRecord{Version: version, Target: target, At: "t"}
 	if err := state.Save(root, st); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +228,15 @@ func swapDocker(t *testing.T, available bool, run func(ctx context.Context, args
 	t.Cleanup(func() { dockerAvailable, dockerRun = oldAvail, oldRun })
 }
 
+// withInstall は `--install` を立てる(実インストールまで踏む verify)。既定の verify は probe だけ
+// なので、コンテナやインストーラを走らせるテストはこれを要る。
+func withInstall(t *testing.T) {
+	t.Helper()
+	old := flagInstall
+	flagInstall = true
+	t.Cleanup(func() { flagInstall = old })
+}
+
 // swapDockerPullFails は `docker pull` が落ちる docker を差し替える(`docker run` は届かない)。
 func swapDockerPullFails(t *testing.T, out string) {
 	t.Helper()
@@ -256,10 +267,37 @@ func checksOf(t *testing.T, res output.Result) []verifyCheck {
 	return d.Checks
 }
 
-// apt: repo に版が在るだけでは足りない。コンテナで install して実行するところまで踏む。
+// 既定の verify は repo の版を照合するだけで、コンテナを起こさない(D-4)。CI で毎回叩けるように
+// 軽く保つ ——踏んでいない事実は partial と next(--install)で言う。
+func TestVerifyAptProbesOnlyByDefault(t *testing.T) {
+	srv := aptRepoServer(t, "demo", "1.2.0")
+	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
+	swapDocker(t, true, func(_ context.Context, _ ...string) ([]byte, error) {
+		t.Fatal("the default verify must not install: it should stop at the repo probe")
+		return nil, nil
+	})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("probing the repo should verify ok: %+v", res)
+	}
+	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Fatalf("a probed-only channel is partial, not verified: %+v", ck)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("the default is not a warning; --install is offered as next: %+v", res.Warnings)
+	}
+	if !hasNextDo(res, "wharfy verify --install") {
+		t.Errorf("verify must offer to exercise the install it skipped: %+v", res.Next)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// apt: --install なら repo に版が在るだけでは足りない。コンテナで install して実行するところまで踏む。
 func TestVerifyAptInstallsInContainer(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
+	withInstall(t)
 	var args []string
 	swapDocker(t, true, func(_ context.Context, a ...string) ([]byte, error) {
 		args = a
@@ -290,6 +328,7 @@ func TestVerifyAptInstallsInContainer(t *testing.T) {
 func TestVerifyAptBrokenPackageFails(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
+	withInstall(t)
 	swapDocker(t, true, func(_ context.Context, _ ...string) ([]byte, error) {
 		return []byte("demo depends on libfoo; however it is not installable"), errors.New("exit status 100")
 	})
@@ -306,11 +345,12 @@ func TestVerifyAptBrokenPackageFails(t *testing.T) {
 	}
 }
 
-// docker 不在は verify の失敗ではない。repo の版までは照合できているので partial とし、
-// 踏めなかった事実を warning に残す(何も検証していない nothing_to_verify とは区別する)。
+// --install を頼まれたのに docker が無いのは verify の失敗ではない。repo の版までは照合できている
+// ので partial とし、踏めなかった事実を warning に残す(何も検証していない nothing_to_verify とは区別する)。
 func TestVerifyAptPartialWithoutDocker(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
+	withInstall(t)
 	swapDocker(t, false, func(_ context.Context, _ ...string) ([]byte, error) {
 		t.Fatal("docker must not be run when it is unavailable")
 		return nil, nil
@@ -333,6 +373,7 @@ func TestVerifyAptPartialWithoutDocker(t *testing.T) {
 func TestVerifyAptVersionMismatchSkipsContainer(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.1.0")
 	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
+	withInstall(t)
 	swapDocker(t, true, func(_ context.Context, _ ...string) ([]byte, error) {
 		t.Fatal("the container must not run when the repo has the wrong version")
 		return nil, nil
@@ -348,6 +389,7 @@ func TestVerifyAptVersionMismatchSkipsContainer(t *testing.T) {
 func TestVerifyRpmInstallsWithDnf(t *testing.T) {
 	srv := rpmRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepo(t, "rpm", srv.URL, "1.2.0"))
+	withInstall(t)
 	var args []string
 	swapDocker(t, true, func(_ context.Context, a ...string) ([]byte, error) {
 		args = a
@@ -373,6 +415,7 @@ func TestVerifyRpmInstallsWithDnf(t *testing.T) {
 func TestVerifyUsesConfiguredImage(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: ubuntu:24.04\n"))
+	withInstall(t)
 	var pulled, ran []string
 	swapDockerRaw(t, true, func(_ context.Context, a ...string) ([]byte, error) {
 		if a[0] == "pull" {
@@ -402,6 +445,7 @@ func TestVerifyUsesConfiguredImage(t *testing.T) {
 func TestVerifyUsesConfiguredRunArgs(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  run: [status, --quiet]\n"))
+	withInstall(t)
 	var args []string
 	swapDocker(t, true, func(_ context.Context, a ...string) ([]byte, error) { args = a; return []byte("ok"), nil })
 
@@ -422,6 +466,7 @@ func TestVerifyUsesConfiguredRunArgs(t *testing.T) {
 func TestVerifyPartialWhenImageCannotBePulled(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: example.invalid/nope:1\n"))
+	withInstall(t)
 	swapDockerPullFails(t, "Error response from daemon: manifest unknown")
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
@@ -442,6 +487,7 @@ func TestVerifyPartialWhenImageCannotBePulled(t *testing.T) {
 func TestVerifyRejectsUnsafeConfiguredImage(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepoWith(t, "apt", srv.URL, "1.2.0", "verify:\n  images:\n    apt: \"debian:12;id\"\n"))
+	withInstall(t)
 	swapDockerRaw(t, true, func(_ context.Context, a ...string) ([]byte, error) {
 		t.Fatalf("docker must not be touched with an unusable image: %v", a)
 		return nil, nil

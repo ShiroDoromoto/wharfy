@@ -89,7 +89,7 @@ var Commands = []Command{
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json)", Next: []string{"publish"}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}},
-	{Name: "verify", Summary: "install from each channel and run it", Args: "[channel]"},
+	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]"},
 	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},
 }
 
