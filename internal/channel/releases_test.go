@@ -94,15 +94,17 @@ func TestReleasesAuditReportsMissingAssets(t *testing.T) {
 	}
 }
 
-// checksums.txt(GoReleaser 経路)も期待集合に足す。latest.json と両方あれば和集合。
+// GoReleaser の checksums も期待集合に足す。latest.json と両方あれば和集合。
+// 資産名は既定の name_template が効いて <project>_<version>_checksums.txt になる(D-5)ので、
+// フィクスチャも実物と同じ名前にする — 素名では実リリースに一度も当たらない。
 func TestReleasesAuditUnionsChecksums(t *testing.T) {
 	srv := releaseServer(t, "v1.2.0", map[string]string{
-		"latest.json":       latestJSONBody("1.2.0", "demo_linux.tar.gz"),
-		"checksums.txt":     "abc123  demo_linux.tar.gz\ndef456 *demo_windows.zip\n",
-		"demo_linux.tar.gz": "binary",
+		"latest.json":              latestJSONBody("1.2.0", "demo_linux.tar.gz"),
+		"demo_1.2.0_checksums.txt": "abc123  demo_linux.tar.gz\ndef456 *demo_windows.zip\n",
+		"demo_linux.tar.gz":        "binary",
 	})
 	audit := auditOf(t, srv, "1.2.0")
-	if !reflect.DeepEqual(audit.Manifests, []string{ManifestLatestJSON, ManifestChecksums}) {
+	if !reflect.DeepEqual(audit.Manifests, []string{ManifestLatestJSON, "demo_1.2.0_checksums.txt"}) {
 		t.Fatalf("both manifests should be used: %v", audit.Manifests)
 	}
 	if !reflect.DeepEqual(audit.Expected, []string{"demo_linux.tar.gz", "demo_windows.zip"}) {
@@ -110,6 +112,49 @@ func TestReleasesAuditUnionsChecksums(t *testing.T) {
 	}
 	if !reflect.DeepEqual(audit.Missing, []string{"demo_windows.zip"}) {
 		t.Errorf("missing = %v", audit.Missing)
+	}
+}
+
+// name_template を素の checksums.txt に潰した配布者も拾う。マニフェスト自身は欠損に数えない。
+func TestReleasesAuditBareChecksumsName(t *testing.T) {
+	srv := releaseServer(t, "v1.2.0", map[string]string{
+		"checksums.txt":     "abc123  demo_linux.tar.gz\n",
+		"demo_linux.tar.gz": "binary",
+	})
+	audit := auditOf(t, srv, "1.2.0")
+	if !reflect.DeepEqual(audit.Manifests, []string{ManifestChecksums}) {
+		t.Fatalf("bare checksums.txt should be used as a manifest: %v", audit.Manifests)
+	}
+	if len(audit.Missing) != 0 {
+		t.Errorf("nothing should be missing: %v", audit.Missing)
+	}
+}
+
+// checksums マニフェストが自分自身を載せていても期待集合に数えない。
+// 実在するので Missing には出ず、Expected の数だけが静かに狂う — 名前が版を含むぶん、
+// 固定名で引く delete では取りこぼす。
+func TestReleasesAuditExcludesChecksumsItselfFromExpected(t *testing.T) {
+	srv := releaseServer(t, "v1.2.0", map[string]string{
+		"demo_1.2.0_checksums.txt": "abc123  demo_linux.tar.gz\ndef456  demo_1.2.0_checksums.txt\n",
+		"demo_linux.tar.gz":        "binary",
+	})
+	audit := auditOf(t, srv, "1.2.0")
+	if !reflect.DeepEqual(audit.Expected, []string{"demo_linux.tar.gz"}) {
+		t.Errorf("the manifest must not count itself: %v", audit.Expected)
+	}
+}
+
+// checksums で終わらない資産をマニフェストと取り違えない(demochecksums.txt は別物)。
+func TestReleasesAuditIgnoresLookalikeAssets(t *testing.T) {
+	srv := releaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":           latestJSONBody("1.2.0", "demo_linux.tar.gz"),
+		"demochecksums.txt":     "not a manifest",
+		"demo_linux.tar.gz":     "binary",
+		"checksums.txt.minisig": "signature",
+	})
+	audit := auditOf(t, srv, "1.2.0")
+	if !reflect.DeepEqual(audit.Manifests, []string{ManifestLatestJSON}) {
+		t.Errorf("only latest.json is a manifest here: %v", audit.Manifests)
 	}
 }
 

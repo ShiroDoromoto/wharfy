@@ -28,7 +28,7 @@ import (
 // 叩けるように軽く保つ。実インストールまで踏むのは `--install` を明示したときに限る(人間の決定)。
 //
 // homebrew は自前 tap の formula の有無と版を照合する。releases は Release の資産マニフェスト
-// (latest.json / checksums.txt)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。この 2 つは
+// (latest.json / checksums)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。この 2 つは
 // verify が踏める最大をここで踏み切っている。残る apt / rpm / script / goinstall には「実際に入れて
 // 動かす」余地があり、既定ではそこを踏まないので partial に落とす。
 //
@@ -334,7 +334,7 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 
 // verifyReleases は Release に「配ったはずの資産」が実在するかを照合する。
 //
-// 期待集合は wharfy 自身が書く latest.json(在れば checksums.txt も)。どちらも無い旧リリースは
+// 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。どちらも無い旧リリースは
 // 照合の基準を持たないので skip する — 資産の欠落を見ていないのに verified とは言わない(D-4)。
 // 資産本体は落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。
 func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
@@ -357,7 +357,7 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.Pu
 	case len(audit.Manifests) == 0:
 		return verifySkip("releases",
 			"releases skipped: v"+rec.Version+" carries neither "+channel.ManifestLatestJSON+
-				" nor "+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
+				" nor a *_"+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
 	case audit.Version != "" && audit.Version != rec.Version:
 		return verifyFailure("releases",
 			channel.ManifestLatestJSON+" on v"+rec.Version+" says "+audit.Version+", expected "+rec.Version,
