@@ -207,9 +207,10 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 		})
 	}
 	// script チャネル: install.sh(mac/Linux)と install.ps1(Windows)を生成し release に同梱する
-	// (Go 経路の extra_files 相当)。
-	if config.HasChannel(cfg, "script") {
-		p, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version))
+	// (Go 経路の extra_files 相当)。凍結(ship:false)なら入れる版は最後に配った版のまま。
+	scriptVer, shipScript := installScriptTarget(root, cfg, version)
+	if config.HasChannel(cfg, "script") && shipScript {
+		p, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, scriptVer))
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +219,7 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 			Path:        p,
 			ContentType: channel.AssetContentType(config.InstallScriptName),
 		})
-		pp, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version))
+		pp, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, scriptVer))
 		if err != nil {
 			return nil, err
 		}

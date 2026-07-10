@@ -175,6 +175,23 @@ container image. wharfy will not pretend otherwise — `status` and `publish` te
 did not land there and reaches those users only through `latest.json`. Declaring `deprecate:` for
 such a channel is allowed, not an error; you may decide `latest.json` is enough.
 
+### `ship: false` — stop shipping, keep announcing
+
+With `ship: false` the channel stays at the last version you published there. No new version reaches
+it, ever. How far the notice still travels depends on what the channel lets wharfy rewrite:
+
+| channels | what happens |
+|---|---|
+| homebrew, cask, scoop, aur | the manifest is rebuilt at the frozen version — same binaries, new notice |
+| script | `install.sh` / `install.ps1` keep installing the frozen version and print the new notice |
+| apt, rpm, container, winget, homebrew-core | nothing is written; what you already shipped stays, and the notice reaches users via `latest.json` |
+| releases, goinstall | cannot be frozen — a Release is where every other channel's assets live, and `go install` always resolves the newest tag |
+
+Rebuilding a manifest needs the checksums of the frozen version's assets, so wharfy records them
+alongside each publish. A channel frozen before it was ever published has no version to freeze at:
+wharfy ships nothing rather than leak a new version through a route you closed. Every publish says
+what it froze — freezing shows up as an absence, and an absence is easy to mistake for success.
+
 Writing no `deprecate:` block leaves every generated artifact byte-for-byte identical.
 
 `release` also writes a static `latest.json` (version + per-OS/arch asset URLs) to the same

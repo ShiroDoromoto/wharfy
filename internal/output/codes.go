@@ -26,6 +26,9 @@ const (
 	WarnDeprecateNoSurface = "deprecate_no_notice_surface"
 	// WarnDeprecateOrphan: channels に無いチャネルへの deprecate 宣言。告知の更新が止まっている(D-3)。
 	WarnDeprecateOrphan = "deprecate_orphan"
+	// WarnDeprecateFrozen: ship:false のチャネルを最後に配った版で据え置いた(D-3)。凍結は
+	// 「新版が出ない」という不在の形で現れるので、何が据え置かれたのかを publish のたびに言う。
+	WarnDeprecateFrozen = "deprecate_frozen"
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -79,6 +82,7 @@ var Catalog = []CatalogEntry{
 	{WarnInitMissing, KindWarning, "AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)"},
 	{WarnDeprecateNoSurface, KindWarning, "畳むチャネルに告知を載せる欄が無い(latest.json 経由でのみ届く)"},
 	{WarnDeprecateOrphan, KindWarning, "channels に無いチャネルへの deprecate 宣言(告知の更新が止まっている)"},
+	{WarnDeprecateFrozen, KindWarning, "ship:false のチャネルを最後に配った版で据え置いた"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},

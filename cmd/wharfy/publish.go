@@ -97,13 +97,47 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		return publishAll(ctx, c, root, cfg, in, version, tagMissing)
 	}
 
-	switch args[0] {
+	// 凍結(ship:false)は結果の作り方ではなく入力を変える。据え置く版に差し替えてから発行し、
+	// 何が据え置かれたかを結果に必ず載せる(不在は黙っていると気づかれない)。
+	fz := loadFreeze(root, cfg, args[0])
+	if fz != nil {
+		if fz.Mode == freezeHold {
+			return frozenHoldResult(c, fz)
+		}
+		if fz.Mode == freezeManifest {
+			version = fz.Version
+		}
+	}
+	res := publishChannel(ctx, c, root, cfg, in, version, tagMissing, args[0], fz)
+	if fz != nil {
+		res.Warnings = append(res.Warnings, freezeWarning(fz))
+	}
+	return res
+}
+
+// frozenHoldResult は「配るのを止めた」チャネルの結果。書き込みも release も走らせない。
+func frozenHoldResult(c registry.Command, fz *channelFreeze) output.Result {
+	item := channel.PlanItem{Channel: fz.Channel, Kind: config.Kind(fz.Channel), Action: channel.ActionNoop, Reason: fz.Reason}
+	res := publishResult(c, fz.Channel+" is frozen — nothing to publish", true, []channel.PlanItem{item})
+	res.Warnings = []output.Warning{freezeWarning(fz)}
+	res.Next = []output.NextDo{{Reason: "keep shipping this channel while announcing", Do: "set deprecate." + fz.Channel + ".ship: true"}}
+	return res
+}
+
+// publishChannel は単体チャネルの発行にディスパッチする。fz は凍結の解決結果(非凍結なら nil)。
+func publishChannel(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, ch string, fz *channelFreeze) output.Result {
+	// 凍結版の成果物を渡すのはマニフェストを作り直すチャネルだけ(script は release 自体は新版で走る)。
+	var manifestFreeze *channelFreeze
+	if fz != nil && fz.Mode == freezeManifest {
+		manifestFreeze = fz
+	}
+	switch ch {
 	case "homebrew":
-		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing)
+		return publishHomebrew(ctx, c, root, cfg, in, version, tagMissing, manifestFreeze)
 	case "cask":
-		return publishCask(ctx, c, root, cfg, in, version, tagMissing)
+		return publishCask(ctx, c, root, cfg, in, version, tagMissing, manifestFreeze)
 	case "scoop":
-		return publishScoop(ctx, c, root, cfg, in, version, tagMissing)
+		return publishScoop(ctx, c, root, cfg, in, version, tagMissing, manifestFreeze)
 	case "apt":
 		return publishLinuxPkg(ctx, c, root, cfg, in, version, tagMissing, "apt", ".deb")
 	case "rpm":
@@ -115,17 +149,17 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	case "homebrew-core":
 		return publishHomebrewCore(ctx, c, root, cfg, in, version, tagMissing)
 	case "aur":
-		return publishAur(ctx, c, root, cfg, in, version, tagMissing)
+		return publishAur(ctx, c, root, cfg, in, version, tagMissing, manifestFreeze)
 	case "goinstall":
 		return publishGoinstall(ctx, c, root, cfg, tagMissing)
 	case "script":
 		return publishScript(ctx, c, root, cfg, in, version, tagMissing)
 	default:
 		item := channel.PlanItem{
-			Channel: args[0], Action: channel.ActionSkip,
+			Channel: ch, Action: channel.ActionSkip,
 			Reason: "unknown channel (owned: homebrew/cask/scoop/apt/rpm/container/aur/script/goinstall, gated: winget/homebrew-core)",
 		}
-		res := publishResult(c, "channel "+args[0]+" not implemented", false, []channel.PlanItem{item})
+		res := publishResult(c, "channel "+ch+" not implemented", false, []channel.PlanItem{item})
 		res.Next = []output.NextDo{{Reason: "publish a supported channel or all", Do: "wharfy publish"}}
 		return res
 	}
@@ -197,12 +231,23 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 
 	if !flagYes {
 		// 一括 preview は軽量サマリ(各チャネルの発行先と操作)。詳細差分は単体 publish <ch> --dry-run。
+		// 凍結は apply で初めて分かると驚くので、ここで先に見せる。
+		prevSt, _ := state.Load(root, cfg.Project)
 		var items []channel.PlanItem
+		var frozenWarns []output.Warning
 		for _, ch := range chans {
-			items = append(items, planChannelSummary(ch, cfg, in))
+			it := planChannelSummary(ch, cfg, in)
+			if fz := resolveFreeze(cfg, prevSt, ch); fz != nil {
+				frozenWarns = append(frozenWarns, freezeWarning(fz))
+				if fz.Mode == freezeHold {
+					it.Action, it.Reason, it.OwnedArtifact = channel.ActionNoop, fz.Reason, ""
+				}
+			}
+			items = append(items, it)
 		}
 		res := output.New(c.Name, fmt.Sprintf("plan: %d channel(s)", len(items)), true)
 		res.Data = publishData{Applied: false, Plan: items, Requires: reqs}
+		res.Warnings = frozenWarns
 		next := []output.NextDo{}
 		for _, r := range reqs {
 			if !r.Met {
@@ -222,7 +267,8 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	}
 	ghOwner, ghRepo, _ := splitOwnerName(cfg.Github)
 	dockerOK := dockerAvailable()
-	skipDocker := !(containsStr(chans, "container") && dockerOK)
+	// container が凍結なら image も push しない(release 側で焼くので、ここで降ろす)。
+	skipDocker := !(containsStr(chans, "container") && dockerOK) || frozenChannel(cfg, "container")
 
 	configPath, err := writeGeneratedConfig(root, cfg, in, version)
 	if err != nil {
@@ -260,13 +306,30 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	var items []channel.PlanItem
 	var warns []output.Warning
 	for _, ch := range chans {
+		// 凍結(ship:false)なら配るのは新版ではなく最後に配った版。生成器へ渡す版と成果物を差し替える。
+		chVersion, chArchs := version, archs
+		fz := resolveFreeze(cfg, st, ch)
+		if fz != nil {
+			warns = append(warns, freezeWarning(fz))
+			switch fz.Mode {
+			case freezeHold:
+				items = append(items, channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionNoop, Reason: fz.Reason})
+				continue
+			case freezeManifest:
+				chVersion, chArchs = fz.Version, fz.Artifacts
+			case freezeScript:
+				// release は新版で走った。install.sh が入れる版(writeGeneratedConfig で凍結済み)を記録する。
+				chVersion = fz.Version
+			}
+		}
 		// state 認識の再開(b): その version で発行済みのチャネルは飛ばす。途中失敗後の再実行で
-		// 完了済みを再処理しない(残った失敗チャネルだけ進む)。
-		if rec, ok := st.Publish[ch]; ok && rec.Version == version {
+		// 完了済みを再処理しない(残った失敗チャネルだけ進む)。凍結中のマニフェストは告知を載せ直す
+		// ために毎回作り直す(内容が同じなら Publish 自身が noop になる)。
+		if rec, ok := st.Publish[ch]; ok && rec.Version == version && (fz == nil || fz.Mode != freezeManifest) {
 			items = append(items, channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionNoop, Reason: "already published at " + version})
 			continue
 		}
-		item, w, aerr := applyChannel(ctx, ch, cfg, in, version, ghOwner, ghRepo, archs, st, now, dockerOK)
+		item, w, aerr := applyChannel(ctx, ch, cfg, in, chVersion, ghOwner, ghRepo, chArchs, st, now, dockerOK)
 		if aerr != nil {
 			// 1 チャネルの失敗は全体を止める。release と完了チャネルは記録済みなので、再実行は
 			// 残りだけを安全・安価に進める(release は再アップロードしない)。
@@ -364,7 +427,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
-		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
+		st.Publish["homebrew"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now, Artifacts: archs}
 		item.Action = channel.ActionUpdate
 		return item, nil, nil
 
@@ -385,7 +448,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
-		st.Publish["cask"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now}
+		st.Publish["cask"] = state.PublishRecord{Version: version, Target: tap, Commit: pub.Commit, At: now, Artifacts: archs}
 		item.Action = channel.ActionUpdate
 		w := caskNotarizeWarning(cfg, in) // 依頼⑤: 非 notarized を一括発行でも先出し
 		return item, &w, nil
@@ -407,7 +470,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
-		st.Publish["scoop"] = state.PublishRecord{Version: version, Target: bucket, Commit: pub.Commit, At: now}
+		st.Publish["scoop"] = state.PublishRecord{Version: version, Target: bucket, Commit: pub.Commit, At: now, Artifacts: archs}
 		item.Action = channel.ActionUpdate
 		return item, nil, nil
 
@@ -458,7 +521,7 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if err != nil {
 			return channel.PlanItem{}, nil, err
 		}
-		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now}
+		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now, Artifacts: archs}
 		return mk(channel.KindOwned, channel.ActionUpdate, "aur:"+pkg), nil, nil
 
 	case "winget":
@@ -523,27 +586,27 @@ func uploadLinuxPackages(ctx context.Context, archs []build.Artifact, ext, repo,
 
 // publishHomebrew / publishScoop は archive を要する owned チャネル。tap/bucket(自前リポジトリ)
 // に formula/manifest を書く。型は共通(publishViaRelease)で、Publisher の組み立てだけ差し替える。
-func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+func publishHomebrew(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, fz *channelFreeze) output.Result {
 	tap, ok := homebrewTarget(cfg)
 	tapOwner, tapRepo, tapOK := splitOwnerName(tap)
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
 	if !ok || !tapOK || !ghOK {
 		return ownedSkip(c, "homebrew", "homebrew tap/github unresolved — set 'github' or 'homebrew.tap' in wharfy.yaml")
 	}
-	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "homebrew", tap,
+	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "homebrew", tap, fz,
 		func(archs []build.Artifact) channel.Publisher {
 			return homebrewPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
 		})
 }
 
-func publishScoop(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+func publishScoop(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, fz *channelFreeze) output.Result {
 	bucket := channelTargetByName(cfg, "scoop")
 	bOwner, bRepo, bOK := splitOwnerName(bucket)
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
 	if bucket == "" || !bOK || !ghOK {
 		return ownedSkip(c, "scoop", "scoop bucket/github unresolved — set 'github' or 'scoop.bucket' in wharfy.yaml")
 	}
-	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "scoop", bucket,
+	return publishViaRelease(ctx, c, root, cfg, in, version, tagMissing, "scoop", bucket, fz,
 		func(archs []build.Artifact) channel.Publisher {
 			return scoopPublisher(cfg, in, bucket, bOwner, bRepo, ghOwner, ghRepo, version, archs)
 		})
@@ -551,7 +614,7 @@ func publishScoop(ctx context.Context, c registry.Command, root string, cfg conf
 
 // publishAur は aur チャネル(owned)。-bin パッケージの PKGBUILD/.SRCINFO を生成し、
 // AUR の自前 git(ssh)へ push する(審査なし)。linux tarball の実 sha を参照する。
-func publishAur(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+func publishAur(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, fz *channelFreeze) output.Result {
 	pkg := channelTargetByName(cfg, "aur")
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
 	if pkg == "" || !ghOK {
@@ -562,9 +625,14 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 		return res
 	}
 
-	configPath, err := writeGeneratedConfig(root, cfg, in, version)
-	if err != nil {
-		return internalError(c, err)
+	// 凍結中はビルドも release も走らないので生成設定は要らない(publishViaRelease と同じ理由)。
+	var configPath string
+	if fz == nil {
+		var err error
+		configPath, err = writeGeneratedConfig(root, cfg, in, version)
+		if err != nil {
+			return internalError(c, err)
+		}
 	}
 	aurDeps, aurOpt := config.AurDeps(in)
 	buildInput := func(archs []build.Artifact) channel.AurInput {
@@ -585,7 +653,9 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 	reqs := aurRequirements(tagMissing)
 
 	if !flagYes {
-		archs, aerr := previewArchives(ctx, root, cfg, in, configPath, version)
+		archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
+			return previewArchives(ctx, root, cfg, in, configPath, version)
+		})
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -618,7 +688,11 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 	}
 	// 実 release: linux tarball を GitHub Releases へ上げ、実 sha256 を得る。
 	// BYO-binary(依頼①)は GoReleaser を通さず、記録済み成果物の再利用 or ネイティブ upload。
-	archs, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version)
+	// 凍結中は release を走らせず、その版を配ったときの記録をそのまま使う。
+	archs, rerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
+		a, _, err := releaseArtifacts(ctx, root, configPath, cfg, in, version)
+		return a, err
+	})
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
@@ -635,8 +709,10 @@ func publishAur(ctx context.Context, c registry.Command, root string, cfg config
 			st.Publish = map[string]state.PublishRecord{}
 		}
 		now := nowUTC().Format(time.RFC3339)
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
-		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now}
+		if fz == nil { // 凍結中は release を走らせていない
+			st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		}
+		st.Publish["aur"] = state.PublishRecord{Version: version, Target: pkg, Commit: commit, At: now, Artifacts: archs}
 		_ = state.Save(root, st)
 	}
 	item := channel.PlanItem{Channel: "aur", Kind: channel.KindOwned, OwnedArtifact: "aur:" + pkg, Action: channel.ActionUpdate}
@@ -1398,11 +1474,13 @@ func httpUploadPackage(ctx context.Context, repoURL, token, filePath string) err
 
 // publishViaRelease は「archive をアップロードして所有リポジトリに manifest/formula を書く」
 // owned チャネル共通の発行フロー(homebrew/scoop)。makePub が archive から Publisher を組む。
-func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, target string, makePub func([]build.Artifact) channel.Publisher) output.Result {
+func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, chName, target string, fz *channelFreeze, makePub func([]build.Artifact) channel.Publisher) output.Result {
 	// 生成物(goreleaser.yaml ＋ script 有効なら install.sh)を .wharfy/ に書く。
 	// BYO-bundle(GUI・依頼③)は goreleaser を通さない(main が無く生成不可)ため configPath は空。
+	// 凍結中はビルドも release も走らないので、生成設定そのものが要らない(version も凍結版で、
+	// install.sh に書き戻すと script チャネルの版を取り違える)。
 	var configPath string
-	if !cfg.Bundle {
+	if !cfg.Bundle && fz == nil {
 		var err error
 		configPath, err = writeGeneratedConfig(root, cfg, in, version)
 		if err != nil {
@@ -1412,7 +1490,9 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 
 	if !flagYes {
 		// preview: ローカルに archive を作り(アップロードしない)、暫定 sha で差分を見せる。
-		archs, aerr := previewArchives(ctx, root, cfg, in, configPath, version)
+		archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
+			return previewArchives(ctx, root, cfg, in, configPath, version)
+		})
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -1428,16 +1508,20 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	}
 	// release が済んでいれば(同 version)再アップロードせず記録済み成果物を使う(工程の分離・c2)。
 	// 無ければ実リリースを走らせて実 sha256 を得る(--skip=homebrew・後方互換のフォールバック)。
-	archs, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version)
-	if rerr != nil {
-		return buildErrorResult(c, rerr)
+	// 凍結中は release を走らせず、その版を配ったときの記録をそのまま使う。
+	archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
+		a, _, err := releaseArtifacts(ctx, root, configPath, cfg, in, version)
+		return a, err
+	})
+	if aerr != nil {
+		return buildErrorResult(c, aerr)
 	}
 	pub := makePub(archs)
 	// 書き込み前の自己検査(#10): manifest の sha が実アセットと食い違えば止める(#9 の多層防御)。
 	if err := verifyManifestChecksums(pub, archs); err != nil {
 		return checksumMismatchResult(c, chName, err)
 	}
-	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, chName, target, cfg.Github, version)
+	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, chName, target, cfg.Github, version, archs, fz)
 }
 
 // releaseArtifacts は publish の apply で使う成果物を返す。release(同 version)が記録済みなら
@@ -1535,7 +1619,9 @@ func publishScript(ctx context.Context, c registry.Command, root string, cfg con
 		return res
 	}
 
-	script := config.GenerateInstallScript(cfg, version)
+	// 凍結(ship:false)なら install.sh が入れるのは最後に配った版(告知だけが新しくなる)。
+	scriptVer, _ := installScriptTarget(root, cfg, version)
+	script := config.GenerateInstallScript(cfg, scriptVer)
 	item := channel.PlanItem{
 		Channel: "script", Kind: channel.KindOwned,
 		OwnedArtifact: cfg.Github + " release:" + config.InstallScriptName,
@@ -1581,7 +1667,8 @@ func publishScript(ctx context.Context, c registry.Command, root string, cfg con
 		}
 		now := nowUTC().Format(time.RFC3339)
 		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
-		st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
+		// script が配るのは install.sh が入れる版(凍結中は旧版)。release の版とは別物。
+		st.Publish["script"] = state.PublishRecord{Version: scriptVer, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
 		_ = state.Save(root, st)
 	}
 	item.Action = channel.ActionUpdate
@@ -1837,7 +1924,7 @@ func caskPublisher(cfg config.Config, in config.File, tap, tapOwner, tapRepo, gh
 // publishCask は cask チャネル(owned)。持ち込みバンドルを GitHub Release へ上げ、実 sha256 で
 // 同一 tap の Casks/<token>.rb を書く(Formula と同居=状態一元化・依頼④)。publishHomebrew の対だが、
 // 成果物は archive でなく BYO-bundle(bundleRelease)から得る。
-func publishCask(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
+func publishCask(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool, fz *channelFreeze) output.Result {
 	tap := channelTargetByName(cfg, "cask")
 	tapOwner, tapRepo, tapOK := splitOwnerName(tap)
 	ghOwner, ghRepo, ghOK := splitOwnerName(cfg.Github)
@@ -1850,7 +1937,8 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 
 	if !flagYes {
 		// preview: バンドルを検証して実 sha を得る(アップロードしない)ため plan の差分を出す。
-		archs, aerr := build.ValidateBundles(root, toBundles(in))
+		// 凍結中は手元のバンドルではなく、その版を配ったときの成果物が真実。
+		archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) { return build.ValidateBundles(root, toBundles(in)) })
 		if aerr != nil {
 			return buildErrorResult(c, aerr)
 		}
@@ -1867,23 +1955,27 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 		return tokenMissingResult(c)
 	}
 	// 実 release: バンドルを GitHub Release へ上げ、実 sha256 を得る(記録済みなら再利用)。
-	var archs []build.Artifact
-	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
-		archs = set.Artifacts
-	} else {
+	// 凍結中は release を走らせない — 配り直すのは既に release 済みの版だから。
+	archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
+		if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
+			return set.Artifacts, nil
+		}
 		a, rerr := bundleRelease(ctx, root, cfg, version, in)
 		if rerr != nil {
-			return buildErrorResult(c, rerr)
+			return nil, rerr
 		}
 		_ = build.SaveArtifacts(root, version, a)
-		archs = a
+		return a, nil
+	})
+	if aerr != nil {
+		return buildErrorResult(c, aerr)
 	}
 	pub := caskPublisher(cfg, in, tap, tapOwner, tapRepo, ghOwner, ghRepo, version, archs)
 	// 書き込み前の自己検査(#10): cask の url が指すバンドルと記録 sha が食い違えば止める。
 	if err := verifyManifestChecksums(pub, archs); err != nil {
 		return checksumMismatchResult(c, "cask", err)
 	}
-	res := ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version)
+	res := ownedReleaseApply(ctx, c, pub, root, cfg.Project, "cask", tap, cfg.Github, version, archs, fz)
 	res.Warnings = append(res.Warnings, caskNotarizeWarning(cfg, in)) // 依頼⑤: 非 notarized を先出し
 	return res
 }
@@ -1963,12 +2055,10 @@ func dryRunNext(item channel.PlanItem, reqs []requirement, chName string) []outp
 // install.sh だけ書き、configPath は空("")を返す — 後段の archive/release は prebuilt seam が
 // GoReleaser を通さず処理する。
 func writeGeneratedConfig(root string, cfg config.Config, in config.File, version string) (string, error) {
+	scriptVer, ship := installScriptTarget(root, cfg, version)
 	if cfg.Prebuilt {
-		if config.HasChannel(cfg, "script") {
-			if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
-				return "", err
-			}
-			if _, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version)); err != nil {
+		if config.HasChannel(cfg, "script") && ship {
+			if err := writeInstallScripts(root, cfg, scriptVer); err != nil {
 				return "", err
 			}
 		}
@@ -1978,11 +2068,8 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 	if err != nil {
 		return "", err
 	}
-	if config.HasChannel(cfg, "script") {
-		if _, err := config.WriteInstallScript(root, config.GenerateInstallScript(cfg, version)); err != nil {
-			return "", err
-		}
-		if _, err := config.WriteInstallPS1(root, config.GenerateInstallPS1(cfg, version)); err != nil {
+	if config.HasChannel(cfg, "script") && ship {
+		if err := writeInstallScripts(root, cfg, scriptVer); err != nil {
 			return "", err
 		}
 	}
@@ -2012,7 +2099,7 @@ func tokenMissingResult(c registry.Command) output.Result {
 
 // ownedReleaseApply は実 archive 反映後に formula/manifest を所有リポジトリに書く(--yes)。
 // 前提(tag/token)は確認済み。archive は既に GitHub Releases へアップロード済み(実 checksum)。
-func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publisher, root, project, chName, target, releaseTarget, version string) output.Result {
+func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publisher, root, project, chName, target, releaseTarget, version string, archs []build.Artifact, fz *channelFreeze) output.Result {
 	// 自前リポジトリ(tap/bucket)が無ければ作る(--yes の明示同意があるので)。
 	created := false
 	if rb, ok := pub.(channel.RepoBacked); ok {
@@ -2044,8 +2131,15 @@ func ownedReleaseApply(ctx context.Context, c registry.Command, pub channel.Publ
 		}
 		now := nowUTC().Format(time.RFC3339)
 		// releases(archive アップロード)とチャネル(formula/manifest)の両方を記録する。
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: releaseTarget, At: now}
-		st.Publish[chName] = state.PublishRecord{Version: version, Target: target, Commit: pubres.Commit, At: now}
+		// 凍結中は release を走らせていないので、releases の記録は新版のまま触らない。
+		if fz == nil {
+			st.Publish["releases"] = state.PublishRecord{Version: version, Target: releaseTarget, At: now}
+		}
+		rec := state.PublishRecord{Version: version, Target: target, Commit: pubres.Commit, At: now}
+		if freezeKeepsArtifacts(chName) {
+			rec.Artifacts = archs // 畳んだあと、この版で作り直すための拠り所(D-3)
+		}
+		st.Publish[chName] = rec
 		_ = state.Save(root, st)
 	}
 

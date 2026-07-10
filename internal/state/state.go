@@ -46,6 +46,11 @@ type PublishRecord struct {
 	State   string `json:"state,omitempty"` // gated: none|prepared|pr_open|merged|closed|rejected
 	PR      string `json:"pr,omitempty"`    // gated: 申請 PR の URL
 	At      string `json:"at"`
+	// Artifacts はこのチャネルに実際に書いた版の成果物(url を組み直すための os/arch と sha256)。
+	// 畳んだチャネルを最後に配った版で凍結する(D-3 / ship:false)とき、新版の成果物ではなく
+	// これを生成器に渡す。手元の archive はビルドし直すたび版が上がるので、記録が唯一の拠り所。
+	// manifest に sha を書くチャネル(homebrew/cask/scoop/aur)だけが持つ。
+	Artifacts []build.Artifact `json:"artifacts,omitempty"`
 }
 
 // Path は root 配下の state.json のパス。

@@ -20,6 +20,7 @@ var expectedCodes = []string{
 	"config_invalid",
 	"consent_required",
 	"darwin_unnotarized",
+	"deprecate_frozen",
 	"deprecate_no_notice_surface",
 	"deprecate_orphan",
 	"drift_detected",
