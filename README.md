@@ -89,18 +89,20 @@ CI build. For `homebrew` it reads the formula off the tap and matches the versio
 checks that every asset listed in the release's own manifest (`latest.json`, plus the checksums file
 `<project>_<version>_checksums.txt` when GoReleaser wrote one) really exists on the release — a user
 following that manifest would otherwise hit a `404`. The binaries themselves are not downloaded, and
-a release carrying neither manifest is reported `skipped`, not verified. For `script` it fetches the
-published `install.sh` and matches the version it installs; for `goinstall` it asks the module proxy
-whether your tag resolves; for `apt`/`rpm` it reads the version out of the repo metadata. Those five
-have more to check than a probe can reach, so they are reported `partial`, never `verified`.
+a release carrying neither manifest is reported `skipped`, not verified. For `script` it fetches both
+published installers — `install.sh` and `install.ps1` — and matches the version each one installs; a
+missing or stale `install.ps1` fails the check on any OS, so a Linux CI catches a Windows-only break
+before your users do. For `goinstall` it asks the module proxy whether your tag resolves; for
+`apt`/`rpm` it reads the version out of the repo metadata. Those five have more to check than a probe
+can reach, so they are reported `partial`, never `verified`.
 
 `wharfy verify --install` goes the rest of the way and installs for real. `apt`/`rpm` add your repo
 inside a Debian/Fedora container, install the package and run it — a broken dependency or a wrong
 file layout fails there, not on your users' machines. The upload itself can't catch that: it returns
 `200` either way. `script` runs the installer your users on this host would run — `install.sh` into a
 temporary `PREFIX`, or on Windows the published `install.ps1` into a temporary `WHARFY_PREFIX` — and
-`goinstall` runs `go install` into a temporary `GOBIN`; both then run the binary they installed. The
-probe still reads `install.sh` on every OS: it is the one that carries the version. Nothing lands on
+`goinstall` runs `go install` into a temporary `GOBIN`; both then run the binary they installed. Only
+the installer for this host is run — the other one was already probed. Nothing lands on
 your `PATH`. `releases` downloads every asset the checksums file lists and hashes it — an upload that
 was cut short, or an asset swapped after the fact, keeps its name and passes the probe, so only the
 `sha256` catches it. When the tool a channel needs is absent (no docker, no `sh` / `powershell`, no

@@ -42,3 +42,30 @@ func TestScriptProbe(t *testing.T) {
 		t.Errorf("404 should be not-found without error: rs=%+v err=%v", rs, err)
 	}
 }
+
+func TestPS1Version(t *testing.T) {
+	body := "$Project   = 'x'\n$Version   = '1.4.0'\n"
+	if v := PS1Version(body); v != "1.4.0" {
+		t.Errorf("PS1Version = %q, want 1.4.0", v)
+	}
+	// install.sh の書式を install.ps1 として読むと版は空。取り違えを黙って通さないため。
+	if v := PS1Version("#!/bin/sh\nVERSION=\"1.4.0\"\n"); v != "" {
+		t.Errorf("PS1Version of an install.sh = %q, want empty", v)
+	}
+}
+
+// PS1 を立てた Probe は install.ps1 の書式で版を読む。
+func TestScriptProbeReadsPS1(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("$Version   = '2.0.0'\n"))
+	}))
+	defer srv.Close()
+
+	rs, err := (&Script{InstallURL: srv.URL, PS1: true}).Probe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rs.Found || rs.Version != "2.0.0" {
+		t.Errorf("probing an install.ps1 should read $Version: %+v", rs)
+	}
+}

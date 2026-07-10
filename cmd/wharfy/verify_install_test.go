@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 )
 
@@ -16,15 +17,27 @@ import (
 // 実インストールの末端(sh / go を起こす)は scriptInstall / goinstallInstall を差し替えて締め出す。
 // テストがホストへインストールを走らせない、というのはそれ自体が守りたい性質でもある。
 
-// installScriptServer は install.sh を配る最小の Release。version は本文の VERSION= に載る。
+// installScriptServer は install.sh と install.ps1 を配る最小の Release(release が上げるのは両方)。
+// version は install.sh の VERSION= と install.ps1 の $Version に載る。空なら何も置かれていない。
 func installScriptServer(t *testing.T, version string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return installerServer(t, version, version)
+}
+
+// installerServer は install.sh と install.ps1 に別々の版を持たせる(片方だけ欠けた・食い違った release)。
+// 空の版はそのインストーラが release に無いこと。
+func installerServer(t *testing.T, shVersion, ps1Version string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version, body := shVersion, "#!/bin/sh\nVERSION=\""+shVersion+"\"\n"
+		if strings.HasSuffix(r.URL.Path, config.InstallPS1Name) {
+			version, body = ps1Version, "$Version   = '"+ps1Version+"'\n"
+		}
 		if version == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte("#!/bin/sh\nVERSION=\"" + version + "\"\n"))
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -406,5 +419,40 @@ func TestHostScriptInstallerPicksTheInstallerForTheOS(t *testing.T) {
 		if got.URL != tc.url || got.Name != tc.name || got.Tool != tc.tool {
 			t.Errorf("%s should install via %s from %s with %s, got %+v", tc.goos, tc.name, tc.url, tc.tool, got)
 		}
+	}
+}
+
+// install.ps1 が Release に無い → verify_failed。probe は HTTP だけで読めるので、この穴は
+// Windows を一台も持たない CI からでも見える。install.sh だけを見ていた頃は緑を返していた。
+func TestVerifyScriptMissingPS1Fails(t *testing.T) {
+	srv := installerServer(t, "1.2.0", "")
+	chdir(t, scratchScript(t, "1.2.0"))
+	defer swapScriptProbeURL(srv.URL)()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a release without install.ps1 must fail verify: %+v", res)
+	}
+	if !strings.Contains(res.Errors[0].Message, config.InstallPS1Name) {
+		t.Errorf("the error should name the installer that is missing: %+v", res.Errors[0])
+	}
+	if !hasNextDo(res, "wharfy release --yes") {
+		t.Errorf("a missing install.ps1 is fixed by re-running release: %+v", res.Next)
+	}
+}
+
+// install.sh と install.ps1 が別の版を入れる → verify_failed。Windows の利用者だけが古い版を
+// 掴む、という配布は緑にしない(生成器の版ズレは片方だけを古いまま配りうる)。
+func TestVerifyScriptPS1VersionMismatchFails(t *testing.T) {
+	srv := installerServer(t, "1.2.0", "1.1.0")
+	chdir(t, scratchScript(t, "1.2.0"))
+	defer swapScriptProbeURL(srv.URL)()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("an install.ps1 installing another version must fail verify: %+v", res)
+	}
+	if !strings.Contains(res.Errors[0].Message, config.InstallPS1Name) {
+		t.Errorf("the error should name install.ps1, not install.sh: %+v", res.Errors[0])
 	}
 }

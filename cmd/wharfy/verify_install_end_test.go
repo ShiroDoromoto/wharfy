@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 )
 
@@ -393,5 +394,18 @@ func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "demo: unsupported arch") {
 		t.Errorf("the installer should name the project and what failed: %s", out)
+	}
+}
+
+// 生成器と読み手の約束: install.ps1 に版を書くのは config、それを読むのは channel。
+// 片方だけ書式を変えれば verify は版を読めなくなり、正しい release を赤にする。ここで結んでおく。
+func TestPS1VersionReadsWhatTheGeneratorWrites(t *testing.T) {
+	ps1 := config.GenerateInstallPS1(config.Config{Project: "demo", Github: "acme/demo"}, "1.2.0")
+	if v := channel.PS1Version(ps1); v != "1.2.0" {
+		t.Errorf("the generated install.ps1 should carry its version where the probe looks: %q", v)
+	}
+	sh := config.GenerateInstallScript(config.Config{Project: "demo", Github: "acme/demo"}, "1.2.0")
+	if v := channel.ScriptVersion(sh); v != "1.2.0" {
+		t.Errorf("the generated install.sh should carry its version where the probe looks: %q", v)
 	}
 }

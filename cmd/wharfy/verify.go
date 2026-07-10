@@ -427,8 +427,10 @@ func mismatchDetail(bad []channel.ChecksumMismatch) string {
 // さらに一時の置き場所へ実際に走らせ、入ったバイナリを起動する ——スクリプトが 404 のアセットを
 // 掴んでいても、VERSION の行だけは正しいことがあるので、probe は「入る」ことまでは言えない。
 //
-// 実際に走らせるのは「このホストの利用者が踏むインストーラ」——Windows なら install.ps1。
-// probe が読む VERSION は install.sh にしか無いので、照合は OS によらず install.sh を見る。
+// script チャネルは install.sh と install.ps1 の 2 本を配る。probe は HTTP だけで読めるので、
+// 走っているホストの OS によらず**両方**を照合する ——さもなければ Linux の CI で verify を回す
+// 配布者は、install.ps1 が release から欠けても、古い版を入れる本文でも、緑を受け取る。
+// 実際に走らせる(--install)のは、このホストの利用者が踏む一方だけ ——Windows なら install.ps1。
 func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
 	url := scriptProbeURL
 	if url == "" {
@@ -437,41 +439,57 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 	if url == "" {
 		return verifySkip("script", "script skipped: the install.sh url is unresolved (set github: owner/repo or script.base_url)")
 	}
-	rs, perr := (&channel.Script{InstallURL: url}).Probe(ctx)
-	if perr != nil {
-		return probeFailedOutcome("script", perr)
+	version, bad, ok := probeInstaller(ctx, url, config.InstallScriptName, rec)
+	if !ok {
+		return bad
 	}
-	switch {
-	case !rs.Found:
-		return verifyFailure("script",
-			"script recorded "+rec.Version+" but no install.sh at "+url,
-			"published install.sh not found",
-			"re-run release to upload install.sh to the release",
-			"", "wharfy release --yes")
-	case rs.Version != rec.Version:
-		return verifyFailure("script",
-			"install.sh at "+url+" installs "+rs.Version+", expected "+rec.Version,
-			"the published install.sh installs a different version than the published record",
-			"re-run release so the release and its install.sh agree",
-			"", "wharfy release --yes")
+	ps1URL := siblingURL(url, config.InstallPS1Name)
+	if _, bad, ok := probeInstaller(ctx, ps1URL, config.InstallPS1Name, rec); !ok {
+		return bad
 	}
 	if !flagInstall {
-		return verifyProbedOnly("script", "script "+rs.Version+" probed: install.sh at "+url+" installs "+rs.Version+"; the install was not exercised")
+		return verifyProbedOnly("script", "script "+version+" probed: install.sh and install.ps1 both install "+version+"; neither install was exercised")
 	}
 
 	inst := hostScriptInstaller(runtime.GOOS, url)
 	out, err := scriptInstall(ctx, inst.URL, prebuiltBinaryName(cfg, in), verifyRun(in))
 	switch {
 	case errors.Is(err, errToolMissing):
-		return verifyPartial("script", "script "+rs.Version+" found at "+url+", but the install was not exercised: "+inst.Tool+" is not available")
+		return verifyPartial("script", "script "+version+" found at "+url+", but the install was not exercised: "+inst.Tool+" is not available")
 	case err != nil:
 		return verifyFailure("script",
-			"script "+rs.Version+" is published but installing it failed",
+			"script "+version+" is published but installing it failed",
 			inst.Name+" failed: "+err.Error(),
 			"read the installer output; the release asset it downloads is likely missing or malformed",
 			tail(out, 4000), "wharfy release --yes")
 	}
-	return verifySuccess("script", "script "+rs.Version+" verified: installed from "+inst.URL+" into a temporary prefix and ran")
+	return verifySuccess("script", "script "+version+" verified: installed from "+inst.URL+" into a temporary prefix and ran")
+}
+
+// probeInstaller は公開インストーラ 1 本を確かめる —— 在るか、記録どおりの版を入れるか。
+// ok=false のとき bad がその理由(probe_failed / failed)を語る。
+//
+// 版の書き場所は install.sh と install.ps1 で違う。name がそれを決め、読み手を選ぶ ——書式を
+// 取り違えると版は空文字になり、記録と一致しないので failed に出る(黙って緑にはならない)。
+func probeInstaller(ctx context.Context, url, name string, rec state.PublishRecord) (version string, bad verifyOutcome, ok bool) {
+	rs, perr := (&channel.Script{InstallURL: url, PS1: name == config.InstallPS1Name}).Probe(ctx)
+	switch {
+	case perr != nil:
+		return "", probeFailedOutcome("script", perr), false
+	case !rs.Found:
+		return "", verifyFailure("script",
+			"script recorded "+rec.Version+" but no "+name+" at "+url,
+			"published "+name+" not found",
+			"re-run release to upload "+name+" to the release",
+			"", "wharfy release --yes"), false
+	case rs.Version != rec.Version:
+		return "", verifyFailure("script",
+			name+" at "+url+" installs "+rs.Version+", expected "+rec.Version,
+			"the published "+name+" installs a different version than the published record",
+			"re-run release so the release and its "+name+" agree",
+			"", "wharfy release --yes"), false
+	}
+	return rs.Version, verifyOutcome{}, true
 }
 
 // verifyGoinstall は `go install` が通るかを確かめる。
