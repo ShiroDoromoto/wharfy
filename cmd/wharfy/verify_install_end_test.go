@@ -401,7 +401,7 @@ func installedPowerShells() []string {
 //	ubuntu-latest  … pwsh(7) だけ(ランナーに同梱)。本文の構文の壊れを、速い test ジョブで先に捕まえる。
 //	手元 macOS     … どちらも無いので skip。
 //
-// arch より後ろ(取得・展開・配置・PATH 案内)はどの OS でも踏めていない。#52 が引き取る。
+// arch より後ろ(取得・展開・配置・起動)は TestRunPowerShellInstallInstallsAndLaunchesTheBinary が踏む。
 func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
 	shells := installedPowerShells()
 	if len(shells) == 0 {
@@ -418,6 +418,131 @@ func TestRunPowerShellInstallRunsTheRealPS1(t *testing.T) {
 			}
 			if !strings.Contains(string(out), "demo: unsupported arch") {
 				t.Errorf("the installer should name the project and what failed: %s", out)
+			}
+		})
+	}
+}
+
+// fakeIWRPrelude は、配る本文の頭に置く偽の Invoke-WebRequest。PowerShell は関数をコマンドレットより
+// 先に解決するので、以降 install.ps1 が呼ぶ Invoke-WebRequest はこちらへ来る。
+//
+// install.sh のテストは偽の curl を PATH に置いて同じことをしている(fakeCurl)。install.ps1 では
+// その手が効かない —— Invoke-WebRequest は外部コマンドではなく PowerShell 組み込みなので、
+// PATH には現れない。差し込めるのは本文の中だけ。利用者が踏む `irm … | iex` も本文を丸ごと
+// 解釈して走らせるので、この連結は実態から離れない。
+const fakeIWRPrelude = `function Invoke-WebRequest {
+  param([string]$Uri, [string]$OutFile)
+  Copy-Item -LiteralPath $env:WHARFY_TEST_ASSET -Destination $OutFile
+}
+`
+
+// downloadablePS1Server は、取得だけを偽物に差し替えた本物の install.ps1 を配る。
+func downloadablePS1Server(t *testing.T, version string) *httptest.Server {
+	t.Helper()
+	script := fakeIWRPrelude + config.GenerateInstallPS1(config.Config{Project: "demo", Github: "acme/demo"}, version)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(script))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// buildDemoExe は zip に詰める本物の .exe を建てる。install.ps1 は展開して置くだけだが、verify は
+// 置かれたものを起動するので、実行できる PE でなければならない(空ファイルやバッチでは踏めない)。
+func buildDemoExe(t *testing.T, dir string) string {
+	t.Helper()
+	src := t.TempDir()
+	for name, body := range map[string]string{
+		"go.mod": "module demo\n\ngo 1.21\n",
+		"main.go": `package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+func main() { fmt.Println("demo launched:", strings.Join(os.Args[1:], " ")) }
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exe := filepath.Join(dir, "demo.exe")
+	cmd := exec.Command("go", "build", "-o", exe, ".")
+	cmd.Dir = src
+	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=") // 依存は無い。ネットワークへ出させない
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build the demo binary the installer will place: %v\n%s", err, out)
+	}
+	return exe
+}
+
+// writeZipAsset は release アセットと同じ形の zip(直下に <binary>.exe)を書く。
+func writeZipAsset(t *testing.T, path, exe string) {
+	t.Helper()
+	body, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	w, err := zw.Create(filepath.Base(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 本物の install.ps1 の後半 —— 取得・展開・$Prefix への配置・起動 —— を最後まで踏む。
+// 取得だけを偽の Invoke-WebRequest に差し替えるので、ネットワークには出ない。
+//
+// Windows でしか走らない: install.ps1 の後半は %TEMP% と %LOCALAPPDATA% を使い、Linux の
+// pwsh ではどちらも空になる。踏める場所は CI の windows-test ジョブだけ。
+//
+// v0.16.0 の事故は install.ps1 の前半で起きたが、後半にも同じ穴は開きうる。ここまで踏んで初めて
+// install.sh(fakeCurl で末端まで踏んでいる)と釣り合う。
+func TestRunPowerShellInstallInstallsAndLaunchesTheBinary(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the tail of install.ps1 needs the Windows-only TEMP and LOCALAPPDATA")
+	}
+	shells := installedPowerShells()
+	if len(shells) == 0 {
+		t.Skip("neither powershell nor pwsh is on this host")
+	}
+	assets := t.TempDir()
+	zipPath := filepath.Join(assets, "demo_1.2.0_windows_amd64.zip")
+	writeZipAsset(t, zipPath, buildDemoExe(t, assets))
+
+	for _, shell := range shells {
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			t.Setenv("PROCESSOR_ARCHITECTURE", "AMD64")
+			t.Setenv("WHARFY_TEST_ASSET", zipPath)
+			srv := downloadablePS1Server(t, "1.2.0")
+
+			out, err := runPowerShellInstallWith(context.Background(), shell, srv.URL, "demo", nil)
+			if err != nil {
+				t.Fatalf("the generated install.ps1 should install and run demo: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), "installed demo.exe 1.2.0") {
+				t.Errorf("the installer should say what it installed: %s", out)
+			}
+			// PREFIX を渡しているので、利用者の %LOCALAPPDATA% ではなく捨てる先に入る。
+			if !strings.Contains(string(out), "wharfy-verify-script-") {
+				t.Errorf("the installer must be pointed at a throwaway prefix, not the host: %s", out)
+			}
+			if !strings.Contains(string(out), "demo launched: --version") {
+				t.Errorf("the installed binary should be launched with the first attempt: %s", out)
 			}
 		})
 	}
