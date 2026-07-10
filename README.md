@@ -77,11 +77,15 @@ The order is `build → sign → release → publish → verify` (what `wharfy a
 each channel's manifest against that release, so a mid-batch failure resumes safely without
 re-uploading. `wharfy publish` with no prior `release` still works — it runs the release itself.
 
-`verify` checks the published channels from the consumer's side. For `homebrew` it reads the
+`verify` checks the channels in your `channels:` from the consumer's side — that list is what
+decides the scope, not the publish history in `state.json` (a channel you dropped from the config
+is never verified, and its old record no longer makes `verify` green). For `homebrew` it reads the
 formula off the tap and matches the version; for `apt`/`rpm` it also adds your repo inside a
 Debian/Fedora container, installs the package and runs it — a broken dependency or a wrong file
 layout fails there, not on your users' machines. The upload itself can't catch that: it returns
-`200` either way. Without docker the container step is skipped and reported, never failed.
+`200` either way. Without docker the container step is not run: the channel is reported `partial`,
+never failed. If **no** channel could be verified at all, `verify` exits non-zero with
+`nothing_to_verify` rather than reporting a green run it never made.
 
 Every command also takes `--json` and ends with a `next:` block. **The authoritative,
 always-current list of commands and channels is `wharfy agent` itself** — this README does

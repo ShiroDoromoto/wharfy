@@ -33,6 +33,7 @@ var expectedCodes = []string{
 	"keychain_failed",
 	"main_ambiguous",
 	"network_error",
+	"nothing_to_verify",
 	"probe_failed",
 	"publish_failed",
 	"sign_failed",

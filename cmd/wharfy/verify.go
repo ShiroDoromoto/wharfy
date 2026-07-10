@@ -16,18 +16,24 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// verify.go — 発行済み owned チャネルを消費側から確かめる。
+// verify.go — wharfy.yaml の channels: にあるチャネルを消費側から確かめる。
+//
+// 検証の対象集合は `channels:` が決める(D-4)。state.json の publish 履歴は監査記録であって
+// 行動の根拠にしない — 設定から外したチャネルの古い記録が残っていても検証しない。畳んだ tap を
+// 検証して緑を返し、現行チャネルを一つも見ていない、という嘘をつかないため。
 //
 // homebrew は自前 tap の formula の有無と版を照合する。apt/rpm はそれに加えて Linux コンテナで
 // repo を足し、install して実行まで踏む。供給側(hosted repo への push)はアップロードが 200 を返せば
 // 成功するので、生成した deb/rpm の依存やファイル配置が壊れていても気づけない。踏むのは利用者になる。
 //
 // docker が無ければ apt/rpm のコンテナ検証だけを skip する(docker 不在は verify の失敗ではない)。
+// 一つも検証できなかったときは ok=false(nothing_to_verify)。「確かめられなかった」を緑で返すと、
+// CI がそれを「配布は健全」と読んでしまう(D-4)。
 
 // verifyCheck は 1 チャネル分の検証結果(verify の data)。
 type verifyCheck struct {
 	Channel string `json:"channel"`
-	Status  string `json:"status"` // verified / failed / skipped
+	Status  string `json:"status"` // verified / partial / failed / skipped
 	Message string `json:"message"`
 }
 
@@ -37,7 +43,11 @@ type verifyData struct {
 }
 
 const (
-	verifyStatusOK      = "verified"
+	verifyStatusOK = "verified"
+	// verifyStatusPartial は「検証は走ったが、最後まで踏めなかった」(例: repo の版は照合したが
+	// docker が無く install を試せない)。失敗ではないので ok は落とさないが、verified とも呼ばない。
+	// 検証対象ゼロ(nothing_to_verify)の判定では「走った」側に数える。
+	verifyStatusPartial = "partial"
 	verifyStatusFailed  = "failed"
 	verifyStatusSkipped = "skipped"
 )
@@ -61,8 +71,8 @@ var (
 	verifyTimeout = 10 * time.Minute
 )
 
-// runVerify は発行済み owned チャネルの到達性・整合性を確認する(verify)。
-// 未発行なら「確認対象なし」を正直に返し、publish を促す(空 next の dead-end を作らない)。
+// runVerify は channels: にあるチャネルの到達性・整合性を確認する(verify)。
+// 未発行・未対応のチャネルは skip として checks に載せ、一つも検証できなければ ok=false を返す。
 func runVerify(ctx context.Context, c registry.Command, _ []string) output.Result {
 	root, err := os.Getwd()
 	if err != nil {
@@ -73,25 +83,28 @@ func runVerify(ctx context.Context, c registry.Command, _ []string) output.Resul
 	st, _ := state.Load(root, cfg.Project)
 
 	var outcomes []verifyOutcome
-	if rec, ok := publishedRecord(st, "homebrew"); ok {
-		oc, err := verifyHomebrew(ctx, cfg, rec)
-		if err != nil {
-			return internalError(c, err)
+	var unpublished []string
+	for _, ch := range cfg.Channels {
+		rec, published := publishedRecord(st, ch.Name)
+		if !published {
+			unpublished = append(unpublished, ch.Name)
+			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: nothing published on this channel yet"))
+			continue
 		}
-		outcomes = append(outcomes, oc)
-	}
-	for _, name := range []string{"apt", "rpm"} {
-		if rec, ok := publishedRecord(st, name); ok {
-			outcomes = append(outcomes, verifyLinuxRepo(ctx, name, cfg, in, rec))
+		switch ch.Name {
+		case "homebrew":
+			oc, err := verifyHomebrew(ctx, cfg, ch, rec)
+			if err != nil {
+				return internalError(c, err)
+			}
+			outcomes = append(outcomes, oc)
+		case "apt", "rpm":
+			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, rec))
+		default:
+			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: verify does not cover this channel yet"))
 		}
 	}
-
-	if len(outcomes) == 0 {
-		res := output.New(c.Name, "nothing published to verify yet", true)
-		res.Next = []output.NextDo{{Reason: "publish first, then verify the install", Do: "wharfy publish homebrew --yes"}}
-		return res
-	}
-	return verifyResult(c, outcomes)
+	return verifyResult(c, outcomes, unpublished)
 }
 
 // publishedRecord は state から発行済みの記録を返す(版が空なら未発行扱い)。
@@ -104,17 +117,25 @@ func publishedRecord(st *state.State, name string) (state.PublishRecord, bool) {
 }
 
 // verifyResult は各チャネルの結果を 1 つの envelope に畳む。
-// 1 つでも failed なら ok=false。skipped は失敗ではないので ok を落とさない。
-func verifyResult(c registry.Command, outcomes []verifyOutcome) output.Result {
+//
+//	failed が 1 つでもあれば ok=false。
+//	検証が 1 つも走らなければ ok=false(nothing_to_verify) — skip だけで緑を返さない。
+//	partial は「走ったが最後まで踏めなかった」なので、ok を落とさず対象ゼロにも数えない。
+//
+// unpublished は channels: にあるが未発行のチャネル(検証対象ゼロのときの次の一手に使う)。
+func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []string) output.Result {
 	var checks []verifyCheck
 	var problems []output.Problem
 	var warnings []output.Warning
 	var nexts []output.NextDo
-	failed := false
+	failed, exercised := false, 0
 	for _, oc := range outcomes {
 		checks = append(checks, oc.check)
-		if oc.check.Status == verifyStatusFailed {
+		switch oc.check.Status {
+		case verifyStatusFailed:
 			failed = true
+		case verifyStatusOK, verifyStatusPartial:
+			exercised++
 		}
 		if oc.problem != nil {
 			problems = append(problems, *oc.problem)
@@ -127,40 +148,65 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome) output.Result {
 		}
 	}
 
-	res := output.New(c.Name, verifyMessage(checks), !failed)
+	nothingToVerify := !failed && exercised == 0
+	res := output.New(c.Name, verifyMessage(checks, nothingToVerify), !failed && !nothingToVerify)
 	res.Data = verifyData{Checks: checks}
 	res.Warnings = warnings
 	res.Errors = problems
-	if failed {
+	switch {
+	case failed:
 		res.Next = nexts
-	} else {
+	case nothingToVerify:
+		res.Errors = append(res.Errors, output.Problem{
+			Code:    output.ErrNothingToVerify,
+			Message: "no channel in wharfy.yaml could be verified",
+			Hint:    "publish a channel that verify covers, or check why every channel was skipped",
+		})
+		res.Next = nothingToVerifyNext(unpublished)
+	default:
 		res.Next = []output.NextDo{{Reason: "distribution looks consistent; review overall state", Do: "wharfy status"}}
 	}
 	return res
 }
 
+// nothingToVerifyNext は検証対象ゼロのときの次の一手。channels: にあるチャネルだけを勧める
+// (設定から外したチャネルへの publish を勧めない・D-4)。
+func nothingToVerifyNext(unpublished []string) []output.NextDo {
+	if len(unpublished) > 0 {
+		return []output.NextDo{{Reason: "publish first, then verify the install", Do: "wharfy publish " + unpublished[0] + " --yes"}}
+	}
+	return []output.NextDo{{Reason: "verify covers none of the configured channels yet; review overall state", Do: "wharfy status"}}
+}
+
 // verifyMessage は「何が通り、何が落ち、何を飛ばしたか」を一行にする。
-func verifyMessage(checks []verifyCheck) string {
+func verifyMessage(checks []verifyCheck, nothingToVerify bool) string {
 	byStatus := map[string][]string{}
 	for _, ck := range checks {
 		byStatus[ck.Status] = append(byStatus[ck.Status], ck.Channel)
 	}
 	var parts []string
-	for _, st := range []string{verifyStatusFailed, verifyStatusOK, verifyStatusSkipped} {
+	for _, st := range []string{verifyStatusFailed, verifyStatusOK, verifyStatusPartial, verifyStatusSkipped} {
 		if names := byStatus[st]; len(names) > 0 {
 			parts = append(parts, st+" "+strings.Join(names, ", "))
 		}
 	}
-	return strings.Join(parts, "; ")
+	if !nothingToVerify {
+		return strings.Join(parts, "; ")
+	}
+	if len(parts) == 0 {
+		return "nothing to verify: no channels in wharfy.yaml"
+	}
+	return "nothing to verify: " + strings.Join(parts, "; ")
 }
 
 // verifyHomebrew は自前 tap の formula が在り、版が記録と一致するかを照合する。
-// 記録された tap が解決できないのは設定の壊れ(検証の失敗ではない)なので error で返す。
-func verifyHomebrew(ctx context.Context, cfg config.Config, rec state.PublishRecord) (verifyOutcome, error) {
-	tap := firstNonEmptyStr(rec.Target, homebrewTargetOrEmpty(cfg))
+// tap は設定の解決値を先に採る(記録は監査用のフォールバック・D-4)。どちらでも解決できないのは
+// 設定の壊れ(検証の失敗ではない)なので error で返す。
+func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
+	tap := firstNonEmptyStr(ch.Target, rec.Target)
 	owner, repo, ok := splitOwnerName(tap)
 	if !ok {
-		return verifyOutcome{}, errString("recorded homebrew target is unresolved: " + tap)
+		return verifyOutcome{}, errString("homebrew target is unresolved: " + tap)
 	}
 	hb := &channel.Homebrew{
 		Project: cfg.Project,
@@ -195,8 +241,9 @@ func verifyHomebrew(ctx context.Context, cfg config.Config, rec state.PublishRec
 //  2. その repo を足したコンテナで install し、入ったバイナリが動くか(消費側)。
 //
 // 2 が無いと、依存不足やパス誤りのパッケージをアップロード成功のまま配ってしまう。
-func verifyLinuxRepo(ctx context.Context, name string, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
-	repo := firstNonEmptyStr(rec.Target, channelTarget(cfg, name))
+func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
+	name := ch.Name
+	repo := firstNonEmptyStr(ch.Target, rec.Target)
 	if repo == "" {
 		return verifySkip(name, name+" skipped: repo is unresolved in the config")
 	}
@@ -222,7 +269,7 @@ func verifyLinuxRepo(ctx context.Context, name string, cfg config.Config, in con
 	}
 
 	if !dockerAvailable() {
-		return verifySkip(name, name+" "+rs.Version+" found in "+repo+", but the install was not exercised: docker is not available")
+		return verifyPartial(name, name+" "+rs.Version+" found in "+repo+", but the install was not exercised: docker is not available")
 	}
 	image := verifyImages[name]
 	out, err := containerInstall(ctx, name, repo, pkg, binary)
@@ -314,9 +361,19 @@ func checkShellSafe(repo, pkg, binary string) error {
 	return nil
 }
 
-// verifySuccess / verifyFailure / verifySkip / probeFailedOutcome は 1 チャネル分の結果を組む。
+// verifySuccess / verifyPartial / verifyFailure / verifySkip / verifyNotRun / probeFailedOutcome は
+// 1 チャネル分の結果を組む。
 func verifySuccess(name, msg string) verifyOutcome {
 	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusOK, Message: msg}}
+}
+
+// verifyPartial は検証の一部だけを踏めたチャネル。踏めなかった事実を warning に残す
+// (配布者は docker を入れれば最後まで確かめられる)。
+func verifyPartial(name, msg string) verifyOutcome {
+	return verifyOutcome{
+		check:   verifyCheck{Channel: name, Status: verifyStatusPartial, Message: msg},
+		warning: &output.Warning{Code: output.WarnChannelSkipped, Message: msg},
+	}
 }
 
 func verifyFailure(name, msg, problem, hint, detail, next string) verifyOutcome {
@@ -328,11 +385,19 @@ func verifyFailure(name, msg, problem, hint, detail, next string) verifyOutcome 
 }
 
 // verifySkip は検証を飛ばした事実を warning として残す。ok は落とさないが、黙って通してもいない。
+// 配布者が手を打てる skip(docker を入れる・repo を設定する)だけがここを通る。
 func verifySkip(name, msg string) verifyOutcome {
 	return verifyOutcome{
 		check:   verifyCheck{Channel: name, Status: verifyStatusSkipped, Message: msg},
 		warning: &output.Warning{Code: output.WarnChannelSkipped, Message: msg},
 	}
+}
+
+// verifyNotRun は検証を走らせなかったチャネル(未発行・verify が未対応)。warning は出さない
+// ——配布者に打てる手が無いか、publish していないという既知の事実だからで、checks には載る。
+// 全チャネルがこれなら verifyResult が nothing_to_verify として ok=false にする。
+func verifyNotRun(name, msg string) verifyOutcome {
+	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusSkipped, Message: msg}}
 }
 
 func probeFailedOutcome(name string, err error) verifyOutcome {
@@ -350,22 +415,6 @@ func tail(b []byte, n int) string {
 		return string(b)
 	}
 	return string(b[len(b)-n:])
-}
-
-// channelTarget は解決済みチャネルの配信先(無ければ空)。
-func channelTarget(cfg config.Config, name string) string {
-	for _, ch := range cfg.Channels {
-		if ch.Name == name {
-			return ch.Target
-		}
-	}
-	return ""
-}
-
-// homebrewTargetOrEmpty は cfg の homebrew tap(無ければ空)。
-func homebrewTargetOrEmpty(cfg config.Config) string {
-	t, _ := homebrewTarget(cfg)
-	return t
 }
 
 type errString string

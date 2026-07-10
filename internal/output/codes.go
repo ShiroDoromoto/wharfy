@@ -55,7 +55,10 @@ const (
 	ErrProbeFailed        = "probe_failed"         // 実体照合に失敗
 	ErrNetworkError       = "network_error"        // 一時的なネットワーク失敗
 	ErrVerifyFailed       = "verify_failed"        // verify で install/実行が失敗
-	ErrInternal           = "internal"             // 想定外(バグ)
+	// ErrNothingToVerify: channels: のどのチャネルも検証できなかった(D-4)。「何も確かめられなかった」を
+	// 緑で返すと CI が壊れた配布を通すので、検証成功と区別して ok=false にする。
+	ErrNothingToVerify = "nothing_to_verify"
+	ErrInternal        = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -107,6 +110,7 @@ var Catalog = []CatalogEntry{
 	{ErrProbeFailed, KindError, "実体照合に失敗"},
 	{ErrNetworkError, KindError, "一時的なネットワーク失敗"},
 	{ErrVerifyFailed, KindError, "verify で install/実行が失敗"},
+	{ErrNothingToVerify, KindError, "channels: のどのチャネルも検証できなかった(検証成功と区別する)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

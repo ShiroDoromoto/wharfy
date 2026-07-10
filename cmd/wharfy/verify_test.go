@@ -15,16 +15,30 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// recordPublish は state に homebrew 発行記録を書く(verify の前提)。
-func recordPublish(t *testing.T, root, version string) {
+// writeConfig は root に wharfy.yaml を置く(verify の対象集合は channels: が決める)。
+func writeConfig(t *testing.T, root, yaml string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "wharfy.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// recordPublishFor は state に 1 チャネル分の発行記録を書く(verify の前提)。
+func recordPublishFor(t *testing.T, root, channelName, version, target string) {
 	t.Helper()
 	st, _ := state.Load(root, "demo")
 	st.Publish = map[string]state.PublishRecord{
-		"homebrew": {Version: version, Target: "acme/homebrew-demo", At: "t"},
+		channelName: {Version: version, Target: target, At: "t"},
 	}
 	if err := state.Save(root, st); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// recordPublish は homebrew の発行記録を書く(既存 homebrew 検証の前提)。
+func recordPublish(t *testing.T, root, version string) {
+	t.Helper()
+	recordPublishFor(t, root, "homebrew", version, "acme/homebrew-demo")
 }
 
 func plantFormula(version string) *channel.InMemoryTapStore {
@@ -33,20 +47,72 @@ func plantFormula(version string) *channel.InMemoryTapStore {
 	return s
 }
 
-// 未発行 → 確認対象なしを正直に返し、publish へ導く(空 next の dead-end を作らない)。
+// 未発行 → 何ひとつ検証していないので ok=false。緑で返すと CI が壊れた配布を通す(D-4)。
+// dead-end は作らず、channels: にあるチャネルの publish へ導く。
 func TestVerifyNothingPublished(t *testing.T) {
 	root := scratchModule(t)
 	chdir(t, root)
 	defer swapTapStore(channel.NewInMemoryTapStore())()
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
-	if !res.OK {
-		t.Fatalf("nothing-to-verify is not a failure: %+v", res)
+	if res.OK {
+		t.Fatalf("verifying nothing must not be reported as success: %+v", res)
+	}
+	if len(res.Errors) != 1 || res.Errors[0].Code != output.ErrNothingToVerify {
+		t.Fatalf("nothing verified should be nothing_to_verify: %+v", res.Errors)
 	}
 	if len(res.Next) == 0 || !hasNextDo(res, "wharfy publish homebrew --yes") {
 		t.Errorf("verify must guide to publish, not dead-end: %+v", res.Next)
 	}
 	validateAgainst(t, resultSchemaID, res)
+}
+
+// verify がまだ扱わないチャネル(scoop 等)は skipped として checks に載る。
+// publish 済みでも「検証した」とは言わない — 検証ゼロなら ok=false のまま。
+func TestVerifyUncoveredChannelIsSkippedNotVerified(t *testing.T) {
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [scoop]\nscoop:\n  bucket: acme/scoop-demo\n")
+	chdir(t, root)
+	recordPublishFor(t, root, "scoop", "1.2.0", "acme/scoop-demo")
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) != 1 || res.Errors[0].Code != output.ErrNothingToVerify {
+		t.Fatalf("an uncovered channel is not a verified channel: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Channel != "scoop" || ck[0].Status != verifyStatusSkipped {
+		t.Fatalf("scoop should be reported as skipped: %+v", ck)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("wharfy's own gap is not the distributor's warning: %+v", res.Warnings)
+	}
+	if !hasNextDo(res, "wharfy status") {
+		t.Errorf("every channel published but none verifiable: next should be status: %+v", res.Next)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// channels: から外したチャネルの publish 記録が state.json に残っていても検証しない(D-4)。
+// 畳んだ tap を検証して緑を返すのが元の壊れ方。記録自体は監査用に消さない。
+func TestVerifyIgnoresChannelsRemovedFromConfig(t *testing.T) {
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [releases]\n")
+	chdir(t, root)
+	recordPublishFor(t, root, "homebrew", "1.2.0", "acme/homebrew-demo")
+	defer swapTapStore(plantFormula("1.2.0"))() // tap は健在。だが channels: に無い
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK {
+		t.Fatalf("a tap outside channels: must not make verify green: %+v", res)
+	}
+	for _, ck := range checksOf(t, res) {
+		if ck.Channel == "homebrew" {
+			t.Errorf("homebrew is not in channels: and must not be checked: %+v", ck)
+		}
+	}
+	if hasNextDo(res, "wharfy publish homebrew --yes") {
+		t.Errorf("verify must not steer back to a channel the config dropped: %+v", res.Next)
+	}
 }
 
 // 発行済み＋tap の版が一致 → verified。
@@ -130,15 +196,8 @@ func rpmRepoServer(t *testing.T, pkg, version string) *httptest.Server {
 func scratchLinuxRepo(t *testing.T, name, repo, recorded string) string {
 	t.Helper()
 	root := scratchModule(t)
-	yaml := "project: demo\nchannels: [" + name + "]\n" + name + ":\n  repo: " + repo + "\n"
-	if err := os.WriteFile(filepath.Join(root, "wharfy.yaml"), []byte(yaml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	st, _ := state.Load(root, "demo")
-	st.Publish = map[string]state.PublishRecord{name: {Version: recorded, Target: repo, At: "t"}}
-	if err := state.Save(root, st); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, root, "project: demo\nchannels: ["+name+"]\n"+name+":\n  repo: "+repo+"\n")
+	recordPublishFor(t, root, name, recorded, repo)
 	return root
 }
 
@@ -213,8 +272,9 @@ func TestVerifyAptBrokenPackageFails(t *testing.T) {
 	}
 }
 
-// docker 不在は verify の失敗ではない。skip したうえで、飛ばした事実を warning に残す。
-func TestVerifyAptSkippedWithoutDocker(t *testing.T) {
+// docker 不在は verify の失敗ではない。repo の版までは照合できているので partial とし、
+// 踏めなかった事実を warning に残す(何も検証していない nothing_to_verify とは区別する)。
+func TestVerifyAptPartialWithoutDocker(t *testing.T) {
 	srv := aptRepoServer(t, "demo", "1.2.0")
 	chdir(t, scratchLinuxRepo(t, "apt", srv.URL, "1.2.0"))
 	swapDocker(t, false, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -229,8 +289,8 @@ func TestVerifyAptSkippedWithoutDocker(t *testing.T) {
 	if len(res.Warnings) == 0 || res.Warnings[0].Code != output.WarnChannelSkipped {
 		t.Fatalf("skipping the install must be visible as a warning: %+v", res.Warnings)
 	}
-	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusSkipped {
-		t.Errorf("apt check should be skipped: %+v", ck)
+	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Errorf("apt check should be partial, not verified nor skipped: %+v", ck)
 	}
 	validateAgainst(t, resultSchemaID, res)
 }
@@ -298,8 +358,19 @@ func TestVerifyMessageGroupsByStatus(t *testing.T) {
 		{Channel: "homebrew", Status: verifyStatusOK},
 		{Channel: "apt", Status: verifyStatusFailed},
 		{Channel: "rpm", Status: verifyStatusSkipped},
-	})
+	}, false)
 	if got != "failed apt; verified homebrew; skipped rpm" {
 		t.Errorf("verify message = %q", got)
+	}
+}
+
+// 検証ゼロのときは「何を飛ばしたか」の前に、確かめられなかったことを名乗る。
+func TestVerifyMessageSaysNothingToVerify(t *testing.T) {
+	got := verifyMessage([]verifyCheck{{Channel: "releases", Status: verifyStatusSkipped}}, true)
+	if got != "nothing to verify: skipped releases" {
+		t.Errorf("verify message = %q", got)
+	}
+	if got := verifyMessage(nil, true); got != "nothing to verify: no channels in wharfy.yaml" {
+		t.Errorf("empty channels message = %q", got)
 	}
 }
