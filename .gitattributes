@@ -1,0 +1,6 @@
+# 作業ツリーの改行は、どの OS で checkout しても LF に固定する。
+#
+# Windows の checkout は既定で CRLF に変換する。cmd/wharfy/testdata の golden はバイト一致で
+# 比較するので、中身が同じでも CRLF になった時点で drift として落ちる。install.sh も同様に、
+# CRLF が混ざれば sh が読めない。生成物も fixture も、行末は LF が正しい。
+* text=auto eol=lf

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -152,8 +153,10 @@ func TestVerifyScriptInstallRuns(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("a working installer should verify ok: %+v", res)
 	}
-	if gotURL != srv.URL || gotBinary != "demo" {
-		t.Errorf("install.sh should be run from the probed url with the project binary: %q %q", gotURL, gotBinary)
+	// 踏む先は OS で分かれる —— Windows の利用者は install.sh ではなく、その隣の install.ps1 を踏む。
+	inst := hostScriptInstaller(runtime.GOOS, srv.URL)
+	if gotURL != inst.URL || gotBinary != "demo" {
+		t.Errorf("%s should be run from the probed url with the project binary: %q %q", inst.Name, gotURL, gotBinary)
 	}
 	if ck := checksOf(t, res); len(ck) != 1 || ck[0].Status != verifyStatusOK {
 		t.Errorf("an exercised install is verified, not partial: %+v", ck)
@@ -205,7 +208,8 @@ func TestVerifyScriptInstallHonoursVerifyRun(t *testing.T) {
 	}
 }
 
-// sh が無い環境(Windows 等)で --install を頼まれた → 失敗ではなく partial。何を入れれば踏めるか言う。
+// インストーラを走らせる道具が無い環境で --install を頼まれた → 失敗ではなく partial。
+// 何を入れれば踏めるかを、その OS の道具の名前(sh / powershell)で言う。
 func TestVerifyScriptWithoutShellIsPartial(t *testing.T) {
 	srv := installScriptServer(t, "1.2.0")
 	chdir(t, scratchScript(t, "1.2.0"))
@@ -217,10 +221,11 @@ func TestVerifyScriptWithoutShellIsPartial(t *testing.T) {
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if !res.OK {
-		t.Fatalf("a missing sh is not a verify failure: %+v", res)
+		t.Fatalf("a missing installer tool is not a verify failure: %+v", res)
 	}
+	want := hostScriptInstaller(runtime.GOOS, srv.URL).Tool + " is not available"
 	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Status != verifyStatusPartial || !strings.Contains(ck[0].Message, "sh is not available") {
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial || !strings.Contains(ck[0].Message, want) {
 		t.Fatalf("a missing tool should be partial and say so: %+v", ck)
 	}
 	if len(res.Warnings) == 0 {

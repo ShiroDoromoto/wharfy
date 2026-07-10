@@ -39,6 +39,16 @@ func skipWithoutTools(t *testing.T, tools ...string) {
 	}
 }
 
+// skipOnWindows は install.sh の経路を踏むテストを Windows で外す。verify は Windows では
+// install.ps1 を選ぶので(hostScriptInstaller)、そこで install.sh を走らせても誰の経路でもない。
+// Windows 側の同じ層は TestRunPowerShellInstall* が踏む。
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the install.sh path is not what a Windows user takes: install.ps1 is")
+	}
+}
+
 // writeExec は実行できるスクリプトを置く。
 func writeExec(t *testing.T, path, body string) {
 	t.Helper()
@@ -125,6 +135,7 @@ func realInstallerServer(t *testing.T, version string) *httptest.Server {
 
 // 本物の install.sh を sh で走らせ、一時 PREFIX に入ったバイナリが起動するところまで踏む。
 func TestRunScriptInstallRunsTheRealInstaller(t *testing.T) {
+	skipOnWindows(t)
 	skipWithoutTools(t, "sh", "tar", "install", "uname", "mktemp")
 	assets := t.TempDir()
 	writeTarGz(t, filepath.Join(assets, hostAsset("demo", "1.2.0")), map[string]string{
@@ -152,6 +163,7 @@ func TestRunScriptInstallRunsTheRealInstaller(t *testing.T) {
 // アセットが無い(release から消えた・まだ上がっていない)→ curl が落ち、install.sh が説明して落ちる。
 // probe だけでは見えない失敗であり、その本文がそのまま verify の detail になる。
 func TestRunScriptInstallReportsADownloadFailure(t *testing.T) {
+	skipOnWindows(t)
 	skipWithoutTools(t, "sh", "tar", "install", "uname", "mktemp")
 	fakeCurl(t, t.TempDir()) // アセットを 1 つも置かない
 	srv := realInstallerServer(t, "1.2.0")
@@ -167,6 +179,7 @@ func TestRunScriptInstallReportsADownloadFailure(t *testing.T) {
 
 // verify.run はホストで入れたバイナリにも渡る。サブコマンド必須の CLI は --version では起動しない。
 func TestRunScriptInstallHonoursVerifyRunOnTheHost(t *testing.T) {
+	skipOnWindows(t)
 	skipWithoutTools(t, "sh", "tar", "install", "uname", "mktemp")
 	assets := t.TempDir()
 	writeTarGz(t, filepath.Join(assets, hostAsset("demo", "1.2.0")), map[string]string{
@@ -246,7 +259,13 @@ func writeModuleZip(t *testing.T, path, prefix string, files map[string]string) 
 // -modcacherw が無いと module cache が読み取り専用で残り、t.TempDir の後片付けが落ちる。
 func withFileProxy(t *testing.T, proxy string) {
 	t.Helper()
-	t.Setenv("GOPROXY", "file://"+filepath.ToSlash(proxy))
+	// Windows のパスは C:\… なので、そのまま繋ぐと file://C:/… ——ドライブ文字が host として
+	// 読まれ、go に "non-path elements" と断られる。パスは必ず / で始めて file:///C:/… にする。
+	p := filepath.ToSlash(proxy)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	t.Setenv("GOPROXY", "file://"+p)
 	t.Setenv("GOSUMDB", "off")
 	t.Setenv("GOFLAGS", "-modcacherw")
 	t.Setenv("GOMODCACHE", t.TempDir())
@@ -351,6 +370,11 @@ func TestRunInstalledBinaryReportsAMissingBinary(t *testing.T) {
 
 // --version が無くても version / --help のどれかで起動すれば「動いた」(サブコマンドの名前はプロジェクトによる)。
 func TestRunInstalledBinaryFallsBackThroughTheVersionChain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// この fixture は shebang 付きのシェルスクリプト。Windows はそれを実行ファイルとして起こせない。
+		// 連鎖そのものは TestRunPowerShellInstallInstallsAndLaunchesTheBinary が本物の .exe で踏む。
+		t.Skip("a shell script cannot be exec'd as a binary on Windows")
+	}
 	skipWithoutTools(t, "sh")
 	bin := filepath.Join(t.TempDir(), "demo")
 	writeExec(t, bin, "#!/bin/sh\nif [ \"$1\" = --help ]; then echo helped; exit 0; fi\nexit 1\n")
