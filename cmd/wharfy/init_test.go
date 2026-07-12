@@ -12,10 +12,11 @@ import (
 
 // init の振る舞い: 無ければ作る / あれば確認の上ブロック追記 / 2回目は冪等 / プレビューは書かない。
 
-// 管理ブロックに「マージ≠配布」作法(自動配布禁止・配布はゲート)が含まれること(責務2)。
+// 管理ブロックが「引き金は意図的に引く」作法を語ること(責務2)。走る場所(CI か手元か)は縛らない
+// ——縛るのは引き金(tag push / 手動 dispatch であって merge ではない)。
 func TestManagedBlockGatingDiscipline(t *testing.T) {
 	block := managedBlock()
-	for _, want := range []string{"never auto-distribute", "wharfy release", "wharfy publish", "unattended"} {
+	for _, want := range []string{"wharfy release", "wharfy publish", "tag push", "never on every merge"} {
 		if !strings.Contains(block, want) {
 			t.Errorf("managed block missing gating discipline %q\n---\n%s", want, block)
 		}

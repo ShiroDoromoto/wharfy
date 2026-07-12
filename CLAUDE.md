@@ -5,10 +5,14 @@ Release and distribution for this project go through **wharfy**.
 Don't guess the steps — run `wharfy agent` first (agents: `wharfy agent --json`)
 and follow its output. That capability map is always current.
 
-Merge is not distribution. Auto-merging dependency bumps (Dependabot etc.) is fine,
-but **never auto-distribute**: distribution is an explicit, human/AI-gated step
-(`wharfy release` / `wharfy publish`). Let bumps accumulate, then ship deliberately.
-Do not wire CI to run release/publish unattended.
+wharfy is non-interactive: `--yes` needs no TTY and every credential comes from the
+environment, so `wharfy release` / `wharfy publish` run the same on a laptop and in a
+GitHub Actions workflow. Building the artifacts you distribute in public CI is fine —
+for open source it is the better default.
+
+What stays deliberate is the trigger, not the machine. Ship on a tag push or a manual
+dispatch — never on every merge. Auto-merging dependency bumps (Dependabot etc.) is
+fine; let them accumulate, then ship on purpose.
 <!-- wharfy:end -->
 
 <!-- amenbo:begin (managed v2) -->
