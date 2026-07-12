@@ -554,7 +554,8 @@ func applyChannel(ctx context.Context, ch, root string, cfg config.Config, in co
 			return channel.PlanItem{}, nil, err
 		}
 		st.Publish[ch] = state.PublishRecord{Version: version, Target: repo, At: now}
-		return mk(channel.KindOwned, channel.ActionUpdate, repo), nil, nil
+		// 上げただけでは配れていないことがある(索引待ち/非公開のまま)。上げた直後にそれを言う。
+		return mk(channel.KindOwned, channel.ActionUpdate, repo), pkgNotIndexedWarning(ctx, ch, repo, cfg.Project, version), nil
 
 	case "container":
 		image := channelTargetByName(cfg, "container")
@@ -1430,7 +1431,48 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 	res := publishResult(c, "published "+strconv.Itoa(uploaded)+" "+ext[1:]+" package(s) → "+repo, true, []channel.PlanItem{item})
 	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
 	res.Next = []output.NextDo{{Reason: "install from the channel and run it", Do: "wharfy verify"}}
+	if w := pkgNotIndexedWarning(ctx, chName, repo, cfg.Project, version); w != nil {
+		res.Warnings = append(res.Warnings, *w)
+		res.Next = append([]output.NextDo{{
+			Reason: "confirm consumers can actually install it (the upload succeeded; the public index is what they read)",
+			Do:     "wharfy verify " + chName,
+		}}, res.Next...)
+	}
 	return res
+}
+
+var (
+	// pkgIndexTimeout は publish 直後の索引確認 1 本の上限。配布の成否を左右しないので短く切る。
+	pkgIndexTimeout = 15 * time.Second
+	// checkPkgIndex は公開索引を引く末端(テストで差し替え)。nil なら索引確認をしない
+	// —— テストは既定でこれを nil にして、実 repo へネットワークを飛ばさない。
+	checkPkgIndex = probeLinuxRepo
+)
+
+// pkgNotIndexedWarning は hosted repo(apt/rpm)へ上げた版が、公開リポジトリの索引に現れたかを
+// 確かめ、現れていなければ警告を返す(現れていれば nil)。
+//
+// アップロードが 200 を返せば publish は「✓ published」と言い切る —— 嘘ではないが、利用者はまだ
+// 誰も入れられないことがある。fury 系は受け取ったパッケージを**既定で非公開**として扱い、
+// ダッシュボードで公開に切り替えるまで公開 repo(apt.fury.io/<user>/)に載せない。初回に必ず踏む穴で、
+// しかも配布者からは見えない。索引の生成にも数分かかるので、ここで「まだ無い」ことは失敗ではない
+// ——だから ok は落とさず、両方の可能性を名指しして次の一手を渡す。
+func pkgNotIndexedWarning(ctx context.Context, chName, repo, pkg, version string) *output.Warning {
+	if repo == "" || checkPkgIndex == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, pkgIndexTimeout)
+	defer cancel()
+	rs, err := checkPkgIndex(ctx, chName, repo, pkg)
+	if err == nil && rs.Found && rs.Version == version {
+		return nil
+	}
+	return &output.Warning{
+		Code: output.WarnPkgNotIndexed,
+		Message: chName + " " + version + " was uploaded, but " + repo + " does not serve it yet — " +
+			"hosted repos take a few minutes to index, and some (fury) receive uploads as private: " +
+			"if it never appears, flip the package to public in the provider's dashboard",
+	}
 }
 
 // pkgHostingGuide は apt/rpm の repo 未設定時に「どこにホストするか」を判断軸つきで案内する。

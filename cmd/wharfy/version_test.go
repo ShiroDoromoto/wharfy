@@ -16,6 +16,7 @@ import (
 func TestMain(m *testing.M) {
 	releasesAPIURL = ""
 	keyring.MockInit()
+	checkPkgIndex = nil // publish 直後の索引確認は実 repo を叩くので、明示したテストでだけ動かす
 	os.Exit(m.Run())
 }
 

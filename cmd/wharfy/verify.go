@@ -667,10 +667,13 @@ func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.
 	}
 	switch {
 	case !rs.Found:
+		// 直前に publish したなら、多くは「壊れた」のではなく「まだ載っていない」。索引の生成に
+		// 数分かかり、fury 系はそもそも既定で非公開として受け取る(公開に切り替えるまで載らない)。
+		// そう言わないと、配布が壊れたと思って無用な調査に時間を溶かす。
 		return verifyFailure(name,
 			name+": no package at "+repo+" for the expected "+tgt.expected(),
 			"published package not found in the repo",
-			"re-publish to restore the package",
+			"if you just published, the repo is likely still indexing (a few minutes); if it never appears, the package may still be private — hosted repos like fury receive uploads as private and only serve them once you flip them to public in the dashboard. otherwise re-publish",
 			"", "wharfy publish "+name+" --yes")
 	case rs.Version != tgt.Version:
 		return verifyFailure(name,

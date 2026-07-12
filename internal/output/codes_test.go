@@ -35,6 +35,7 @@ var expectedCodes = []string{
 	"main_ambiguous",
 	"network_error",
 	"nothing_to_verify",
+	"pkg_not_indexed",
 	"probe_failed",
 	"publish_failed",
 	"sign_failed",

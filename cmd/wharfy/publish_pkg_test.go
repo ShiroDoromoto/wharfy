@@ -11,6 +11,7 @@ import (
 
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
+	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
@@ -201,5 +202,69 @@ func TestHTTPUploadPackage(t *testing.T) {
 	}
 	if gotUser != "mytoken" || gotField != "demo_1.0.0_linux_amd64.deb" || gotBody != "DEB-CONTENT" {
 		t.Errorf("upload mismatch: user=%q field=%q body=%q", gotUser, gotField, gotBody)
+	}
+}
+
+// swapPkgIndex は publish 直後の索引確認を差し替える(既定は TestMain で無効)。
+func swapPkgIndex(t *testing.T, fn func(context.Context, string, string, string) (channel.RemoteState, error)) {
+	t.Helper()
+	prev := checkPkgIndex
+	checkPkgIndex = fn
+	t.Cleanup(func() { checkPkgIndex = prev })
+}
+
+// アップロードは成功しても、公開索引にその版が出ていなければ利用者は誰も入れられない
+// (fury は既定で非公開として受け取る・索引の生成にも数分かかる)。publish はそれを言う。
+func TestPublishAptWarnsWhenNotInThePublicIndex(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [apt]\napt:\n  repo: https://pkg.example.com/acme/repo\n")
+	tagScratch(t, root, "v0.4.0")
+	chdir(t, root)
+	t.Setenv("PACKAGE_REPO_TOKEN", "tok")
+	defer swapPackager(fakePackager{arts: []build.Artifact{
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/demo_0.4.0_linux_amd64.deb", SHA256: "aa"},
+	}})()
+	defer swapUploader(func(context.Context, string, string, string) error { return nil })()
+	swapPkgIndex(t, func(context.Context, string, string, string) (channel.RemoteState, error) {
+		return channel.RemoteState{Found: false}, nil // 上がったが索引に無い
+	})
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"apt"})
+	if !res.OK {
+		t.Fatalf("the upload succeeded, so publish stays ok: %+v", res)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != output.WarnPkgNotIndexed {
+		t.Fatalf("it must say the public index does not serve it yet: %+v", res.Warnings)
+	}
+	if !strings.Contains(res.Warnings[0].Message, "private") {
+		t.Errorf("the private-by-default trap is the one you always hit first: %q", res.Warnings[0].Message)
+	}
+	if !hasNextDo(res, "wharfy verify apt") {
+		t.Errorf("next should be to check the consumer side: %+v", res.Next)
+	}
+}
+
+// 索引に出ていれば黙る(警告を安売りしない)。
+func TestPublishAptSilentWhenIndexed(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [apt]\napt:\n  repo: https://pkg.example.com/acme/repo\n")
+	tagScratch(t, root, "v0.4.0")
+	chdir(t, root)
+	t.Setenv("PACKAGE_REPO_TOKEN", "tok")
+	defer swapPackager(fakePackager{arts: []build.Artifact{
+		{OS: "linux", Arch: "amd64", Path: ".wharfy/dist/demo_0.4.0_linux_amd64.deb", SHA256: "aa"},
+	}})()
+	defer swapUploader(func(context.Context, string, string, string) error { return nil })()
+	swapPkgIndex(t, func(context.Context, string, string, string) (channel.RemoteState, error) {
+		return channel.RemoteState{Found: true, Version: "0.4.0"}, nil
+	})
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"apt"})
+	if !res.OK || len(res.Warnings) != 0 {
+		t.Fatalf("a package the public index serves needs no warning: %+v", res)
 	}
 }

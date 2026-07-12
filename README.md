@@ -320,6 +320,12 @@ Or give raw URLs for any host — `{ repo: <delivery-url>, push: <upload-url> }`
 upload and delivery share a host). When `repo` is unset, `publish` skips the channel and its
 `next:` block walks you through the hosting options.
 
+A successful upload is not yet a working channel: hosted repos take a few minutes to index, and
+fury in particular receives uploads **as private** — until you flip the package to public in its
+dashboard, `apt.fury.io/<name>/` does not list it and nobody can install it. `publish` checks the
+public index right after the upload and warns (`pkg_not_indexed`) when your version isn't being
+served yet; `wharfy verify apt` is how you confirm it later.
+
 The upload token is **never written to `wharfy.yaml` or generated files**. Pass it via the
 `PACKAGE_REPO_TOKEN` environment variable (good for CI), or save it once to your OS keychain with
 `wharfy auth fury` — it prompts hidden (the value never reaches your shell history or an agent's

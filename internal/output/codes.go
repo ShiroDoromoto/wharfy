@@ -33,6 +33,12 @@ const (
 	// 生成物(install.sh / formula / cask …)は実行中のバイナリが作るので、HEAD で直した生成器が
 	// 成果物に入らない。wharfy 自身をリリースするときだけ起きうる(module path が一致する repo)。
 	WarnStaleGenerator = "stale_generator"
+	// WarnPkgNotIndexed: hosted repo(apt/rpm)へのアップロードは成功したのに、その版が公開
+	// リポジトリの索引にまだ出ていない。アップロードが 200 を返す以上 publish は成功と言うが、
+	// 利用者はまだ誰も入れられない —— この差は配布者からは見えない。理由は 2 つあり、どちらも初回に踏む:
+	// 索引の生成待ち(数分)か、パッケージが非公開のまま(fury は既定で非公開として受け取り、
+	// ダッシュボードで公開に切り替えるまで公開 repo に載せない)。
+	WarnPkgNotIndexed = "pkg_not_indexed"
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -98,6 +104,7 @@ var Catalog = []CatalogEntry{
 	{WarnDeprecateOrphan, KindWarning, "channels に無いチャネルへの deprecate 宣言(告知の更新が止まっている)"},
 	{WarnDeprecateFrozen, KindWarning, "ship:false のチャネルを最後に配った版で据え置いた"},
 	{WarnStaleGenerator, KindWarning, "実行中の wharfy が repo の HEAD からビルドされていない(生成物が古い生成器で作られる)"},
+	{WarnPkgNotIndexed, KindWarning, "hosted repo へ上げた版が公開索引にまだ無い(取り込み待ち、または非公開のまま)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},
