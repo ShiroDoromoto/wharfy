@@ -94,12 +94,14 @@ var Commands = []Command{
 	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
 	{Name: "config", Summary: "show the resolved effective config", Next: []string{"build"}},
 	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}},
-	{Name: "secrets", Summary: "the credentials your channels need, and how to register them for CI", Next: []string{"publish"}, Notes: []string{
+	{Name: "secrets", Summary: "the credentials and tools your channels need, and how to set them up for CI", Next: []string{"publish"}, Notes: []string{
 		"wharfy reads every credential from the environment, so the same commands run on a laptop and in a GitHub Actions workflow",
 		"the token GitHub Actions hands a workflow can only write to that repository: channels that write elsewhere (tap, bucket, gated forks) need a PAT registered as a secret",
 	}},
 	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}},
-	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}},
+	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}, Notes: []string{
+		"the Go build path shells out to goreleaser, so it must be on PATH — on a CI runner install it explicitly (wharfy secrets lists the tools your config needs); BYO inputs (prebuilt: / bundle:) never call it",
+	}},
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json)", Next: []string{"publish"}, Notes: []string{
 		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
@@ -171,6 +173,39 @@ var ChannelCredentials = map[string][]string{
 
 // SignCredentials は署名する場合に要る env(sign: を宣言したときだけ効く)。
 var SignCredentials = []string{"WHARFY_SIGN_P12", "WHARFY_SIGN_P12_PASSWORD"}
+
+// Tool は wharfy がサブプロセスとして呼ぶ外部の道具 1 つ。
+//
+// 資格情報と同じで、構成が決まれば要る道具も一意に決まる——なのに語り口が無かったため、
+// 「開発機には入っているから通る」ものが CI の runner で初めて builder_unavailable になった。
+// ここが表の単一真実(secrets が構成に照らして要るものだけを出す)。
+type Tool struct {
+	Bin     string `json:"bin"`
+	Purpose string `json:"purpose"`
+	// Install は CI の runner へ入れる 1 行(手元にも同じものが効く)。
+	Install string `json:"install"`
+}
+
+// Tools は wharfy が呼ぶ外部の道具(id → 道具)。git と go は「Go のリポジトリなら在る」ものなので数えない。
+var Tools = map[string]Tool{
+	"goreleaser": {
+		Bin:     "goreleaser",
+		Purpose: "cross-compile, archive and package the Go build path — build / release / publish shell out to it (BYO inputs, prebuilt: / bundle:, do not need it)",
+		Install: "go install github.com/goreleaser/goreleaser/v2@latest   # or: uses: goreleaser/goreleaser-action@v6 with: {install-only: true}",
+	},
+	"docker": {
+		Bin:     "docker",
+		Purpose: "build the multi-arch OCI image and push it to the registry (container channel)",
+		Install: "preinstalled on github-hosted runners; elsewhere install docker with buildx",
+	},
+}
+
+// ToolIDs は Tools の決定的な列挙順(表・注記の並びを安定させる)。
+var ToolIDs = []string{"goreleaser", "docker"}
+
+// CheckoutNote は tag から版を決める以上どの workflow でも要る前提。actions/checkout の既定は
+// 浅いクローンで tag が来ないため、版が解決できずに release/publish が止まる。
+const CheckoutNote = "wharfy takes the version from the git tag: actions/checkout must run with fetch-depth: 0 (its default shallow clone carries no tags)"
 
 // CrossRepoChannels は**自分のリポジトリの外**へ書くチャネルと、その書き先。
 //

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -23,7 +24,17 @@ import (
 // secretsData は `wharfy secrets --json`(schemas/secrets.json)。
 type secretsData struct {
 	Credentials []credentialNeed `json:"credentials"`
+	Tools       []toolNeed       `json:"tools"`
 	Actions     actionsGuide     `json:"actions"`
+}
+
+// toolNeed は wharfy がサブプロセスとして呼ぶ外部の道具 1 つと、いま在るか・runner への入れ方。
+// 資格情報と同じ表に並べる: どちらも「構成から一意に決まるのに、CI へ持っていくまで気づけない」もの。
+type toolNeed struct {
+	Bin     string `json:"bin"`
+	Purpose string `json:"purpose"`
+	Met     bool   `json:"met"` // いま PATH に在るか
+	Install string `json:"install"`
 }
 
 // credentialNeed は 1 つの env と、それを要るチャネル・充足状況・CI での出どころ。
@@ -125,11 +136,39 @@ func buildSecrets(cfg config.Config, in config.File) secretsData {
 	}
 	sort.Slice(needs, func(i, j int) bool { return needs[i].Env < needs[j].Env })
 
-	return secretsData{Credentials: needs, Actions: actionsFor(needs, perms, crossRepo)}
+	tools := buildTools(cfg)
+	return secretsData{Credentials: needs, Tools: tools, Actions: actionsFor(needs, tools, perms, crossRepo)}
+}
+
+// buildTools は構成から、要る外部の道具を引き当てる。
+//
+// goreleaser は Go 経路(ビルドを wharfy が行う)でだけ要る。持ち込み(prebuilt/bundle)は
+// wharfy 自前の archive/nfpm/buildx 経路なので通らない。docker は container を配るときだけ。
+func buildTools(cfg config.Config) []toolNeed {
+	byo := cfg.Prebuilt || cfg.Bundle
+	need := map[string]bool{
+		"goreleaser": !byo,
+		"docker":     config.HasChannel(cfg, "container"),
+	}
+	out := make([]toolNeed, 0, len(registry.ToolIDs))
+	for _, id := range registry.ToolIDs {
+		if !need[id] {
+			continue
+		}
+		t := registry.Tools[id]
+		out = append(out, toolNeed{Bin: t.Bin, Purpose: t.Purpose, Met: toolMet(t.Bin), Install: t.Install})
+	}
+	return out
+}
+
+// toolMet はその道具がいま PATH に在るか(手元では在るのに runner に無い、が事故の型)。
+var toolMet = func(bin string) bool {
+	_, err := exec.LookPath(bin)
+	return err == nil
 }
 
 // actionsFor は workflow に貼る permissions / env と、その理由の注記を組む。
-func actionsFor(needs []credentialNeed, perms map[string]bool, crossRepo map[string]string) actionsGuide {
+func actionsFor(needs []credentialNeed, tools []toolNeed, perms map[string]bool, crossRepo map[string]string) actionsGuide {
 	g := actionsGuide{Env: map[string]string{}}
 	for p := range perms {
 		g.Permissions = append(g.Permissions, p)
@@ -142,6 +181,12 @@ func actionsFor(needs []credentialNeed, perms map[string]bool, crossRepo map[str
 			continue
 		}
 		g.Env[n.Env] = "${{ secrets." + secretName(n.Env) + " }}"
+	}
+	// tag が版の唯一の真実である以上、浅いクローンでは何も始まらない。runner に道具を入れる話と
+	// 同じで、手元では絶対に踏まないので、CI の節で先に言う。
+	g.Notes = append(g.Notes, registry.CheckoutNote)
+	for _, t := range tools {
+		g.Notes = append(g.Notes, "the runner needs "+t.Bin+" on PATH: "+t.Install)
 	}
 	if len(crossRepo) > 0 {
 		g.Notes = append(g.Notes, "GITHUB_TOKEN must be a PAT (repo scope): "+crossRepoLine(crossRepo)+
@@ -199,18 +244,37 @@ func secretsMessage(d secretsData) string {
 			missing++
 		}
 	}
-	if len(d.Credentials) == 0 {
-		return "no credentials needed for the configured channels"
+	var head string
+	switch {
+	case len(d.Credentials) == 0:
+		head = "no credentials needed for the configured channels"
+	case missing == 0:
+		head = fmt.Sprintf("%d credential(s) needed; all resolvable here", len(d.Credentials))
+	default:
+		head = fmt.Sprintf("%d credential(s) needed; %d not set in this environment", len(d.Credentials), missing)
 	}
-	if missing == 0 {
-		return fmt.Sprintf("%d credential(s) needed; all resolvable here", len(d.Credentials))
+	// 道具は「この環境に在るか」が資格情報と同じ意味を持つ(手元に在っても runner には無い)。
+	var absent []string
+	for _, t := range d.Tools {
+		if !t.Met {
+			absent = append(absent, t.Bin)
+		}
 	}
-	return fmt.Sprintf("%d credential(s) needed; %d not set in this environment", len(d.Credentials), missing)
+	if len(absent) > 0 {
+		head += fmt.Sprintf("; %s not on PATH here", strings.Join(absent, ", "))
+	}
+	return head
 }
 
 // secretsNext は未登録のシークレットを登録する手(gh)を先に出し、次いで実際の配布へ繋ぐ。
 func secretsNext(d secretsData) []output.NextDo {
 	var next []output.NextDo
+	for _, t := range d.Tools {
+		if t.Met {
+			continue
+		}
+		next = append(next, output.NextDo{Reason: "install the tool wharfy shells out to: " + t.Bin, Do: t.Install})
+	}
 	for _, n := range d.Credentials {
 		if n.Register == "" {
 			continue
@@ -223,17 +287,30 @@ func secretsNext(d secretsData) []output.NextDo {
 
 // printSecretsHuman は表と、workflow へそのまま貼れる断片を出す。
 func printSecretsHuman(w io.Writer, d secretsData) {
-	if len(d.Credentials) == 0 {
+	if len(d.Credentials) == 0 && len(d.Tools) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "credentials your channels need (wharfy reads them from the environment):")
-	for _, n := range d.Credentials {
-		mark := "✗"
-		if n.Met {
-			mark = "✓"
+	if len(d.Credentials) > 0 {
+		fmt.Fprintln(w, "credentials your channels need (wharfy reads them from the environment):")
+		for _, n := range d.Credentials {
+			mark := "✗"
+			if n.Met {
+				mark = "✓"
+			}
+			fmt.Fprintf(w, "  %s %-24s %s\n", mark, n.Env, strings.Join(n.Channels, ", "))
+			fmt.Fprintf(w, "    %s\n", n.Purpose)
 		}
-		fmt.Fprintf(w, "  %s %-24s %s\n", mark, n.Env, strings.Join(n.Channels, ", "))
-		fmt.Fprintf(w, "    %s\n", n.Purpose)
+	}
+	if len(d.Tools) > 0 {
+		fmt.Fprintln(w, "\ntools wharfy shells out to (they must be on PATH wherever wharfy runs):")
+		for _, t := range d.Tools {
+			mark := "✗"
+			if t.Met {
+				mark = "✓"
+			}
+			fmt.Fprintf(w, "  %s %-24s %s\n", mark, t.Bin, t.Purpose)
+			fmt.Fprintf(w, "    %s\n", t.Install)
+		}
 	}
 
 	fmt.Fprintln(w, "\nin a GitHub Actions workflow:")

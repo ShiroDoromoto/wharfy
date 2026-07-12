@@ -279,11 +279,17 @@ from the environment. The same commands run on your laptop and in a GitHub Actio
 for open source, building what you distribute in public CI is the better default (the artifacts
 are auditable, cross-OS, and no signing key has to live on anyone's machine).
 
-Which credentials you need follows from your `channels:`, so wharfy works it out for you:
+What the runner needs follows from your `channels:`, so wharfy works it out for you:
 
 ```sh
-wharfy secrets          # what to register, and the permissions:/env: to paste
+wharfy secrets          # credentials to register, tools to install, and the permissions:/env: to paste
 ```
+
+It lists the tools too, not just the secrets. The Go build path shells out to **goreleaser**, and
+the `container` channel to **docker** — both are on your machine already, which is exactly why the
+first CI run is where you find out the runner has neither. BYO inputs (`prebuilt:` / `bundle:`)
+never call goreleaser at all. And because the git tag *is* the version, `actions/checkout` needs
+`fetch-depth: 0`: its default shallow clone carries no tags.
 
 One thing it will tell you that is easy to get wrong: the token GitHub Actions hands a workflow
 can only write to **that** repository. Channels that write elsewhere — `homebrew`/`cask` (your

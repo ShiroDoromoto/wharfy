@@ -39,7 +39,7 @@
     },
     {
       "name": "secrets",
-      "summary": "the credentials your channels need, and how to register them for CI",
+      "summary": "the credentials and tools your channels need, and how to set them up for CI",
       "next": [
         "publish"
       ],
@@ -61,6 +61,9 @@
       "next": [
         "sign",
         "release"
+      ],
+      "notes": [
+        "the Go build path shells out to goreleaser, so it must be on PATH — on a CI runner install it explicitly (wharfy secrets lists the tools your config needs); BYO inputs (prebuilt: / bundle:) never call it"
       ]
     },
     {

@@ -57,7 +57,7 @@ func TestSecretsDemandsPATForCrossRepoChannel(t *testing.T) {
 	if d.Actions.Env["GITHUB_TOKEN"] != "${{ secrets.WHARFY_GITHUB_TOKEN }}" {
 		t.Errorf("workflow should read the registered secret: %+v", d.Actions.Env)
 	}
-	if len(d.Actions.Notes) == 0 || !strings.Contains(d.Actions.Notes[0], "homebrew writes to your homebrew tap repo") {
+	if !hasNote(d.Actions.Notes, "homebrew writes to your homebrew tap repo") {
 		t.Errorf("should say why the builtin token is not enough: %+v", d.Actions.Notes)
 	}
 	if !hasNextDo(res, "gh secret set WHARFY_GITHUB_TOKEN") {
@@ -119,6 +119,59 @@ func TestSecretsJSONValidatesSchema(t *testing.T) {
 
 	res := runSecrets(context.Background(), mustLookup(t, "secrets"), nil)
 	validateAgainst(t, "https://wharfy.io/schemas/v1/secrets.json", res)
+}
+
+// Go 経路は goreleaser を要る。手元に在るせいで CI に持っていくまで気づけない類なので、
+// secrets が構成に照らして名指しし、runner への入れ方まで出す。
+func TestSecretsNamesTheToolsTheConfigNeeds(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [releases, container]\n")
+	chdir(t, root)
+	toolMetStub(t, map[string]bool{"goreleaser": false, "docker": true})
+
+	d := runSecrets(context.Background(), mustLookup(t, "secrets"), nil).Data.(secretsData)
+	if len(d.Tools) != 2 || d.Tools[0].Bin != "goreleaser" || d.Tools[1].Bin != "docker" {
+		t.Fatalf("go path + container needs goreleaser and docker: %+v", d.Tools)
+	}
+	if d.Tools[0].Met || !d.Tools[1].Met {
+		t.Errorf("met must reflect PATH: %+v", d.Tools)
+	}
+	if !hasNote(d.Actions.Notes, "the runner needs goreleaser on PATH") {
+		t.Errorf("the CI guide should say what to install on the runner: %+v", d.Actions.Notes)
+	}
+	if !hasNote(d.Actions.Notes, "fetch-depth: 0") {
+		t.Errorf("a shallow checkout carries no tag, and the tag is the version: %+v", d.Actions.Notes)
+	}
+}
+
+// 持ち込み(prebuilt)は wharfy 自前の経路なので goreleaser を通らない — 要らないものを要ると言わない。
+func TestSecretsOmitsGoreleaserForBYO(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [releases]\nprebuilt:\n  binaries:\n    - {os: linux, arch: amd64, path: dist/demo}\n")
+	chdir(t, root)
+	toolMetStub(t, map[string]bool{})
+
+	d := runSecrets(context.Background(), mustLookup(t, "secrets"), nil).Data.(secretsData)
+	if len(d.Tools) != 0 {
+		t.Errorf("BYO shells out to nothing: %+v", d.Tools)
+	}
+}
+
+// toolMetStub は PATH 探索を差し替える(runner の有無を再現する)。
+func toolMetStub(t *testing.T, present map[string]bool) {
+	t.Helper()
+	orig := toolMet
+	toolMet = func(bin string) bool { return present[bin] }
+	t.Cleanup(func() { toolMet = orig })
+}
+
+func hasNote(notes []string, want string) bool {
+	for _, n := range notes {
+		if strings.Contains(n, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasPermission(perms []string, want string) bool {
