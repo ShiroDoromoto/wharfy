@@ -72,6 +72,62 @@ var promptSecret = func(prompt string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// runAuthPrint は保存済みの資格情報を、**そのまま使える形で** stdout に出す(auth --print)。
+//
+// 「手元で wharfy が使っているのと同じ資格情報を CI にも渡したい」は自然な要求で、そのとき
+// 利用者は keychain から値を取り出そうとする。ところが OS keychain の中身は go-keyring の
+// 包み(`go-keyring-base64:<base64>`)で入っていることがあり、security コマンド等で素のまま取り出して
+// CI の secret に登録すると、無言で 401 になる —— トークンが違うのかアカウントが違うのかも分からない。
+// wharfy 自身が読むのと同じ経路(secret.Get)で解いて渡せば、包み方を知らずに済む:
+//
+//	wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN
+//
+// 値は stdout に**それだけ**を出し、体裁(envelope)は stderr へ逃がす。--json とは併用しない
+// ——機械可読の出力に載せると、それを読む agent の文脈に秘密が残る。
+func runAuthPrint(c registry.Command, args []string) output.Result {
+	if flagJSON {
+		res := output.New(c.Name, "a credential is never written to machine-readable output", false)
+		res.Errors = []output.Problem{{
+			Code:    output.ErrConfigInvalid,
+			Message: "--print cannot be combined with --json",
+			Hint:    "the value would land in the transcript of whatever agent reads the json; run it without --json and pipe stdout",
+		}}
+		res.Next = []output.NextDo{{Reason: "print the credential for a pipe", Do: "wharfy auth " + firstNonEmptyStr(argOrEmpty(args), "<kind>") + " --print"}}
+		return res
+	}
+	if len(args) == 0 {
+		res := output.New(c.Name, "specify which credential to print: "+strings.Join(sortedKinds(), ", "), false)
+		res.Errors = []output.Problem{{Code: output.ErrConfigInvalid, Message: "no kind given", Hint: "available: " + strings.Join(sortedKinds(), ", ")}}
+		res.Next = []output.NextDo{{Reason: "print the fury token (apt/rpm)", Do: "wharfy auth fury --print"}}
+		return res
+	}
+	kind, ok := tokenKinds[args[0]]
+	if !ok {
+		res := output.New(c.Name, "unknown credential kind: "+args[0], false)
+		res.Errors = []output.Problem{{Code: output.ErrConfigInvalid, Message: "unknown kind " + args[0], Hint: "available: " + strings.Join(sortedKinds(), ", ")}}
+		res.Next = []output.NextDo{{Reason: "use a known kind", Do: "wharfy auth fury --print"}}
+		return res
+	}
+	value, err := secret.Get(kind.KeyName)
+	if err != nil || value == "" {
+		res := output.New(c.Name, "no "+kind.Kind+" credential in the OS keychain", false)
+		res.Errors = []output.Problem{{Code: output.ErrTokenMissing, Message: "keychain has no " + kind.KeyName, Hint: "save it first (or export " + kind.EnvVar + " if you keep it elsewhere)"}}
+		res.Next = []output.NextDo{{Reason: "save the credential, then print it", Do: "wharfy auth " + kind.Kind}}
+		return res
+	}
+	fmt.Fprintln(os.Stdout, value) // パイプに渡すのは値だけ(体裁は stderr)
+	res := output.New(c.Name, "printed the "+kind.Kind+" credential to stdout ("+kind.EnvVar+")", true)
+	res.Next = []output.NextDo{{Reason: "register the same credential for CI", Do: "wharfy auth " + kind.Kind + " --print | gh secret set " + kind.EnvVar}}
+	return res
+}
+
+func argOrEmpty(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
+}
+
 // runAuth は資格情報(いまは fury トークン)を OS keychain に保存する。
 // 値は hidden prompt から読み、Result には種別だけ載せて値は決して出さない。
 func runAuth(_ context.Context, c registry.Command, args []string) output.Result {

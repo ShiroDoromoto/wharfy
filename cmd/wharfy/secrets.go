@@ -12,6 +12,7 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/registry"
+	"github.com/ShiroDoromoto/wharfy/internal/secret"
 )
 
 // secrets.go — 「CI で回すのに何を登録すればいいか」を wharfy 自身が語る(D-12)。
@@ -130,7 +131,7 @@ func buildSecrets(cfg config.Config, in config.File) secretsData {
 			n.Source = sourceBuiltin
 		}
 		if n.Source == sourceSecret {
-			n.Register = "gh secret set " + secretName(env)
+			n.Register = registerCommand(env)
 		}
 		needs = append(needs, n)
 	}
@@ -210,6 +211,23 @@ func crossRepoLine(crossRepo map[string]string) string {
 		parts = append(parts, n+" writes to "+crossRepo[n])
 	}
 	return strings.Join(parts, ", ")
+}
+
+// registerCommand は CI へ登録する 1 行。keychain に既に預けてある資格情報なら、そこから
+// そのまま渡す形で出す —— 利用者が keychain を自力で開けると、go-keyring の包み
+// (go-keyring-base64:…)ごと登録して無言の 401 を踏む。wharfy が読むのと同じ経路で渡せばそれが無い。
+func registerCommand(env string) string {
+	set := "gh secret set " + secretName(env)
+	for _, k := range sortedKinds() {
+		kind := tokenKinds[k]
+		if kind.EnvVar != env {
+			continue
+		}
+		if v, err := secret.Get(kind.KeyName); err == nil && v != "" {
+			return "wharfy auth " + kind.Kind + " --print | " + set
+		}
+	}
+	return set
 }
 
 // secretName は env 名から登録先シークレット名を決める。GITHUB_TOKEN だけは同名で登録できない

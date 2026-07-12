@@ -71,6 +71,12 @@ func Emit(r Result, asJSON bool) {
 	emitTo(os.Stdout, r, asJSON)
 }
 
+// EmitTo は出力先を選んで出す。値そのものを stdout に流すコマンド(auth --print)が、envelope を
+// stderr へ逃がすために使う —— パイプの向こうに受け渡すのは値だけで、体裁を混ぜない。
+func EmitTo(w io.Writer, r Result, asJSON bool) {
+	emitTo(w, r, asJSON)
+}
+
 func emitTo(w io.Writer, r Result, asJSON bool) {
 	if asJSON {
 		enc := json.NewEncoder(w)

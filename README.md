@@ -331,6 +331,17 @@ The upload token is **never written to `wharfy.yaml` or generated files**. Pass 
 `wharfy auth fury` — it prompts hidden (the value never reaches your shell history or an agent's
 transcript) and `publish` then loads it from the keychain when the env var is unset.
 
+To give CI the same credential, don't read the keychain yourself — what is stored there may be
+wrapped (`go-keyring-base64:…`), and registering that verbatim fails with a silent `401`. Pipe it
+out through wharfy, which unwraps it the same way it does when it publishes:
+
+```sh
+wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN
+```
+
+`--print` puts the value on stdout and nothing else, and refuses `--json` — a secret in
+machine-readable output ends up in the transcript of whatever agent reads it.
+
 ### Runtime dependencies
 
 If your binary shells out to another tool at runtime (the package manager installs it for you —

@@ -93,7 +93,9 @@ var Commands = []Command{
 	{Name: "agent", Summary: "print this capability map (read once, then drive)", Next: []string{"status"}},
 	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
 	{Name: "config", Summary: "show the resolved effective config", Next: []string{"build"}},
-	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}},
+	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}, Notes: []string{
+		"--print writes the stored credential to stdout in the form other tools take (the keychain may hold it wrapped), so the credential wharfy uses locally is the one CI gets: wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN. it refuses --json — a machine-readable secret ends up in an agent's transcript",
+	}},
 	{Name: "secrets", Summary: "the credentials and tools your channels need, and how to set them up for CI", Next: []string{"publish"}, Notes: []string{
 		"wharfy reads every credential from the environment, so the same commands run on a laptop and in a GitHub Actions workflow",
 		"the token GitHub Actions hands a workflow can only write to that repository: channels that write elsewhere (tap, bucket, gated forks) need a PAT registered as a secret",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -27,6 +28,8 @@ var (
 	// flagVerifyVersion は verify だけの局所フラグ(「この版が今も入るか」を名指しで確かめる)。
 	// グローバルにしないのは、`wharfy --version` が値を要求する見かけになるのを避けるため。
 	flagVerifyVersion string
+	// flagAuthPrint は auth だけの局所フラグ(保存済みの資格情報を、そのまま使える形で stdout へ)。
+	flagAuthPrint bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -70,6 +73,16 @@ func newCommand(c registry.Command) *cobra.Command {
 			if c.Name == "status" {
 				return runStatus(cmd.Context(), flagJSON)
 			}
+			// auth --print は値そのものを stdout に流すので、envelope は stderr へ逃がす
+			// (`wharfy auth fury --print | gh secret set …` のパイプに体裁を混ぜない)。
+			if c.Name == "auth" && flagAuthPrint {
+				res := runAuthPrint(c, args)
+				output.EmitTo(os.Stderr, res, false)
+				if !res.OK {
+					return errNotOK
+				}
+				return nil
+			}
 			res := dispatch(cmd.Context(), c, args)
 			output.Emit(res, flagJSON)
 			if !res.OK {
@@ -77,6 +90,9 @@ func newCommand(c registry.Command) *cobra.Command {
 			}
 			return nil
 		},
+	}
+	if c.Name == "auth" {
+		cmd.Flags().BoolVar(&flagAuthPrint, "print", false, "print the stored credential to stdout in usable form (e.g. wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN)")
 	}
 	if c.Name == "verify" {
 		cmd.Flags().StringVar(&flagVerifyVersion, "version", "", "the version to check on each channel (default: the version wharfy works out — record, latest release, or latest tag)")
