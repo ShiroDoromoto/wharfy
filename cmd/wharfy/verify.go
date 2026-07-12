@@ -51,9 +51,45 @@ type verifyCheck struct {
 	Message string `json:"message"`
 }
 
-// verifyData は verify の data ペイロード。
+// verifyData は verify の data ペイロード。version は「何を確かめたか」、version_source は
+// その版をどこから決めたか(利用者が結果を読むとき、基点が記録か実体かで意味が変わる)。
 type verifyData struct {
-	Checks []verifyCheck `json:"checks"`
+	Version       string        `json:"version,omitempty"`
+	VersionSource string        `json:"version_source,omitempty"`
+	Checks        []verifyCheck `json:"checks"`
+}
+
+// 版の出どころ(verifyData.VersionSource)。
+const (
+	verifySourceRequested = "requested" // --version で明示された
+	verifySourceRecord    = "record"    // .wharfy/state.json の publish 記録
+	verifySourceRelease   = "release"   // GitHub Release の最新版(＝実際に配ってあるもの)
+	verifySourceTag       = "tag"       // git の直近タグ
+)
+
+// verifyTarget は 1 チャネルを確かめるときの「期待」——どの版を、どこで、その版はどこから来たか。
+//
+// 以前は publish 記録(.wharfy/state.json)だけが基点だった。記録は生成物なので gitignore され、
+// CI の別ジョブにもまっさらな clone にも渡らない —— 結果、配った後に「今も入るか」を確かめようと
+// すると、ほぼ全チャネルが skipped になって何も確かめられなかった。基点は記録に限らない。
+type verifyTarget struct {
+	Version string
+	Target  string // 記録に残る書き先(設定で解決できないときのフォールバック)
+	Source  string
+}
+
+// expected は失敗メッセージで使う「期待の版と、その根拠」。
+func (t verifyTarget) expected() string {
+	switch t.Source {
+	case verifySourceRequested:
+		return t.Version + " (requested)"
+	case verifySourceRelease:
+		return t.Version + " (the latest github release)"
+	case verifySourceTag:
+		return t.Version + " (the latest git tag)"
+	default:
+		return t.Version + " (the published record)"
+	}
 }
 
 const (
@@ -113,43 +149,98 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		targets = []config.ResolvedChannel{sel}
 	}
 
+	// 記録が無いチャネルの基点(実体 → git のタグ)。要るときに 1 度だけ決める —— 記録が揃って
+	// いる通常の運転で、無用な問い合わせを増やさない。
+	var (
+		fallback verifyTarget
+		resolved bool
+	)
+	fallbackFor := func() verifyTarget {
+		if !resolved {
+			fallback, resolved = resolveFallbackVersion(ctx, root, cfg, st), true
+		}
+		return fallback
+	}
+
 	var outcomes []verifyOutcome
 	var unpublished []string
+	var used []verifyTarget
 	for _, ch := range targets {
-		// goinstall は何も push しないチャネルなので publish 記録を持たない。基準は git のタグ
-		// (status と同じ)。記録の有無で判定すると、正しく配れているのに未発行として飛ばしてしまう。
-		if ch.Name == "goinstall" {
-			outcomes = append(outcomes, verifyGoinstall(ctx, root, cfg, in))
-			continue
-		}
-		rec, published := publishedRecord(st, ch.Name)
-		if !published {
+		tgt := verifyTargetFor(st, ch, fallbackFor)
+		if tgt.Version == "" {
 			unpublished = append(unpublished, ch.Name)
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: nothing published on this channel yet"))
 			continue
 		}
+		used = append(used, tgt)
 		switch ch.Name {
+		case "goinstall":
+			outcomes = append(outcomes, verifyGoinstall(ctx, cfg, in, tgt))
 		case "homebrew":
-			oc, err := verifyHomebrew(ctx, cfg, ch, rec)
+			oc, err := verifyHomebrew(ctx, cfg, ch, tgt)
 			if err != nil {
 				return internalError(c, err)
 			}
 			outcomes = append(outcomes, oc)
 		case "releases":
-			oc, err := verifyReleases(ctx, ch, rec)
+			oc, err := verifyReleases(ctx, ch, tgt)
 			if err != nil {
 				return internalError(c, err)
 			}
 			outcomes = append(outcomes, oc)
 		case "script":
-			outcomes = append(outcomes, verifyScript(ctx, cfg, in, rec))
+			outcomes = append(outcomes, verifyScript(ctx, cfg, in, tgt))
 		case "apt", "rpm":
-			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, rec))
+			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, tgt))
 		default:
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: verify does not cover this channel yet"))
 		}
 	}
-	return verifyResult(c, outcomes, unpublished)
+	return verifyResult(c, outcomes, unpublished, used)
+}
+
+// verifyTargetFor は 1 チャネルの期待(版・書き先・その出どころ)を決める。
+//
+//	--version が在ればそれ(利用者が「確かめたい版」を名指しした)。
+//	無ければそのチャネルの publish 記録。
+//	記録も無ければ実体から決めた fallback —— ここが「まっさらな clone でも確かめられる」の要。
+func verifyTargetFor(st *state.State, ch config.ResolvedChannel, fallback func() verifyTarget) verifyTarget {
+	rec, published := publishedRecord(st, ch.Name)
+	if flagVerifyVersion != "" {
+		return verifyTarget{Version: strings.TrimPrefix(flagVerifyVersion, "v"), Target: rec.Target, Source: verifySourceRequested}
+	}
+	// goinstall は何も push しないチャネルなので publish 記録を持たない(基点は必ず fallback)。
+	if published && ch.Name != "goinstall" {
+		return verifyTarget{Version: rec.Version, Target: rec.Target, Source: verifySourceRecord}
+	}
+	return fallback()
+}
+
+// resolveFallbackVersion は publish 記録が無いときに「何を確かめるか」を実体から決める。
+//
+// 一番強い根拠は GitHub Release の最新版 —— 実際に配ってあるものそのもので、ローカルに何も
+// 要らない。取れなければ git の直近タグ(HEAD がタグより進んでいても、配ったのは直近のタグ)、
+// それも無ければ wharfy が最後に見たタグ。全部空なら未発行として skip する。
+func resolveFallbackVersion(ctx context.Context, root string, cfg config.Config, st *state.State) verifyTarget {
+	if owner, repo, ok := splitOwnerName(cfg.Github); ok {
+		if v, found, err := newReleasesProbe(owner, repo).Latest(ctx); err == nil && found {
+			return verifyTarget{Version: v, Source: verifySourceRelease}
+		}
+	}
+	if tag := firstNonEmptyStr(gitCurrentTag(root), gitLatestTag(root), st.LastTag); tag != "" {
+		return verifyTarget{Version: strings.TrimPrefix(tag, "v"), Source: verifySourceTag}
+	}
+	return verifyTarget{}
+}
+
+// gitLatestTag は直近のタグを返す(HEAD がタグより進んでいても「配ったもの」に当たれる)。
+// 浅い clone にはタグが来ないので空になる —— そのときは Release 側の実体が基点になる。
+var gitLatestTag = func(root string) string {
+	out, err := exec.Command("git", "-C", root, "describe", "--tags", "--abbrev=0").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // selectChannel は名指しされたチャネルを channels: から引く。
@@ -196,7 +287,8 @@ func publishedRecord(st *state.State, name string) (state.PublishRecord, bool) {
 //	partial は「走ったが最後まで踏めなかった」なので、ok を落とさず対象ゼロにも数えない。
 //
 // unpublished は channels: にあるが未発行のチャネル(検証対象ゼロのときの次の一手に使う)。
-func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []string) output.Result {
+// used は各チャネルが確かめた期待(版と出どころ)。全部が同じ版なら data に載せる。
+func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []string, used []verifyTarget) output.Result {
 	var checks []verifyCheck
 	var problems []output.Problem
 	var warnings []output.Warning
@@ -223,7 +315,11 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 
 	nothingToVerify := !failed && exercised == 0
 	res := output.New(c.Name, verifyMessage(checks, nothingToVerify), !failed && !nothingToVerify)
-	res.Data = verifyData{Checks: checks}
+	data := verifyData{Checks: checks}
+	if v, src, uniform := uniformTarget(used); uniform {
+		data.Version, data.VersionSource = v, src
+	}
+	res.Data = data
 	res.Warnings = warnings
 	res.Errors = problems
 	switch {
@@ -240,6 +336,20 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 		res.Next = verifiedNext(checks)
 	}
 	return res
+}
+
+// uniformTarget は確かめた期待が全チャネルで同じ版かを見る。版がばらけている(記録が
+// チャネルごとに違う)なら 1 つの版を名乗れないので載せない —— 嘘をつくより黙る。
+func uniformTarget(used []verifyTarget) (version, source string, uniform bool) {
+	if len(used) == 0 {
+		return "", "", false
+	}
+	for _, t := range used[1:] {
+		if t.Version != used[0].Version || t.Source != used[0].Source {
+			return "", "", false
+		}
+	}
+	return used[0].Version, used[0].Source, true
 }
 
 // verifiedNext は緑のときの次の一手。probe で止まったチャネルが残っているなら、まず実インストール
@@ -295,8 +405,8 @@ func verifyMessage(checks []verifyCheck, nothingToVerify bool) string {
 // verifyHomebrew は自前 tap の formula が在り、版が記録と一致するかを照合する。
 // tap は設定の解決値を先に採る(記録は監査用のフォールバック・D-4)。どちらでも解決できないのは
 // 設定の壊れ(検証の失敗ではない)なので error で返す。
-func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
-	tap := firstNonEmptyStr(ch.Target, rec.Target)
+func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedChannel, tgt verifyTarget) (verifyOutcome, error) {
+	tap := firstNonEmptyStr(ch.Target, tgt.Target)
 	owner, repo, ok := splitOwnerName(tap)
 	if !ok {
 		return verifyOutcome{}, errString("homebrew target is unresolved: " + tap)
@@ -313,15 +423,15 @@ func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedCh
 	switch {
 	case !rs.Found:
 		return verifyFailure("homebrew",
-			"homebrew recorded "+rec.Version+" but no formula at "+tap,
-			"published formula not found on the tap",
+			"homebrew: no formula at "+tap+" for the expected "+tgt.expected(),
+			"the expected version is not on the tap",
 			"re-publish to restore the formula",
 			"", "wharfy publish homebrew --yes"), nil
-	case rs.Version != rec.Version:
+	case rs.Version != tgt.Version:
 		return verifyFailure("homebrew",
-			"tap has "+rs.Version+", expected "+rec.Version,
-			"tap formula version does not match the published record",
-			"re-publish to align the tap with the recorded version",
+			"tap has "+rs.Version+", expected "+tgt.expected(),
+			"the tap formula is not the expected version",
+			"re-publish to align the tap with the expected version",
 			"", "wharfy publish homebrew --yes"), nil
 	default:
 		return verifySuccess("homebrew", "homebrew "+rs.Version+" verified: formula present at "+tap+", version matches record"), nil
@@ -341,44 +451,44 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 // 既定は資産本体を落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。名前が在っても
 // 中身が壊れていることはある(アップロードが途中で切れた・後から差し替えられた)。--install なら
 // 資産を落として checksums マニフェストの sha256 と突き合わせ、そこまで見る。
-func verifyReleases(ctx context.Context, ch config.ResolvedChannel, rec state.PublishRecord) (verifyOutcome, error) {
-	repo := firstNonEmptyStr(ch.Target, rec.Target)
+func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) (verifyOutcome, error) {
+	repo := firstNonEmptyStr(ch.Target, tgt.Target)
 	owner, name, ok := splitOwnerName(repo)
 	if !ok {
 		return verifyOutcome{}, errString("releases target is unresolved: " + repo)
 	}
 	probe := newReleasesProbe(owner, name)
-	audit, perr := probe.Audit(ctx, rec.Version)
+	audit, perr := probe.Audit(ctx, tgt.Version)
 	if perr != nil {
 		return probeFailedOutcome("releases", perr), nil
 	}
 	switch {
 	case !audit.Found:
 		return verifyFailure("releases",
-			"releases recorded "+rec.Version+" but "+repo+" has no release tagged v"+rec.Version,
-			"published release not found",
+			"releases: "+repo+" has no release tagged v"+tgt.Version+" (expected "+tgt.expected()+")",
+			"the expected release does not exist",
 			"re-run release to cut the tag and upload its assets",
 			"", "wharfy release --yes"), nil
 	case len(audit.Manifests) == 0:
 		return verifySkip("releases",
-			"releases skipped: v"+rec.Version+" carries neither "+channel.ManifestLatestJSON+
+			"releases skipped: v"+tgt.Version+" carries neither "+channel.ManifestLatestJSON+
 				" nor a *_"+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
-	case audit.Version != "" && audit.Version != rec.Version:
+	case audit.Version != "" && audit.Version != tgt.Version:
 		return verifyFailure("releases",
-			channel.ManifestLatestJSON+" on v"+rec.Version+" says "+audit.Version+", expected "+rec.Version,
+			channel.ManifestLatestJSON+" on v"+tgt.Version+" says "+audit.Version+", expected "+tgt.Version,
 			"the release manifest names a different version than the published record",
 			"re-run release so the release and its "+channel.ManifestLatestJSON+" agree",
 			"", "wharfy release --yes"), nil
 	case len(audit.Missing) > 0:
 		return verifyFailure("releases",
-			"releases "+rec.Version+" is missing "+strconv.Itoa(len(audit.Missing))+" of "+
+			"releases "+tgt.Version+" is missing "+strconv.Itoa(len(audit.Missing))+" of "+
 				strconv.Itoa(len(audit.Expected))+" assets listed in "+strings.Join(audit.Manifests, " and "),
 			"assets listed in the release manifest are not on the release",
 			"re-run release to upload the missing assets; users following the manifest hit a 404",
 			strings.Join(audit.Missing, "\n"), "wharfy release --yes"), nil
 	}
 
-	present := "releases " + rec.Version + ": all " + strconv.Itoa(len(audit.Expected)) +
+	present := "releases " + tgt.Version + ": all " + strconv.Itoa(len(audit.Expected)) +
 		" assets listed in " + strings.Join(audit.Manifests, " and ") + " exist on the release at " + repo
 	if !flagInstall {
 		return verifyProbedOnly("releases", present+"; the assets were not downloaded, so their contents are unchecked"), nil
@@ -431,7 +541,7 @@ func mismatchDetail(bad []channel.ChecksumMismatch) string {
 // 走っているホストの OS によらず**両方**を照合する ——さもなければ Linux の CI で verify を回す
 // 配布者は、install.ps1 が release から欠けても、古い版を入れる本文でも、緑を受け取る。
 // 実際に走らせる(--install)のは、このホストの利用者が踏む一方だけ ——Windows なら install.ps1。
-func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
+func verifyScript(ctx context.Context, cfg config.Config, in config.File, tgt verifyTarget) verifyOutcome {
 	url := scriptProbeURL
 	if url == "" {
 		url = config.InstallURL(cfg)
@@ -439,12 +549,12 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 	if url == "" {
 		return verifySkip("script", "script skipped: the install.sh url is unresolved (set github: owner/repo or script.base_url)")
 	}
-	version, bad, ok := probeInstaller(ctx, url, config.InstallScriptName, rec)
+	version, bad, ok := probeInstaller(ctx, url, config.InstallScriptName, tgt)
 	if !ok {
 		return bad
 	}
 	ps1URL := siblingURL(url, config.InstallPS1Name)
-	if _, bad, ok := probeInstaller(ctx, ps1URL, config.InstallPS1Name, rec); !ok {
+	if _, bad, ok := probeInstaller(ctx, ps1URL, config.InstallPS1Name, tgt); !ok {
 		return bad
 	}
 	if !flagInstall {
@@ -471,21 +581,21 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, rec st
 //
 // 版の書き場所は install.sh と install.ps1 で違う。name がそれを決め、読み手を選ぶ ——書式を
 // 取り違えると版は空文字になり、記録と一致しないので failed に出る(黙って緑にはならない)。
-func probeInstaller(ctx context.Context, url, name string, rec state.PublishRecord) (version string, bad verifyOutcome, ok bool) {
+func probeInstaller(ctx context.Context, url, name string, tgt verifyTarget) (version string, bad verifyOutcome, ok bool) {
 	rs, perr := (&channel.Script{InstallURL: url, PS1: name == config.InstallPS1Name}).Probe(ctx)
 	switch {
 	case perr != nil:
 		return "", probeFailedOutcome("script", perr), false
 	case !rs.Found:
 		return "", verifyFailure("script",
-			"script recorded "+rec.Version+" but no "+name+" at "+url,
+			"script: no "+name+" at "+url+" for the expected "+tgt.expected(),
 			"published "+name+" not found",
 			"re-run release to upload "+name+" to the release",
 			"", "wharfy release --yes"), false
-	case rs.Version != rec.Version:
+	case rs.Version != tgt.Version:
 		return "", verifyFailure("script",
-			name+" at "+url+" installs "+rs.Version+", expected "+rec.Version,
-			"the published "+name+" installs a different version than the published record",
+			name+" at "+url+" installs "+rs.Version+", expected "+tgt.expected(),
+			"the published "+name+" installs a different version than expected",
 			"re-run release so the release and its "+name+" agree",
 			"", "wharfy release --yes"), false
 	}
@@ -494,20 +604,18 @@ func probeInstaller(ctx context.Context, url, name string, rec state.PublishReco
 
 // verifyGoinstall は `go install` が通るかを確かめる。
 //
-// 発行物を push しないチャネルなので publish 記録が無い。基準は git の現タグで、module proxy に
-// その版が在るかを照合する(既定)。--install なら一時 GOBIN へ実際に go install し、起動まで見る。
+// 発行物を push しないチャネルなので publish 記録が無い。基準は他のチャネルと同じ「確かめる版」で、
+// module proxy にその版が在るかを照合する(既定)。--install なら一時 GOBIN へ実際に go install し、
+// 起動まで見る。
 //
 // 版の一致は判定に使わない。go install は wharfy の ldflags を通さないので、版を注入している CLI は
 // dev と名乗る ——一致で判定すると偽陰性になる。
-func verifyGoinstall(ctx context.Context, root string, cfg config.Config, in config.File) verifyOutcome {
+func verifyGoinstall(ctx context.Context, cfg config.Config, in config.File, tgt verifyTarget) verifyOutcome {
 	mod := channelTargetByName(cfg, "goinstall")
 	if mod == "" {
 		return verifySkip("goinstall", "goinstall skipped: the module path is unresolved (needs a go.mod)")
 	}
-	tag := gitCurrentTag(root)
-	if tag == "" {
-		return verifyNotRun("goinstall", "goinstall skipped: no tag; `go install` resolves no version")
-	}
+	tag := "v" + tgt.Version // module proxy は v 付きのタグで引く
 	path := joinModuleMain(mod, cfg.Main)
 	rs, perr := (&channel.GoInstall{Module: mod, InstallPath: path, Version: tag, Proxy: goinstallProxy}).Probe(ctx)
 	if perr != nil {
@@ -545,9 +653,9 @@ func verifyGoinstall(ctx context.Context, root string, cfg config.Config, in con
 //
 // 2 が無いと、依存不足やパス誤りのパッケージをアップロード成功のまま配ってしまう。だが 2 はイメージ
 // の pull と install で数分かかるので、既定では踏まない(D-4: verify の既定は probe)。
-func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, rec state.PublishRecord) verifyOutcome {
+func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, tgt verifyTarget) verifyOutcome {
 	name := ch.Name
-	repo := firstNonEmptyStr(ch.Target, rec.Target)
+	repo := firstNonEmptyStr(ch.Target, tgt.Target)
 	if repo == "" {
 		return verifySkip(name, name+" skipped: repo is unresolved in the config")
 	}
@@ -560,15 +668,15 @@ func verifyLinuxRepo(ctx context.Context, ch config.ResolvedChannel, cfg config.
 	switch {
 	case !rs.Found:
 		return verifyFailure(name,
-			name+" recorded "+rec.Version+" but no package at "+repo,
+			name+": no package at "+repo+" for the expected "+tgt.expected(),
 			"published package not found in the repo",
 			"re-publish to restore the package",
 			"", "wharfy publish "+name+" --yes")
-	case rs.Version != rec.Version:
+	case rs.Version != tgt.Version:
 		return verifyFailure(name,
-			name+" repo has "+rs.Version+", expected "+rec.Version,
-			"repo package version does not match the published record",
-			"re-publish to align the repo with the recorded version",
+			name+" repo has "+rs.Version+", expected "+tgt.expected(),
+			"the repo package is not the expected version",
+			"re-publish to align the repo with the expected version",
 			"", "wharfy publish "+name+" --yes")
 	}
 

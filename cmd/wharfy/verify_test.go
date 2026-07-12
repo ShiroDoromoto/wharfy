@@ -539,6 +539,8 @@ func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httpte
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/repos/acme/demo/releases/latest":
+			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": tag})
 		case r.URL.Path == "/repos/acme/demo/releases/tags/"+tag:
 			list := make([]map[string]string, 0, len(assets))
 			for name := range assets {
@@ -591,6 +593,53 @@ func latestJSON(version string, names ...string) string {
 
 // 既定(--install 無し)は資産名の実在照合まで。名前が揃っても中身は見ていないので verified とは
 // 言わず probe で止める(D-4)。
+// まっさらな clone(.wharfy が無い＝publish 記録が無い)でも、配った実体から版を決めて確かめる。
+// 記録は生成物で gitignore されるので、別ジョブ・別 workflow には渡らない —— そこで全部 skipped に
+// 落ちていたら「配ったものが今も入るか」を後から確かめる手段が無い。
+func TestVerifyWithoutRecordFallsBackToTheLatestRelease(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [releases]\ngithub: acme/demo\n") // 記録を書かない
+	chdir(t, root)
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the released version should be verifiable without any local record: %+v", res)
+	}
+	d := res.Data.(verifyData)
+	if d.Version != "1.2.0" || d.VersionSource != verifySourceRelease {
+		t.Fatalf("the basis should be the latest release, and it should say so: %+v", d)
+	}
+	if len(d.Checks) != 1 || d.Checks[0].Status == verifyStatusSkipped {
+		t.Fatalf("no record must not mean nothing to verify: %+v", d.Checks)
+	}
+}
+
+// --version は「この版が今も入るか」を名指しで確かめる(記録より強い)。
+func TestVerifyVersionFlagOverridesTheRecord(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.0.0", map[string]string{
+		"latest.json":       latestJSON("1.0.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.2.0")) // 記録は 1.2.0
+	swapReleasesProbe(t, srv.URL)
+	flagVerifyVersion = "v1.0.0"
+	t.Cleanup(func() { flagVerifyVersion = "" })
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the requested version is published, so it should verify: %+v", res)
+	}
+	d := res.Data.(verifyData)
+	if d.Version != "1.0.0" || d.VersionSource != verifySourceRequested {
+		t.Fatalf("--version must win over the record: %+v", d)
+	}
+}
+
 func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
 	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
 		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),

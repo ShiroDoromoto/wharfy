@@ -105,6 +105,48 @@ func (p *ReleasesProbe) api() string {
 	return p.API
 }
 
+// Latest は「いま配ってある最新版」を Release 側から引く(tag_name の v を落とした版)。
+//
+// verify の基点。ローカルの記録(.wharfy/state.json)は生成物ゆえ gitignore され、別ジョブにも
+// まっさらな clone にも持ち越されない。記録が無いからといって「確かめられません」と返していたら、
+// 配った後に「今も入るか」を確かめる手段が無くなる —— 実体を見に行けばよい。
+// Release が 1 つも無ければ found=false(エラーではない)。
+func (p *ReleasesProbe) Latest(ctx context.Context) (version string, found bool, err error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", p.api(), p.Owner, p.Repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, err
+	}
+	if p.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+p.Token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := p.client().Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var rel struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.Unmarshal(body, &rel); err != nil {
+			return "", false, err
+		}
+		tag := strings.TrimSpace(rel.TagName)
+		if tag == "" {
+			return "", false, nil
+		}
+		return strings.TrimPrefix(tag, "v"), true, nil
+	case http.StatusNotFound:
+		return "", false, nil // Release がまだ 1 つも無い
+	default:
+		return "", false, fmt.Errorf("github get latest release: %s: %s", resp.Status, snippet(body))
+	}
+}
+
 // Audit は v<version> の Release を引き、マニフェストが載せる資産がすべて実在するかを確かめる。
 // Release ごと不在なら Found=false(エラーではない)。マニフェストが無ければ Manifests が空。
 func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit, error) {

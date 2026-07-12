@@ -24,6 +24,9 @@ var (
 	flagInstall    bool
 	flagAckReview  bool
 	flagAllowStale bool
+	// flagVerifyVersion は verify だけの局所フラグ(「この版が今も入るか」を名指しで確かめる)。
+	// グローバルにしないのは、`wharfy --version` が値を要求する見かけになるのを避けるため。
+	flagVerifyVersion string
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -56,7 +59,7 @@ func newCommand(c registry.Command) *cobra.Command {
 	if c.Args != "" {
 		use += " " + c.Args
 	}
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   use,
 		Short: c.Summary,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -75,6 +78,10 @@ func newCommand(c registry.Command) *cobra.Command {
 			return nil
 		},
 	}
+	if c.Name == "verify" {
+		cmd.Flags().StringVar(&flagVerifyVersion, "version", "", "the version to check on each channel (default: the version wharfy works out — record, latest release, or latest tag)")
+	}
+	return cmd
 }
 
 // nextFromSpec は registry の既定 next 名を、そのまま実行できる NextDo に展開する。

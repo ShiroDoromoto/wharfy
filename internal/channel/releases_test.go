@@ -274,3 +274,34 @@ func TestVerifyChecksumsWithoutChecksumsManifest(t *testing.T) {
 		t.Errorf("nothing to compare = no mismatch, no error: bad=%+v err=%v", bad, err)
 	}
 }
+
+// Latest は Release 側から「いま配ってある最新版」を引く(verify がローカルの記録なしで動く基点)。
+func TestReleasesProbeLatest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/demo/releases/latest" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": "v1.4.0"})
+	}))
+	defer srv.Close()
+
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	v, found, err := p.Latest(context.Background())
+	if err != nil || !found || v != "1.4.0" {
+		t.Fatalf("latest release should come back without the v: %q %v %v", v, found, err)
+	}
+}
+
+// Release が 1 つも無いのはエラーではない(found=false)。verify はそこで次の基点へ落ちる。
+func TestReleasesProbeLatestNoRelease(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	p := &ReleasesProbe{Owner: "acme", Repo: "demo", API: srv.URL}
+	if _, found, err := p.Latest(context.Background()); err != nil || found {
+		t.Fatalf("no release at all must not be an error: found=%v err=%v", found, err)
+	}
+}

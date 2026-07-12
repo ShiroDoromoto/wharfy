@@ -88,6 +88,12 @@ died halfway can just be run again — you never have to delete the release by h
 decides the scope, not the publish history in `state.json` (a channel you dropped from the config
 is never verified, and its old record no longer makes `verify` green).
 
+It needs nothing local to run. Which version it checks comes from the publish record when there is
+one, and otherwise from the channels themselves: the latest GitHub release, or failing that the
+latest git tag. So a bare clone — a separate CI job, a scheduled workflow, your laptop a month
+later — can still ask *does what we shipped still install?*, which is the question you actually want
+to keep asking. `wharfy verify --version 0.4.1` names the version instead.
+
 By default it installs nothing: it probes each channel over the network, so you can run it on every
 CI build. For `homebrew` it reads the formula off the tap and matches the version; for `releases` it
 checks that every asset listed in the release's own manifest (`latest.json`, plus the checksums file
