@@ -114,3 +114,55 @@ func asUnavailable(err error, target **UnavailableError) bool {
 	}
 	return false
 }
+
+// RegistryHost: 最初のセグメントがホストらしければそれ、でなければ Docker Hub の暗黙参照。
+func TestRegistryHost(t *testing.T) {
+	for image, want := range map[string]string{
+		"ghcr.io/acme/demo":        "ghcr.io",
+		"localhost:5000/acme/demo": "localhost:5000",
+		"acme/demo":                "docker.io",
+		"demo":                     "docker.io",
+	} {
+		if got := RegistryHost(image); got != want {
+			t.Errorf("RegistryHost(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+// Login はトークンを stdin に流す(argv に載せない)。
+func TestRegistryLoginPassesTokenOnStdin(t *testing.T) {
+	var gotStdin, gotArgs string
+	l := &RegistryLogin{
+		Bin:      "docker",
+		LookPath: func(string) (string, error) { return "/usr/bin/docker", nil },
+		Run: func(_ context.Context, stdin, _ string, args ...string) ([]byte, error) {
+			gotStdin, gotArgs = stdin, strings.Join(args, " ")
+			return nil, nil
+		},
+	}
+	if err := l.Login(context.Background(), "ghcr.io", "acme", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if gotStdin != "secret" {
+		t.Errorf("token should go to stdin: %q", gotStdin)
+	}
+	if gotArgs != "login ghcr.io -u acme --password-stdin" {
+		t.Errorf("unexpected argv: %q", gotArgs)
+	}
+}
+
+// トークンが無ければ何もしない(既存の資格情報に任せる経路を壊さない)。
+func TestRegistryLoginSkipsWithoutToken(t *testing.T) {
+	called := false
+	l := &RegistryLogin{
+		Bin:      "docker",
+		LookPath: func(string) (string, error) { return "/usr/bin/docker", nil },
+		Run:      func(context.Context, string, string, ...string) ([]byte, error) { called = true; return nil, nil },
+	}
+	if err := l.Login(context.Background(), "ghcr.io", "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("no token → no docker login")
+	}
+}

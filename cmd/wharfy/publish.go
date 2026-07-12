@@ -45,6 +45,8 @@ var (
 	}
 	// newPrebuiltContainerizer は BYO-binary の buildx コンテナ生成(依頼① #3・テストで差し替え)。
 	newPrebuiltContainerizer = func() *build.PrebuiltContainerizer { return build.NewPrebuiltContainerizer() }
+	// newRegistryLogin は push 前の docker login(テストで差し替え)。
+	newRegistryLogin = func() *build.RegistryLogin { return build.NewRegistryLogin() }
 	// uploadPackage は hosted repo へ deb/rpm を上げる(テストで差し替え)。
 	uploadPackage = httpUploadPackage
 	// dockerAvailable は docker CLI の有無(container の前提・テストで差し替え)。
@@ -326,6 +328,13 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	configPath, err := writeGeneratedConfig(root, cfg, in, version)
 	if err != nil {
 		return internalError(c, err)
+	}
+	// image を push するなら、その前にレジストリへログインする(単発の publish container と同じ)。
+	// goreleaser の docker pipe も docker の資格情報に乗るので、ここが両経路の合流点になる。
+	if !skipDocker {
+		if lerr := loginToImageRegistry(ctx, cfg); lerr != nil {
+			return buildErrorResult(c, lerr)
+		}
 	}
 	// release が済んでいれば(同 version)再アップロードしない(c2)。途中失敗からの再開で高コストな
 	// release を繰り返さない土台。無ければ 1 回だけ走らせて記録する。
@@ -1168,9 +1177,27 @@ func publishHomebrewCore(ctx context.Context, c registry.Command, root string, c
 	return res
 }
 
+// ghcrHost は GITHUB_TOKEN で開くレジストリ。既定のイメージ名もここを指す(config/resolve.go)。
+const ghcrHost = "ghcr.io"
+
+// loginToImageRegistry は push 先レジストリへログインする(push の手前で必ず通る)。
+// CI の docker には資格情報が無いのが普通で、トークンを渡しただけでは push が 401 で落ちていた
+// ——要件は GITHUB_TOKEN を「要る」と言うのに、認証には誰も使っていなかった。ここを wharfy が
+// 担うことで「シークレットを登録すれば動く」が本当になる。
+// ghcr 以外のレジストリは GITHUB_TOKEN では開かないので、手元/CI 側の資格情報に任せる(no-op)。
+func loginToImageRegistry(ctx context.Context, cfg config.Config) error {
+	image := channelTargetByName(cfg, "container")
+	if image == "" || build.RegistryHost(image) != ghcrHost {
+		return nil
+	}
+	owner, _, _ := splitOwnerName(cfg.Github)
+	return newRegistryLogin().Login(ctx, ghcrHost, owner, os.Getenv("GITHUB_TOKEN"))
+}
+
 // publishContainer は container チャネル(ghcr OCI・マルチアーキ)。goreleaser の
 // docker pipe で per-arch イメージをビルドし ghcr へ push、manifest list を作る。
-// docker デーモン＋ghcr 認証(GITHUB_TOKEN packages:write)が要る。書く前に計画を見せる。
+// docker デーモンが要る。ghcr へのログインは wharfy が GITHUB_TOKEN(packages:write)で行う。
+// 書く前に計画を見せる。
 func publishContainer(ctx context.Context, c registry.Command, root string, cfg config.Config, in config.File, version string, tagMissing bool) output.Result {
 	image := channelTargetByName(cfg, "container")
 	if image == "" {
@@ -1209,6 +1236,10 @@ func publishContainer(ctx context.Context, c registry.Command, root string, cfg 
 		res.Errors = []output.Problem{{Code: output.ErrBuilderUnavailable, Message: "docker CLI not found", Hint: "install Docker (with buildx) and start the daemon"}}
 		res.Next = []output.NextDo{{Reason: "install docker then retry", Do: "wharfy publish container --yes"}}
 		return res
+	}
+
+	if lerr := loginToImageRegistry(ctx, cfg); lerr != nil {
+		return buildErrorResult(c, lerr)
 	}
 
 	// BYO-binary(依頼① #3): buildx で持ち込みバイナリからマルチアーキ OCI を build+push。

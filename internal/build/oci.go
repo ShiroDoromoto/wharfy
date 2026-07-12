@@ -8,7 +8,8 @@ package build
 // 単一 Dockerfile を書き、`buildx build --platform linux/amd64,linux/arm64 --push` で
 // マニフェストリスト(:version と :latest)を一度に作る。
 //
-// 前提: docker が対象レジストリ(ghcr 等)に認証済みであること(GoReleaser の docker pipe と同じ)。
+// レジストリ認証は RegistryLogin が受け持つ(push の前に docker login を打つ)。GoReleaser の
+// docker pipe も docker の資格情報に乗るので、どちらの経路でも同じログインが効く。
 
 import (
 	"context"
@@ -19,6 +20,56 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// StdinRunner は stdin を流せるコマンド実行(--password-stdin 用・テストで差し替え)。
+// Runner と別なのは、トークンを argv に載せない(ps に出さない)ため。
+type StdinRunner func(ctx context.Context, stdin, name string, args ...string) ([]byte, error)
+
+// RegistryLogin は push 先レジストリへの docker login。CI ではトークンを渡すだけで通るように、
+// wharfy 自身がログインする(手元の docker が既に認証済みでも、渡されたトークンで上書きする
+// ——利用者が wharfy に渡した資格情報こそが、wharfy の使うべき資格情報)。
+type RegistryLogin struct {
+	Bin      string // 既定 "docker"
+	LookPath func(string) (string, error)
+	Run      StdinRunner
+}
+
+// NewRegistryLogin は本番用(exec ベース)を差した実体を返す。
+func NewRegistryLogin() *RegistryLogin {
+	return &RegistryLogin{Bin: "docker", LookPath: exec.LookPath, Run: execRunStdin}
+}
+
+// Login は host に username/token でログインする。token が空なら何もしない(認証を要らない
+// レジストリや、既存の資格情報に任せる経路を壊さないため)。
+func (l *RegistryLogin) Login(ctx context.Context, host, username, token string) error {
+	if token == "" {
+		return nil
+	}
+	bin := l.Bin
+	if bin == "" {
+		bin = "docker"
+	}
+	if l.LookPath != nil {
+		if _, err := l.LookPath(bin); err != nil {
+			return &UnavailableError{Bin: bin, Err: err}
+		}
+	}
+	out, err := l.Run(ctx, token, bin, "login", host, "-u", username, "--password-stdin")
+	if err != nil {
+		return &FailedError{Err: fmt.Errorf("docker login %s: %w", host, err), Output: tail(out, 2000)}
+	}
+	return nil
+}
+
+// RegistryHost は image 参照("ghcr.io/owner/name" 等)からレジストリのホストを取り出す。
+// ホストらしさは最初のセグメントに "." か ":" が在ることで判る(無ければ Docker Hub の暗黙参照)。
+func RegistryHost(image string) string {
+	first, _, ok := strings.Cut(image, "/")
+	if !ok || !strings.ContainsAny(first, ".:") {
+		return "docker.io"
+	}
+	return first
+}
 
 // PrebuiltContainerizer は docker buildx で BYO の OCI イメージを作る(末端差し替え)。
 type PrebuiltContainerizer struct {

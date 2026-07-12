@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -32,6 +33,31 @@ func swapDockerAvailable(v bool) func() {
 	return func() { dockerAvailable = prev }
 }
 
+// loginRec は docker login の呼ばれ方を記録する(実 docker を叩かせない)。
+type loginRec struct {
+	called           bool
+	host, user, argv string
+	stdin            string
+}
+
+func swapRegistryLogin(rec *loginRec, err error) func() {
+	prev := newRegistryLogin
+	newRegistryLogin = func() *build.RegistryLogin {
+		return &build.RegistryLogin{
+			Bin:      "docker",
+			LookPath: func(string) (string, error) { return "docker", nil },
+			Run: func(_ context.Context, stdin, _ string, args ...string) ([]byte, error) {
+				rec.called, rec.stdin, rec.argv = true, stdin, strings.Join(args, " ")
+				if len(args) > 3 {
+					rec.host, rec.user = args[1], args[3]
+				}
+				return nil, err
+			},
+		}
+	}
+	return func() { newRegistryLogin = prev }
+}
+
 // dry-run: image とタグを見せ、docker を前提条件に出す。
 func TestPublishContainerDryRun(t *testing.T) {
 	root := scratchModule(t)
@@ -56,7 +82,8 @@ func TestPublishContainerDryRun(t *testing.T) {
 	}
 }
 
-// --yes: docker あり → goreleaser docker pipe(fake)を呼び、state に記録、pull を案内。
+// --yes: docker あり → ghcr にログインしてから goreleaser docker pipe(fake)を呼び、
+// state に記録、pull を案内。ログインは CI 前提の要(トークンだけ渡せば push が通る)。
 func TestPublishContainerApply(t *testing.T) {
 	root := scratchModule(t)
 	writeChannels(t, root, "project: demo\nchannels: [container]\n")
@@ -66,12 +93,20 @@ func TestPublishContainerApply(t *testing.T) {
 	defer swapDockerAvailable(true)()
 	fc := &fakeContainerizer{}
 	defer swapContainerizer(fc)()
+	rec := &loginRec{}
+	defer swapRegistryLogin(rec, nil)()
 	defer func() { flagYes = false }()
 	flagYes = true
 
 	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"container"})
 	if !res.OK {
 		t.Fatalf("expected ok: %+v", res)
+	}
+	if !rec.called || rec.host != "ghcr.io" || rec.user != "acme" || rec.stdin != "tok" {
+		t.Errorf("should log in to ghcr as the repo owner: %+v", rec)
+	}
+	if strings.Contains(rec.argv, "tok") {
+		t.Errorf("token must not ride on argv: %q", rec.argv)
 	}
 	if !fc.called {
 		t.Error("containerizer should run on apply")
@@ -82,6 +117,29 @@ func TestPublishContainerApply(t *testing.T) {
 	st, _ := state.Load(root, "demo")
 	if _, ok := st.Publish["container"]; !ok {
 		t.Error("container publish should be recorded")
+	}
+}
+
+// ログインに失敗したら、イメージは作らずそこで止まる(401 を build の後まで持ち越さない)。
+func TestPublishContainerLoginFailure(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [container]\n")
+	tagScratch(t, root, "v0.5.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "bad")
+	defer swapDockerAvailable(true)()
+	fc := &fakeContainerizer{}
+	defer swapContainerizer(fc)()
+	defer swapRegistryLogin(&loginRec{}, errors.New("denied"))()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"container"})
+	if res.OK || len(res.Errors) == 0 {
+		t.Fatalf("failed login should fail publish: %+v", res)
+	}
+	if fc.called {
+		t.Error("must not build images when login failed")
 	}
 }
 

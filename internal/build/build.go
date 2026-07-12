@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Artifact はクロスビルドの成果物 1 つ(schemas/common.json の artifact と同形)。
@@ -270,6 +271,13 @@ func sha256File(path string) (string, error) {
 func execRun(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	return cmd.CombinedOutput()
+}
+
+// execRunStdin は stdin を流す実行(秘密を argv に載せない経路・StdinRunner の本番実装)。
+func execRunStdin(ctx context.Context, stdin, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	return cmd.CombinedOutput()
 }
 
