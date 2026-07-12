@@ -2136,10 +2136,19 @@ func dryRunNext(item channel.PlanItem, reqs []requirement, chName string) []outp
 		return []output.NextDo{{Reason: "already up to date; verify install", Do: "wharfy verify"}}
 	}
 	next := []output.NextDo{}
+	var unmetCred bool
 	for _, r := range reqs {
-		if !r.Met {
-			next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
+		if r.Met {
+			continue
 		}
+		next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
+		if _, ok := registry.Credentials[r.Requirement]; ok {
+			unmetCred = true
+		}
+	}
+	// 資格情報が欠けているなら、手元の export だけでなく CI への登録の仕方も要る(D-12)。
+	if unmetCred {
+		next = append(next, output.NextDo{Reason: "what to register, and how, for CI", Do: "wharfy secrets"})
 	}
 	next = append(next, output.NextDo{Reason: "apply the shown changes", Do: "wharfy publish " + chName + " --yes"})
 	return next

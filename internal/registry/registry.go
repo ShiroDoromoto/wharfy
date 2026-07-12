@@ -94,6 +94,10 @@ var Commands = []Command{
 	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
 	{Name: "config", Summary: "show the resolved effective config", Next: []string{"build"}},
 	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}},
+	{Name: "secrets", Summary: "the credentials your channels need, and how to register them for CI", Next: []string{"publish"}, Notes: []string{
+		"wharfy reads every credential from the environment, so the same commands run on a laptop and in a GitHub Actions workflow",
+		"the token GitHub Actions hands a workflow can only write to that repository: channels that write elsewhere (tap, bucket, gated forks) need a PAT registered as a secret",
+	}},
 	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}},
 	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}},
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
@@ -123,6 +127,74 @@ var Channels = []ChannelRef{
 	}},
 	{Name: "winget", Kind: "gated"},
 	{Name: "homebrew-core", Kind: "gated"},
+}
+
+// Credential は wharfy が環境から読む資格情報 1 つ。
+//
+// wharfy は資格情報を env からしか取らない(keychain は fury の任意の補助)。だから「手元で export
+// する」と「CI にシークレットを登録する」は同じ 1 枚の表で語れる。ここがその表の単一真実。
+type Credential struct {
+	Env     string `json:"env"`
+	Purpose string `json:"purpose"`
+	// Secret は「利用者が登録する秘密」か。false は Actions が自前で配るもの(GITHUB_TOKEN)。
+	Secret bool `json:"secret"`
+}
+
+// Credentials は wharfy が読む env の全て(env 名 → 意味)。
+var Credentials = map[string]Credential{
+	"GITHUB_TOKEN":             {Env: "GITHUB_TOKEN", Purpose: "upload the release, write your tap/bucket, open gated PRs, push to ghcr"},
+	"PACKAGE_REPO_TOKEN":       {Env: "PACKAGE_REPO_TOKEN", Purpose: "push deb/rpm to your hosted package repo", Secret: true},
+	"AUR_SSH_KEY":              {Env: "AUR_SSH_KEY", Purpose: "push PKGBUILD to the AUR (the private key itself)", Secret: true},
+	"WHARFY_SIGN_P12":          {Env: "WHARFY_SIGN_P12", Purpose: "the Developer ID certificate to codesign macOS binaries with", Secret: true},
+	"WHARFY_SIGN_P12_PASSWORD": {Env: "WHARFY_SIGN_P12_PASSWORD", Purpose: "the password of that certificate", Secret: true},
+}
+
+// ChannelCredentials はチャネル→そのチャネルが要る env。構成が決まれば要る資格情報は一意に決まる
+// ——なので利用者に推測させない。
+var ChannelCredentials = map[string][]string{
+	"releases":      {"GITHUB_TOKEN"},
+	"script":        {"GITHUB_TOKEN"},
+	"goinstall":     {"GITHUB_TOKEN"},
+	"homebrew":      {"GITHUB_TOKEN"},
+	"cask":          {"GITHUB_TOKEN"},
+	"scoop":         {"GITHUB_TOKEN"},
+	"container":     {"GITHUB_TOKEN"},
+	"winget":        {"GITHUB_TOKEN"},
+	"homebrew-core": {"GITHUB_TOKEN"},
+	"apt":           {"PACKAGE_REPO_TOKEN"},
+	"rpm":           {"PACKAGE_REPO_TOKEN"},
+	"aur":           {"AUR_SSH_KEY", "GITHUB_TOKEN"},
+}
+
+// SignCredentials は署名する場合に要る env(sign: を宣言したときだけ効く)。
+var SignCredentials = []string{"WHARFY_SIGN_P12", "WHARFY_SIGN_P12_PASSWORD"}
+
+// CrossRepoChannels は**自分のリポジトリの外**へ書くチャネルと、その書き先。
+//
+// GitHub Actions が自前で配る GITHUB_TOKEN は、そのリポジトリにしか書けない。tap も bucket も
+// winget/homebrew-core の fork も別リポジトリなので、組み込みトークンでは開かない——PAT を
+// シークレットとして登録し、GITHUB_TOKEN として渡す必要がある。ここを黙っていると CI で 403 に
+// ぶつかってから調べ直すことになる。
+var CrossRepoChannels = map[string]string{
+	"homebrew":      "your homebrew tap repo",
+	"cask":          "your homebrew tap repo",
+	"scoop":         "your scoop bucket repo",
+	"winget":        "a fork of microsoft/winget-pkgs",
+	"homebrew-core": "a fork of Homebrew/homebrew-core",
+}
+
+// ActionsPermissions はチャネル→GitHub Actions の workflow に要る permissions: の行。
+var ActionsPermissions = map[string][]string{
+	"releases":  {"contents: write"},
+	"script":    {"contents: write"},
+	"goinstall": {"contents: write"},
+	"container": {"contents: write", "packages: write"},
+	"aur":       {"contents: write"},
+	"homebrew":  {"contents: write"},
+	"cask":      {"contents: write"},
+	"scoop":     {"contents: write"},
+	"apt":       {"contents: write"},
+	"rpm":       {"contents: write"},
 }
 
 // Names は登録コマンド名の集合。drift テストや next: 参照健全性の照合に使う。

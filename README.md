@@ -268,6 +268,28 @@ wharfy tells you what's missing: `publish --dry-run` lists a `requires` block, a
 channels are skipped (not failed) in a batch. Owned tap/bucket repos are created for you on
 `--yes` (a `tap_will_be_created` warning previews it).
 
+### Releasing from CI
+
+wharfy never prompts and never needs a TTY: `--yes` is the whole gate, and every credential comes
+from the environment. The same commands run on your laptop and in a GitHub Actions workflow — and
+for open source, building what you distribute in public CI is the better default (the artifacts
+are auditable, cross-OS, and no signing key has to live on anyone's machine).
+
+Which credentials you need follows from your `channels:`, so wharfy works it out for you:
+
+```sh
+wharfy secrets          # what to register, and the permissions:/env: to paste
+```
+
+One thing it will tell you that is easy to get wrong: the token GitHub Actions hands a workflow
+can only write to **that** repository. Channels that write elsewhere — `homebrew`/`cask` (your
+tap), `scoop` (your bucket), `winget` and `homebrew-core` (a fork) — need a PAT registered as a
+secret and passed as `GITHUB_TOKEN`. Channels that stay in your own repo (`releases`, `script`,
+`goinstall`, `container` on ghcr) run on the built-in token with the right `permissions:`.
+
+What stays deliberate is the trigger, not the machine: ship on a tag push or a manual dispatch,
+never on every merge (`wharfy init` writes that discipline into your `AGENTS.md` / `CLAUDE.md`).
+
 `apt`/`rpm` need a hosted package repo (a deb/rpm server is more than a git repo: it serves
 index metadata, and `apt`/`rpm` upload and serve from different hosts). Set it in `wharfy.yaml`
 the low-friction way — a managed service via `provider`, where one user namespace yields both
