@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/build"
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
@@ -162,5 +163,49 @@ func TestPublishContainerNoDocker(t *testing.T) {
 	}
 	if fc.called {
 		t.Error("must not build images without docker")
+	}
+}
+
+// swapPrebuiltContainerizer は buildx の呼ばれ方を記録する(実 docker を叩かせない)。
+func swapPrebuiltContainerizer(argv *string) func() {
+	prev := newPrebuiltContainerizer
+	newPrebuiltContainerizer = func() *build.PrebuiltContainerizer {
+		return &build.PrebuiltContainerizer{
+			Bin:      "docker",
+			LookPath: func(string) (string, error) { return "docker", nil },
+			Run: func(_ context.Context, _, _ string, args ...string) ([]byte, error) {
+				*argv = strings.Join(args, " ")
+				return nil, nil
+			},
+		}
+	}
+	return func() { newPrebuiltContainerizer = prev }
+}
+
+// 一括 publish の BYO(prebuilt)経路も image を push する。byoRelease は archive と Release upload
+// しかしないので、ここを飛ばすと「push していないのに published」という嘘の記録が残っていた。
+func TestPublishAllPrebuiltPushesContainer(t *testing.T) {
+	root := scratchPrebuiltChannels(t, "container")
+	tagScratch(t, root, "v0.1.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	defer swapDockerAvailable(true)()
+	defer swapReleaseStore(channel.NewInMemoryReleaseStore())()
+	defer swapRegistryLogin(&loginRec{}, nil)()
+	var argv string
+	defer swapPrebuiltContainerizer(&argv)()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), nil)
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	if !strings.Contains(argv, "--push") || !strings.Contains(argv, "ghcr.io/acme/app:0.1.0") {
+		t.Errorf("buildx should push the image: %q", argv)
+	}
+	st, _ := state.Load(root, "app")
+	if rec, ok := st.Publish["container"]; !ok || rec.Version != "0.1.0" {
+		t.Errorf("container should be recorded after a real push: %+v", st.Publish)
 	}
 }

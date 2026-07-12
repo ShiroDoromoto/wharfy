@@ -391,7 +391,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 			items = append(items, channel.PlanItem{Channel: ch, Kind: config.Kind(ch), Action: channel.ActionNoop, Reason: "already published at " + version})
 			continue
 		}
-		item, w, aerr := applyChannel(ctx, ch, cfg, in, chVersion, ghOwner, ghRepo, chArchs, st, now, dockerOK)
+		item, w, aerr := applyChannel(ctx, ch, root, cfg, in, chVersion, ghOwner, ghRepo, chArchs, st, now, dockerOK)
 		if aerr != nil {
 			// 1 チャネルの失敗は全体を止める。release と完了チャネルは記録済みなので、再実行は
 			// 残りだけを安全・安価に進める(release は再アップロードしない)。
@@ -458,7 +458,7 @@ func orUnresolved(target, suffix string) string {
 }
 
 // applyChannel は 1 チャネルを共有 archs に対して書き込み、状態を更新する(release は呼ばない)。
-func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.File, version, ghOwner, ghRepo string, archs []build.Artifact, st *state.State, now string, dockerOK bool) (channel.PlanItem, *output.Warning, error) {
+func applyChannel(ctx context.Context, ch, root string, cfg config.Config, in config.File, version, ghOwner, ghRepo string, archs []build.Artifact, st *state.State, now string, dockerOK bool) (channel.PlanItem, *output.Warning, error) {
 	mk := func(kind, action, art string) channel.PlanItem {
 		return channel.PlanItem{Channel: ch, Kind: kind, Action: action, OwnedArtifact: art}
 	}
@@ -561,8 +561,21 @@ func applyChannel(ctx context.Context, ch string, cfg config.Config, in config.F
 		if !dockerOK {
 			return skip("docker unavailable")
 		}
+		// GoReleaser 経路なら ReleaseAll の docker pipe が push 済み。BYO(prebuilt)は byoRelease が
+		// archive と Release upload しかしないので、イメージはここで push する——さもないと push して
+		// いないのに published と記録され、state が嘘をつく。
+		switch {
+		case cfg.Prebuilt:
+			if cerr := newPrebuiltContainerizer().PushMultiArch(ctx, root, config.DistDir, image, version,
+				prebuiltBinaryName(cfg, in), toPrebuiltBinaries(in)); cerr != nil {
+				return channel.PlanItem{}, nil, cerr
+			}
+		case cfg.Bundle:
+			// bundle だけ(GUI)は詰めるべき linux バイナリを持たない。記録もしない。
+			return skip("container needs prebuilt linux binaries")
+		}
 		st.Publish["container"] = state.PublishRecord{Version: version, Target: image, At: now}
-		return mk(channel.KindOwned, channel.ActionUpdate, image), nil, nil // ReleaseAll が push 済み
+		return mk(channel.KindOwned, channel.ActionUpdate, image), nil, nil
 
 	case "script":
 		st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
