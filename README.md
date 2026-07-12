@@ -80,6 +80,10 @@ The order is `build → sign → release → publish → verify` (what `wharfy a
 each channel's manifest against that release, so a mid-batch failure resumes safely without
 re-uploading. `wharfy publish` with no prior `release` still works — it runs the release itself.
 
+Both steps are re-runnable on the same tag: `release` reuses the existing GitHub release and
+replaces the assets already on it, and `publish` skips the channels it completed. A workflow that
+died halfway can just be run again — you never have to delete the release by hand first.
+
 `verify` checks the channels in your `channels:` from the consumer's side — that list is what
 decides the scope, not the publish history in `state.json` (a channel you dropped from the config
 is never verified, and its old record no longer makes `verify` green).

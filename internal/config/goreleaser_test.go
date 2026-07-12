@@ -82,9 +82,13 @@ func TestGenerateGoReleaserNoBrews(t *testing.T) {
 	if gh["owner"] != "acme" || gh["name"] != "mytool" {
 		t.Errorf("release github wrong: %+v", gh)
 	}
-	// 再実行を冪等にするため mode: replace を出す(段 a)。
+	// 再実行を冪等にする。mode はノートの扱いでアセットには効かないので、
+	// 同名アセットの置換を効かせる replace_existing_artifacts が要る(これが無いと再実行が 422 で落ちる)。
 	if release["mode"] != "replace" {
 		t.Errorf("release.mode should be replace, got %v", release["mode"])
+	}
+	if release["replace_existing_artifacts"] != true {
+		t.Errorf("release.replace_existing_artifacts should be true, got %v", release["replace_existing_artifacts"])
 	}
 }
 

@@ -101,7 +101,10 @@ var Commands = []Command{
 	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}},
 	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}},
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
-	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json)", Next: []string{"publish"}, Notes: []string{selfGeneratorNote}},
+	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json)", Next: []string{"publish"}, Notes: []string{
+		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
+		selfGeneratorNote,
+	}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{selfGeneratorNote}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]"},
 	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},

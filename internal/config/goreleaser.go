@@ -96,9 +96,13 @@ type glFormatOverride struct {
 }
 
 type glRelease struct {
-	GitHub     glRepository  `yaml:"github"`
-	Mode       string        `yaml:"mode,omitempty"` // replace=既存 Release のアセットを置換(再実行を冪等に)
-	ExtraFiles []glExtraFile `yaml:"extra_files,omitempty"`
+	GitHub glRepository `yaml:"github"`
+	// mode はリリース**ノート**の扱い(keep-existing/append/prepend/replace)であって、アセットには効かない。
+	// アセットの置換は replace_existing_artifacts が唯一の口 — これが無いと、同じタグで release を
+	// やり直したとき同名アセットの upload が 422 already_exists で必ず落ちる。
+	Mode                     string        `yaml:"mode,omitempty"`
+	ReplaceExistingArtifacts bool          `yaml:"replace_existing_artifacts,omitempty"`
+	ExtraFiles               []glExtraFile `yaml:"extra_files,omitempty"`
 }
 
 // glExtraFile は release に同梱アップロードする追加アセット(script の install.sh 等)。
@@ -157,7 +161,12 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 	// script チャネルは install.sh/install.ps1 を同じ release に extra_files で同梱するため release を要する。
 	if HasChannel(cfg, "releases") || HasChannel(cfg, "script") {
 		if owner, name, ok := splitOwnerRepo(cfg.Github); ok {
-			rel := &glRelease{GitHub: glRepository{Owner: owner, Name: name}, Mode: "replace"}
+			// 再実行を冪等にする(BYO 経路の ReleaseStore が同名アセットを置換するのと同じ振る舞いに揃える)。
+			rel := &glRelease{
+				GitHub:                   glRepository{Owner: owner, Name: name},
+				Mode:                     "replace",
+				ReplaceExistingArtifacts: true,
+			}
 			if HasChannel(cfg, "script") {
 				rel.ExtraFiles = []glExtraFile{{Glob: InstallScriptRelPath}, {Glob: InstallPS1RelPath}}
 			}
