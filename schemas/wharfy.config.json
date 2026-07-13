@@ -524,6 +524,18 @@
         },
         "additionalProperties": false
       }
+    },
+    "latest_json": {
+      "description": "release が生成する latest.json への上乗せ。",
+      "type": "object",
+      "properties": {
+        "extra": {
+          "description": "latest.json の extra へ逐語で載せる任意の key/value。値は任意の JSON 値(数値・真偽・文字列・配列・入れ子)。wharfy は中身を解釈も検証もしない —— 契約は読む側(プロダクト)が持つ。アプリのローカルデータ形式の版や、その形式を扱える最小アプリ版のように、意味がアプリごとに違う宣言をここに載せる。",
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

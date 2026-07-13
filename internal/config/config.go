@@ -39,6 +39,18 @@ type File struct {
 	// Deprecate はチャネルを畳む宣言(D-3)。キーはチャネル名。畳んでも channels からは外さない —
 	// 外すと wharfy がそのチャネルを知らなくなり、告知を運ぶ主体がいなくなる。
 	Deprecate map[string]*DeprecateInput `yaml:"deprecate"`
+	// LatestJSON は release が生成する latest.json への上乗せ(D-236)。
+	LatestJSON *LatestJSONInput `yaml:"latest_json"`
+}
+
+// LatestJSONInput は latest.json に配布元が載せたい宣言(D-236)。
+//   - Extra: latest.json の extra へ逐語で入る任意の key/value。値は任意の JSON 値
+//     (数値・真偽・文字列・配列・入れ子)。wharfy は中身を解釈も検証もしない —— アプリが持つ
+//     ローカルデータ形式の版や、その形式を扱える最小アプリ版のように、意味がアプリごとに違う
+//     ものは wharfy の語彙では正しく語れない。契約は読む側(プロダクト)が持つ。
+//     外側の latest_json: は従来どおり未知キーを断り、自由なのは extra の中だけ。
+type LatestJSONInput struct {
+	Extra map[string]any `yaml:"extra"`
 }
 
 // VerifyInput は verify のコンテナ検証を配布者の実態に寄せる設定。どちらも未指定で従来どおり。
@@ -234,6 +246,10 @@ type Config struct {
 	// OrphanDeprecations は channels に無いチャネルへの deprecate 宣言(名前の昇順)。
 	// 畳んだうえで channels からも外すと告知の更新が止まる。禁じはしないが、黙ってもいない。
 	OrphanDeprecations []string `json:"orphan_deprecations,omitempty"`
+	// LatestExtra は latest.json の extra へ逐語で載る配布元の宣言(D-236)。
+	// wharfy は中身を解釈しないが、何を載せるつもりなのかは config で見えるようにする
+	// (release まで走らせないと確かめられない、では配布者は書いたものを確認できない)。
+	LatestExtra map[string]any `json:"latest_extra,omitempty"`
 }
 
 // ResolvedChannel は解決済みチャネル 1 つ(名前・種別・発行先)。

@@ -154,3 +154,75 @@ runtime_deps:
 		t.Errorf("runtime_deps should be read: %+v", f.RuntimeDeps)
 	}
 }
+
+// latest_json.extra の中だけは wharfy の語彙ではない —— 未知キー拒否は効かず、値の形も選ばない。
+func TestLoadReadsLatestJSONExtraVerbatim(t *testing.T) {
+	root := t.TempDir()
+	writeYAML(t, root, `project: demo
+latest_json:
+  extra:
+    store_format: 5
+    min_app_version: "1.4.0"
+    sunset:
+      version: "2.0"
+      drops_below: 5
+    channels: [stable, beta]
+`)
+
+	f, err := Load(root)
+	if err != nil {
+		t.Fatalf("extra takes any JSON value: %v", err)
+	}
+	if f.LatestJSON == nil {
+		t.Fatal("latest_json should be read")
+	}
+	extra := f.LatestJSON.Extra
+	if extra["store_format"] != 5 {
+		t.Errorf("a number must stay a number: %#v", extra["store_format"])
+	}
+	if extra["min_app_version"] != "1.4.0" {
+		t.Errorf("min_app_version = %#v", extra["min_app_version"])
+	}
+	// 入れ子は json 化できる形(map[string]any)まで直っている —— yaml.v3 の map[any]any のままだと
+	// latest.json の生成が黙って落ちる。
+	nested, ok := extra["sunset"].(map[string]any)
+	if !ok {
+		t.Fatalf("a nested map must be jsonable: %#v", extra["sunset"])
+	}
+	if nested["drops_below"] != 5 {
+		t.Errorf("nested value = %#v", nested["drops_below"])
+	}
+	if list, ok := extra["channels"].([]any); !ok || len(list) != 2 {
+		t.Errorf("a list must survive: %#v", extra["channels"])
+	}
+}
+
+// 外側の latest_json: は今までどおり厳格(自由なのは extra の中だけ)。
+func TestLoadRejectsAnUnknownKeyBesideExtra(t *testing.T) {
+	root := t.TempDir()
+	writeYAML(t, root, "project: demo\nlatest_json:\n  extar:\n    a: 1\n")
+
+	_, err := Load(root)
+	var invalid *InvalidError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("a misspelled key beside extra must be refused: %v", err)
+	}
+	if !strings.Contains(err.Error(), `unknown key "extar"`) {
+		t.Errorf("the message should name the key: %v", err)
+	}
+}
+
+// JSON のオブジェクトキーは文字列だけ。YAML では書けてしまうので、書いた場所で断る。
+func TestLoadRejectsANonStringKeyInExtra(t *testing.T) {
+	root := t.TempDir()
+	writeYAML(t, root, "project: demo\nlatest_json:\n  extra:\n    sunset:\n      5: drop\n")
+
+	_, err := Load(root)
+	var invalid *InvalidError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("a non-string key cannot be JSON: %v", err)
+	}
+	if !strings.Contains(err.Error(), "latest_json.extra.sunset") {
+		t.Errorf("the message should point at where it was written: %v", err)
+	}
+}

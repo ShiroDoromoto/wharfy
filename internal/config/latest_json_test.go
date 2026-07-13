@@ -92,6 +92,51 @@ func TestGenerateLatestJSONSkipsUnkeyable(t *testing.T) {
 	}
 }
 
+// 配布元の宣言(extra)は逐語で載る。wharfy は型も意味も触らない(D-236)。
+func TestGenerateLatestJSONCarriesExtraVerbatim(t *testing.T) {
+	cfg := latestConfig()
+	cfg.LatestExtra = map[string]any{
+		"store_format":    5,
+		"min_app_version": "1.4.0",
+		"sunset":          map[string]any{"version": "2.0", "drops_below": 5},
+	}
+	content, ok := GenerateLatestJSON(cfg, "1.2.3", latestAssets())
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var doc struct {
+		Extra map[string]any `json:"extra"`
+	}
+	if err := json.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatalf("latest.json is not valid JSON: %v\n%s", err, content)
+	}
+	if doc.Extra["store_format"] != float64(5) { // 整数は数値のまま(文字列にしない)
+		t.Errorf("store_format = %#v, want the number 5", doc.Extra["store_format"])
+	}
+	if doc.Extra["min_app_version"] != "1.4.0" {
+		t.Errorf("min_app_version = %#v", doc.Extra["min_app_version"])
+	}
+	nested, ok := doc.Extra["sunset"].(map[string]any)
+	if !ok || nested["version"] != "2.0" {
+		t.Errorf("a nested declaration must survive: %#v", doc.Extra["sunset"])
+	}
+}
+
+// 宣言が無ければ extra は出ない(書いていない配布者の latest.json は 1 バイトも変わらない)。
+func TestGenerateLatestJSONOmitsEmptyExtra(t *testing.T) {
+	content, ok := GenerateLatestJSON(latestConfig(), "1.2.3", latestAssets())
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := doc["extra"]; found {
+		t.Errorf("extra must be absent when nothing was declared:\n%s", content)
+	}
+}
+
 func TestWriteLatestJSONNonDestructive(t *testing.T) {
 	root := t.TempDir()
 	path, err := WriteLatestJSON(root, "{}\n")

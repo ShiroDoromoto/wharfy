@@ -76,7 +76,61 @@ func Load(root string) (File, error) {
 		}
 		return File{}, &InvalidError{Msg: ConfigFileName + ": " + namedUnknownKeys(err)}
 	}
+	if f.LatestJSON != nil {
+		for k, v := range f.LatestJSON.Extra {
+			nv, err := jsonableValue(v, "latest_json.extra."+k)
+			if err != nil {
+				return File{}, &InvalidError{Msg: ConfigFileName + ": " + err.Error()}
+			}
+			f.LatestJSON.Extra[k] = nv
+		}
+	}
 	return f, nil
+}
+
+// jsonableValue は latest_json.extra の値を JSON にできる形へ直し、直せないものは書いた場所で断る(D-236)。
+// extra の中は wharfy の語彙ではないので未知キー拒否が効かない。唯一の縛りは「JSON になること」。
+//   - 入れ子のマップを yaml.v3 は map[any]any で返すことがある(キーがすべて文字列でないとき)。
+//     json はこれを直列化できないので map[string]any へ写し替える。
+//   - JSON のオブジェクトキーは文字列だけ。YAML では `5: x` と書けてしまうので、ここで断る。
+//     断らないと latest.json の生成が黙って失敗し、配布者は宣言が落ちたことに気づけない。
+func jsonableValue(v any, path string) (any, error) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			nv, err := jsonableValue(val, path+"."+k)
+			if err != nil {
+				return nil, err
+			}
+			t[k] = nv
+		}
+		return t, nil
+	case map[any]any:
+		m := make(map[string]any, len(t))
+		for k, val := range t {
+			ks, ok := k.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: key %v is not a string (latest.json is JSON: object keys must be strings)", path, k)
+			}
+			nv, err := jsonableValue(val, path+"."+ks)
+			if err != nil {
+				return nil, err
+			}
+			m[ks] = nv
+		}
+		return m, nil
+	case []any:
+		for i, val := range t {
+			nv, err := jsonableValue(val, fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return nil, err
+			}
+			t[i] = nv
+		}
+		return t, nil
+	default:
+		return v, nil
+	}
 }
 
 // InvalidError は wharfy.yaml が読めないこと(構文の誤り・未知キー)。CLI 層がこれを
@@ -218,6 +272,9 @@ func (r *Resolver) Resolve(in File) (Config, error) {
 		Bundle:   bundle,
 	}
 	cfg.OrphanDeprecations = orphanDeprecations(in, cfg.Channels)
+	if in.LatestJSON != nil && len(in.LatestJSON.Extra) > 0 {
+		cfg.LatestExtra = in.LatestJSON.Extra // 逐語(wharfy は解釈も検証もしない・D-236)
+	}
 	return cfg, mainErr
 }
 

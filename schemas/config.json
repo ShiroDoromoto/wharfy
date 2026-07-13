@@ -103,6 +103,11 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "latest_extra": {
+          "description": "latest.json の extra へ逐語で載る配布元の宣言(wharfy.yaml の latest_json.extra:)。wharfy は中身を解釈しないが、何を載せるつもりなのかはここで見える。",
+          "type": "object",
+          "additionalProperties": true
         }
       },
       "required": [

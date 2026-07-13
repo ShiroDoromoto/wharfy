@@ -367,3 +367,23 @@ func TestResolveChannelsFuryProvider(t *testing.T) {
 		t.Errorf("rpm push_target = %q", got)
 	}
 }
+
+// latest_json.extra は解決を通って Config に残る(config で見えるので、release まで走らせなくても確かめられる)。
+func TestResolveCarriesLatestExtra(t *testing.T) {
+	r := stubResolver("https://github.com/acme/mytool.git", []string{"./cmd/mytool"}, "github.com/acme/mytool")
+	cfg, err := r.Resolve(File{LatestJSON: &LatestJSONInput{Extra: map[string]any{"store_format": 5}}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LatestExtra["store_format"] != 5 {
+		t.Errorf("latest_extra = %#v", cfg.LatestExtra)
+	}
+
+	empty, err := r.Resolve(File{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if empty.LatestExtra != nil {
+		t.Errorf("nothing was declared, so latest_extra must stay absent: %#v", empty.LatestExtra)
+	}
+}

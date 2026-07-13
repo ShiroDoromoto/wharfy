@@ -39,6 +39,10 @@ type latestJSON struct {
 	// Deprecations は畳むチャネルの告知(D-3)。caveats は brew install のときにしか出ないので、
 	// この経路が無いと「すでに入れた人」に届かない。プロダクトの更新チェックがここを読む。
 	Deprecations map[string]latestDeprecation `json:"deprecations,omitempty"`
+	// Extra は配布元が宣言する任意のメタ情報(D-236)。wharfy は中身を解釈も検証もせず逐語で運ぶ
+	// (アプリのローカルデータ形式の版など、意味がアプリごとに違うものは wharfy の語彙では語れない)。
+	// 名前空間を extra に閉じてあるので、wharfy が将来足すフィールドと衝突しない。
+	Extra map[string]any `json:"extra,omitempty"`
 }
 
 // latestDeprecation は latest.json に載る告知 1 件。文面は配布者のものを逐語で運ぶ。
@@ -88,6 +92,7 @@ func GenerateLatestJSON(cfg Config, version string, assets []LatestAsset) (conte
 		NotesURL:     fmt.Sprintf("https://github.com/%s/%s/releases/tag/v%s", owner, repo, version),
 		Assets:       m,
 		Deprecations: latestDeprecations(cfg),
+		Extra:        cfg.LatestExtra,
 	}
 	// map キーは encoding/json が辞書順に直列化するので出力は決定的(冪等アップロード向き)。
 	b, err := json.MarshalIndent(doc, "", "  ")

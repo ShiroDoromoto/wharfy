@@ -107,6 +107,7 @@ var Commands = []Command{
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json)", Next: []string{"publish"}, Notes: []string{
 		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
+		"latest.json carries `latest_json.extra:` from wharfy.yaml verbatim (any JSON value): declare there what is not 'which version is newest' — your app's on-disk data format version, the minimum app version that can read it — and wharfy neither interprets nor validates it; the contract is the reading product's",
 		selfGeneratorNote,
 	}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{selfGeneratorNote}},

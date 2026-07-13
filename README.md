@@ -271,6 +271,28 @@ Release, so its stable URL
 check any product can poll — reading it and prompting the user is the product's job (see
 `schemas/latest.json` for the contract).
 
+Some things a release declares are not "which version is newest". An app that keeps a local data
+store has a **format version** of its own — a counter that moves independently of the app's semver —
+and the release knows which app versions can read it. Put those in `latest_json.extra:` and they ride
+along in the same file, verbatim:
+
+```yaml
+latest_json:
+  extra:
+    store_format: 5
+    min_app_version: "1.4.0"   # older apps can say "use 1.4.0 or newer", naming the version
+```
+
+```json
+{ "version": "1.5.0", "notes_url": "…", "assets": { … },
+  "extra": { "min_app_version": "1.4.0", "store_format": 5 } }
+```
+
+Values are any JSON (numbers, booleans, lists, nested objects). wharfy neither interprets nor
+validates what is in there — the contract belongs to the product that reads it, so parse leniently
+and ignore keys you don't know. The one rule wharfy enforces is that it has to be JSON: a
+non-string key is refused as `config_invalid` where you wrote it, rather than silently dropped.
+
 Run `wharfy agent --json` for the live set and each channel's kind.
 
 Each channel needs its own prerequisites (a token, a hosted repo, docker, an AUR key, …).
