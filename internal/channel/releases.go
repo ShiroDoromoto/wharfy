@@ -53,10 +53,15 @@ type ReleasesProbe struct {
 // ReleaseAudit は 1 つの Release に対する実在照合の結果。
 type ReleaseAudit struct {
 	Found     bool     // その tag の Release が在るか
-	Manifests []string // 照合に使えたマニフェストの資産名(空なら照合不能 = skip)
+	Manifests []string // 照合に使えたマニフェストの資産名
 	Version   string   // latest.json が名乗る版(checksums しか無ければ空)
 	Expected  []string // マニフェストが載せる資産名(昇順)
 	Missing   []string // そのうち Release に実在しないもの(昇順)
+
+	// HasLatestJSON は latest.json が Release に実在したか。release は github(owner/repo)が
+	// 解決できる限り必ずこれを上げるので、無い Release は壊れている(更新チェックの向き先が 404)。
+	// Version は latest.json が版を名乗らなければ空になるため、有無の判定には使えない。
+	HasLatestJSON bool
 
 	// Checksums は checksums マニフェスト由来の 資産名 → 期待 sha256。sha を持つのはこの
 	// マニフェストだけなので、latest.json しか無い Release では空になる(検算できない)。
@@ -167,6 +172,7 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 		if err != nil {
 			return ReleaseAudit{}, err
 		}
+		audit.HasLatestJSON = true
 		audit.Manifests = append(audit.Manifests, ManifestLatestJSON)
 		audit.Version = doc.Version
 		for _, u := range doc.Assets {

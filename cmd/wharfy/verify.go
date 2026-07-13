@@ -28,10 +28,12 @@ import (
 // 既定は probe だけ ——ネットワーク越しの照合で終わり、何もインストールしない(D-4)。CI で毎回
 // 叩けるように軽く保つ。実インストールまで踏むのは `--install` を明示したときに限る(人間の決定)。
 //
-// homebrew は自前 tap の formula の有無と版を照合する。releases は Release の資産マニフェスト
-// (latest.json / checksums)が載せる資産が実在するかを照合する(本体は落とさない・D-4)。この 2 つは
-// verify が踏める最大をここで踏み切っている。残る apt / rpm / script / goinstall には「実際に入れて
-// 動かす」余地があり、既定ではそこを踏まないので partial に落とす。
+// homebrew は自前 tap の formula の、scoop は自前 bucket の manifest の、有無と版を照合する。
+// releases は Release の資産マニフェスト(latest.json / checksums)が載せる資産が実在するかを照合する
+// (本体は落とさない・D-4)。この 3 つは verify が踏める最大をここで踏み切っている(scoop の install は
+// Windows でしか踏めないが、bucket の manifest は HTTP で読めるので Linux の CI でも見張れる)。
+// 残る apt / rpm / script / goinstall には「実際に入れて動かす」余地があり、既定ではそこを踏まないので
+// partial に落とす。
 //
 // `--install` はその余地を踏む。apt/rpm は使い捨てコンテナで repo を足して install する。script は
 // 一時 PREFIX へ install.sh を、goinstall は一時 GOBIN へ go install を走らせる(→ verify_install.go)。
@@ -181,6 +183,12 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			outcomes = append(outcomes, verifyGoinstall(ctx, cfg, in, tgt))
 		case "homebrew":
 			oc, err := verifyHomebrew(ctx, cfg, ch, tgt)
+			if err != nil {
+				return internalError(c, err)
+			}
+			outcomes = append(outcomes, oc)
+		case "scoop":
+			oc, err := verifyScoop(ctx, cfg, in, ch, tgt)
 			if err != nil {
 				return internalError(c, err)
 			}
@@ -470,6 +478,45 @@ func verifyHomebrew(ctx context.Context, cfg config.Config, ch config.ResolvedCh
 	}
 }
 
+// verifyScoop は自前 bucket の manifest が在り、版が期待と一致するかを照合する(homebrew と同型)。
+//
+// scoop の消費側は Windows でしか踏めないが、bucket の manifest は HTTP だけで読めるので OS を選ばない
+// (D-11: 語る OS の破損を、Linux の CI が先に捕まえる)。manifest の名前は publish と同じ規約で決める
+// ——GUI(bundle)は <project>-app、CLI は <project> —— ので、読む先を publish と取り違えない。
+func verifyScoop(ctx context.Context, cfg config.Config, in config.File, ch config.ResolvedChannel, tgt verifyTarget) (verifyOutcome, error) {
+	bucket := firstNonEmptyStr(ch.Target, tgt.Target)
+	owner, repo, ok := splitOwnerName(bucket)
+	if !ok {
+		return verifyOutcome{}, errString("scoop target is unresolved: " + bucket)
+	}
+	sc := &channel.Scoop{
+		Project: cfg.Project,
+		Token:   scoopToken(cfg, in),
+		Bucket:  bucket,
+		Store:   newTapStore(owner, repo, os.Getenv("GITHUB_TOKEN")),
+	}
+	rs, perr := sc.Probe(ctx)
+	if perr != nil {
+		return probeFailedOutcome("scoop", perr), nil
+	}
+	switch {
+	case !rs.Found:
+		return verifyFailure("scoop",
+			"scoop: no manifest at "+bucket+":"+sc.ManifestPath()+" for the expected "+tgt.expected(),
+			"the expected version is not in the bucket",
+			"re-publish to restore the manifest",
+			"", "wharfy publish scoop --yes"), nil
+	case rs.Version != tgt.Version:
+		return verifyFailure("scoop",
+			"bucket has "+rs.Version+", expected "+tgt.expected(),
+			"the bucket manifest is not the expected version",
+			"re-publish to align the bucket with the expected version",
+			"", "wharfy publish scoop --yes"), nil
+	default:
+		return verifySuccess("scoop", "scoop "+rs.Version+" verified: manifest present at "+bucket+":"+sc.ManifestPath()+", version matches record"), nil
+	}
+}
+
 // newReleasesProbe は Release の照合器を組む末端(テストで差し替える)。
 var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 	return &channel.ReleasesProbe{Owner: owner, Repo: repo, Token: os.Getenv("GITHUB_TOKEN")}
@@ -477,8 +524,10 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 
 // verifyReleases は Release に「配ったはずの資産」が実在するかを照合する。
 //
-// 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。どちらも無い旧リリースは
-// 照合の基準を持たないので skip する — 資産の欠落を見ていないのに verified とは言わない(D-4)。
+// 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。latest.json を
+// 持たない Release は failed — release は github(owner/repo)が解決できる限り必ずこれを上げるので、
+// 無いのは上げ損ねたか消されたかで、どちらも更新チェックの向き先が 404 になっている。checksums が
+// 在れば期待集合は組めてしまうが、それで緑を通すと配布者は壊れたまま気づけない(D-242・D-191 と同じ形)。
 //
 // 既定は資産本体を落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。名前が在っても
 // 中身が壊れていることはある(アップロードが途中で切れた・後から差し替えられた)。--install なら
@@ -501,10 +550,13 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTa
 			"the expected release does not exist",
 			"re-run release to cut the tag and upload its assets",
 			"", "wharfy release --yes"), nil
-	case len(audit.Manifests) == 0:
-		return verifySkip("releases",
-			"releases skipped: v"+tgt.Version+" carries neither "+channel.ManifestLatestJSON+
-				" nor a *_"+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
+	case !audit.HasLatestJSON:
+		return verifyFailure("releases",
+			"releases: v"+tgt.Version+" carries no "+channel.ManifestLatestJSON,
+			"the release has no update manifest, so releases/latest/download/"+channel.ManifestLatestJSON+
+				" is a 404 for everyone already running the app",
+			"re-run release to upload "+channel.ManifestLatestJSON+" to this tag",
+			"", "wharfy release --yes"), nil
 	case audit.Version != "" && audit.Version != tgt.Version:
 		return verifyFailure("releases",
 			channel.ManifestLatestJSON+" on v"+tgt.Version+" says "+audit.Version+", expected "+tgt.Version,
