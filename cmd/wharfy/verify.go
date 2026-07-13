@@ -36,9 +36,10 @@ import (
 // CI が他 OS 向けの破損を先に捕まえる・D-11)。残る apt / rpm / script / goinstall には「実際に入れて
 // 動かす」余地があり、既定ではそこを踏まないので partial に落とす。
 //
-// winget は gated —— 配るのは wharfy ではなく Microsoft で、申請 PR が中央リポジトリに merge されて
-// 初めて `winget install` が届く。中央の manifest が在れば verified、無ければ partial(審査待ちか、
-// 提出そのものが無いか)。配布者に打てる手が「待つ」しかないものを failed にはしない(D-243)。
+// gated(winget / homebrew-core)は配るのが wharfy ではない —— 申請 PR が上流に merge されて初めて
+// 利用者に届く。だから確かめる先は自前の PR ではなく上流の配布物(winget は中央の manifest、
+// homebrew-core は core の formula)。在って版が合えば verified、まだなら partial(審査待ちか、提出
+// そのものが無いか)。配布者に打てる手が「待つ」しかないものを failed にはしない(D-243)。
 //
 // `--install` はその余地を踏む。apt/rpm は使い捨てコンテナで repo を足して install する。script は
 // 一時 PREFIX へ install.sh を、goinstall は一時 GOBIN へ go install を走らせる(→ verify_install.go)。
@@ -206,6 +207,8 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			outcomes = append(outcomes, verifyAur(ctx, ch, tgt))
 		case "winget":
 			outcomes = append(outcomes, verifyWinget(ctx, ch, tgt))
+		case "homebrew-core":
+			outcomes = append(outcomes, verifyHomebrewCore(ctx, cfg, ch, tgt))
 		case "releases":
 			oc, err := verifyReleases(ctx, ch, tgt)
 			if err != nil {
@@ -217,6 +220,8 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		case "apt", "rpm":
 			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, tgt))
 		default:
+			// channels: の全チャネルに case が在るので、ここに来るのは wharfy が新しいチャネルを
+			// 足して verify に載せ忘れたときだけ。緑で通さず、載っていないことを言う。
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: verify does not cover this channel yet"))
 		}
 	}
@@ -659,6 +664,42 @@ func verifyWinget(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 				" — `winget install "+id+"` still serves the previous version (the submission is merged by Microsoft, not by wharfy)")
 	}
 	return verifySuccess("winget", "winget "+tgt.Version+" verified: "+wingetCentral+" carries "+path)
+}
+
+// verifyHomebrewCore は上流 homebrew-core の formula を照合する(winget と同じ gated・D-243)。
+//
+// 自前 tap の formula(verifyHomebrew)と読む先が違う —— homebrew-core に載るのは Homebrew の
+// メンテナが merge した formula で、`brew install <project>` が届くのはそこだけ。自前 tap が最新でも、
+// core が古ければ利用者は古い版を入れる。
+//
+// core が期待より古いのは「まだ merge されていない」であって壊れではないので、gated pending に落とす
+// (winget が版ごとの manifest の有無で見るところを、core は 1 枚の formula の版で見る)。
+func verifyHomebrewCore(ctx context.Context, cfg config.Config, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
+	central := firstNonEmptyStr(ch.Target, tgt.Target)
+	owner, repo, ok := splitOwnerName(central)
+	if !ok {
+		return verifySkip("homebrew-core", "homebrew-core skipped: the central repository is unresolved: "+central)
+	}
+	path := channel.CoreFormulaPath(cfg.Project)
+	content, found, err := newTapStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, path)
+	if err != nil {
+		return probeFailedOutcome("homebrew-core", err)
+	}
+	if !found {
+		return verifyGatedPending("homebrew-core",
+			"homebrew-core "+tgt.Version+" is not in "+central+" yet: no "+path+
+				" — `brew install "+cfg.Project+"` reaches users only once a Homebrew maintainer merges the submission")
+	}
+	switch v := channel.CoreFormulaVersion(content); {
+	case v == "":
+		return verifyGatedPending("homebrew-core",
+			central+" carries "+path+", but wharfy cannot read which version it installs (no version stanza, and no version in its url)")
+	case v != tgt.Version:
+		return verifyGatedPending("homebrew-core",
+			"homebrew-core still carries "+v+", expected "+tgt.expected()+
+				" — `brew install "+cfg.Project+"` serves "+v+" until a maintainer merges the submission")
+	}
+	return verifySuccess("homebrew-core", "homebrew-core "+tgt.Version+" verified: "+central+" carries "+path+" at "+tgt.Version)
 }
 
 // newReleasesProbe は Release の照合器を組む末端(テストで差し替える)。

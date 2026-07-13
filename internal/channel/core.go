@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -30,6 +31,26 @@ func CoreFormulaPath(name string) string {
 		letter = n[:1]
 	}
 	return "Formula/" + letter + "/" + n + ".rb"
+}
+
+// coreURLVersionRe は core formula の url stanza から版を読む
+// (https://github.com/acme/demo/archive/refs/tags/v1.2.0.tar.gz → 1.2.0)。
+var coreURLVersionRe = regexp.MustCompile(`(?m)^\s*url\s+"[^"]*/v?([0-9][^"/]*)\.tar\.gz"`)
+
+// CoreFormulaVersion は上流の core formula が配っている版を読む(verify の版照合)。
+//
+// core の流儀は version stanza を書かず、Homebrew が url のタグから版を推す —— 自前 tap の
+// binary formula(version stanza を持つ)と読む場所が違う。両方に当たり、version stanza を優先する
+// (上流の書き手が明示したなら、それが正)。どちらからも読めなければ空を返す。
+func CoreFormulaVersion(content string) string {
+	if v := FormulaVersion(content); v != "" {
+		return v
+	}
+	m := coreURLVersionRe.FindStringSubmatch(content)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 // CoreSubmitter は *-core への gated PR 提出境界(テストで fake 化)。

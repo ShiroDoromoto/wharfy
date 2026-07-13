@@ -201,6 +201,70 @@ func TestVerifyWingetMergedUpstream(t *testing.T) {
 	validateAgainst(t, resultSchemaID, res)
 }
 
+// plantCoreFormula は上流 homebrew-core に formula を 1 枚置く。core の formula は version stanza を
+// 持たず、Homebrew が url のタグから版を推す —— verify もそこから読む。
+func plantCoreFormula(version string) *channel.InMemoryTapStore {
+	s := channel.NewInMemoryTapStore()
+	s.Files["Formula/d/demo.rb"] = "class Demo < Formula\n" +
+		"  url \"https://github.com/acme/demo/archive/refs/tags/v" + version + ".tar.gz\"\n" +
+		"  sha256 \"abc\"\nend\n"
+	return s
+}
+
+// 上流 core の formula が期待の版 → verified(`brew install demo` がその版を入れる)。
+func TestVerifyHomebrewCoreMergedUpstream(t *testing.T) {
+	scratchChannel(t, "homebrew-core", "1.2.0", "Homebrew/homebrew-core")
+	defer swapTapStore(plantCoreFormula("1.2.0"))()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a merged core formula should verify ok: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Channel != "homebrew-core" || ck[0].Status != verifyStatusOK {
+		t.Fatalf("homebrew-core should be verified, not skipped: %+v", ck)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// 上流 core が古い版のまま＝申請がまだ merge されていない → partial + gated の警告(failed ではない)。
+// 自前 tap が最新でも、core が古ければ `brew install demo` は古い版を入れる —— そこを黙らない。
+func TestVerifyHomebrewCoreStaleUpstreamIsPending(t *testing.T) {
+	scratchChannel(t, "homebrew-core", "1.2.0", "Homebrew/homebrew-core")
+	defer swapTapStore(plantCoreFormula("1.1.0"))()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a pending gated submission is not a broken distribution: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial || !strings.Contains(ck[0].Message, "1.1.0") {
+		t.Fatalf("verify should say which version core still serves: %+v", ck)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != output.WarnGatedPending {
+		t.Fatalf("verify must say the version has not reached users: %+v", res.Warnings)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// core に formula がまだ無い(初回申請が審査中 / 未提出)→ partial + gated の警告。
+func TestVerifyHomebrewCoreNotUpstreamYet(t *testing.T) {
+	scratchChannel(t, "homebrew-core", "1.2.0", "Homebrew/homebrew-core")
+	defer swapTapStore(channel.NewInMemoryTapStore())()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("an unmerged submission is not a broken distribution: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+		t.Fatalf("a formula not yet in core should be partial: %+v", ck)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != output.WarnGatedPending {
+		t.Fatalf("verify must say the version has not reached users: %+v", res.Warnings)
+	}
+}
+
 // 中央にまだ載っていない winget は partial + gated の警告。failed にはしない —— merge するのは
 // Microsoft で、配布者に打てる手は待つことだけ(D-243)。--install を勧めるのも誤り(踏める install が無い)。
 func TestVerifyWingetPendingIsPartialNotFailed(t *testing.T) {

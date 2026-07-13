@@ -104,10 +104,11 @@ same tap; for `container` it asks the registry whether the image tag is still th
 never pushed, or was deleted later, turns `docker pull` into a `404`); for `aur` it reads the package
 version out of the AUR. Installing those needs Windows, macOS, Docker or Arch — but every one of them
 is plain HTTP, so a Linux CI still catches a manifest that was never written or is stuck on an old
-version. `winget` is gated: what reaches users is the manifest Microsoft merges into
-`microsoft/winget-pkgs`, so that is what `verify` reads. While the submission is still under review
-the channel is `partial` with a warning — never failed, because merging is the reviewer's call and
-waiting is the only move you have. For `releases` it checks that every asset listed in the release's own manifest
+version. `winget` and `homebrew-core` are gated: what reaches users is the manifest Microsoft merges
+into `microsoft/winget-pkgs`, and the formula a Homebrew maintainer merges into `homebrew-core`, so
+that is what `verify` reads — not your submission. While it is still under review the channel is
+`partial` with a warning (`homebrew-core still carries 1.1.0, expected 1.2.0`) — never failed, because
+merging is the reviewer's call and waiting is the only move you have. For `releases` it checks that every asset listed in the release's own manifest
 (`latest.json`, plus the checksums file `<project>_<version>_checksums.txt` when GoReleaser wrote one)
 really exists on the release — a user following that manifest would otherwise hit a `404`. The
 binaries themselves are not downloaded. A release with no `latest.json` at all fails the check:
