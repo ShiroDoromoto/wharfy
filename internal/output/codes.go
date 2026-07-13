@@ -16,7 +16,7 @@ const (
 	WarnWinUnsigned       = "win_unsigned"        // Windows 成果物が未署名(証明書なし)
 	WarnDarwinUnnotarized = "darwin_unnotarized"  // darwin 署名済みだが未公証
 	WarnChannelSkipped    = "channel_skipped"     // チャネルを skip(トークン/設定不足)
-	WarnDriftDetected     = "drift_detected"      // status で記録と実体が食い違い
+	WarnDriftDetected     = "drift_detected"      // 記録と実体が食い違い(status の drift / verify の陳腐化した記録)
 	WarnGatedPending      = "gated_pending"       // gated チャネルが審査待ち
 	WarnGoinstallOnlyGo   = "goinstall_only_go"   // goinstall 指定だが Go ターゲットでない
 	WarnTapWillBeCreated  = "tap_will_be_created" // 自前 tap/bucket が未作成で作る予定
@@ -95,7 +95,7 @@ var Catalog = []CatalogEntry{
 	{WarnWinUnsigned, KindWarning, "Windows 成果物が未署名(証明書なし)"},
 	{WarnDarwinUnnotarized, KindWarning, "darwin 署名済みだが未公証"},
 	{WarnChannelSkipped, KindWarning, "チャネルを skip(トークン/設定不足)"},
-	{WarnDriftDetected, KindWarning, "status で記録と実体が食い違い"},
+	{WarnDriftDetected, KindWarning, "記録と実体が食い違い(status の drift / verify の陳腐化した記録)"},
 	{WarnGatedPending, KindWarning, "gated チャネルが審査待ち"},
 	{WarnGoinstallOnlyGo, KindWarning, "goinstall 指定だが Go ターゲットでない"},
 	{WarnTapWillBeCreated, KindWarning, "自前 tap/bucket が未作成で作る予定"},

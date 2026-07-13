@@ -619,6 +619,52 @@ func TestVerifyWithoutRecordFallsBackToTheLatestRelease(t *testing.T) {
 	}
 }
 
+// publish が CI で走ると、記録(.wharfy/state.json)は runner 側にしか残らず手元は古いまま。
+// その古い記録を基点にすると、配布は正常なのに verify だけが赤くなる —— 実体の方が新しければ、
+// 実体に倒す。倒したことは黙らず、記録が陳腐化していると警告で言う。
+func TestVerifyStaleRecordFallsBackToTheLatestRelease(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.1.0")) // 記録は 1.1.0 のまま(CI が 1.2.0 を配った)
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the release is intact, so a stale local record must not turn verify red: %+v", res)
+	}
+	d := res.Data.(verifyData)
+	if d.Version != "1.2.0" || d.VersionSource != verifySourceRelease {
+		t.Fatalf("the basis should fall to the latest release when the record is behind it: %+v", d)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0].Code != output.WarnDriftDetected {
+		t.Fatalf("verifying against the release instead of the record must be said out loud: %+v", res.Warnings)
+	}
+}
+
+// 記録が実体と同じなら基点は記録のまま —— 実体が在るだけで記録を捨てたりはしない。
+func TestVerifyKeepsTheRecordWhenItMatchesTheRelease(t *testing.T) {
+	srv := ghReleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("record and release agree, so this should verify: %+v", res)
+	}
+	d := res.Data.(verifyData)
+	if d.Version != "1.2.0" || d.VersionSource != verifySourceRecord {
+		t.Fatalf("the record stays the basis when it is not behind: %+v", d)
+	}
+	if len(res.Warnings) != 0 {
+		t.Fatalf("nothing is stale here, so there is nothing to warn about: %+v", res.Warnings)
+	}
+}
+
 // --version は「この版が今も入るか」を名指しで確かめる(記録より強い)。
 func TestVerifyVersionFlagOverridesTheRecord(t *testing.T) {
 	srv := ghReleaseServer(t, "v1.0.0", map[string]string{
@@ -785,8 +831,9 @@ func TestVerifyReleasesManifestVersionMismatch(t *testing.T) {
 }
 
 // tag ごと不在 → verify_failed(到達できないのではなく、配ったはずのものが無い)。
+// 実体の最新(1.0.0)は記録(1.2.0)より古い —— 記録が基点のまま、その release が消えている状況。
 func TestVerifyReleasesReleaseAbsentFails(t *testing.T) {
-	srv := ghReleaseServer(t, "v9.9.9", map[string]string{})
+	srv := ghReleaseServer(t, "v1.0.0", map[string]string{})
 	chdir(t, scratchReleases(t, "1.2.0"))
 	swapReleasesProbe(t, srv.URL)
 

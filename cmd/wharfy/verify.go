@@ -76,6 +76,10 @@ type verifyTarget struct {
 	Version string
 	Target  string // 記録に残る書き先(設定で解決できないときのフォールバック)
 	Source  string
+	// Behind は実体を採ったときに、それより古かった publish 記録の版(無ければ空)。
+	// CI で publish すると記録は runner 側にしか残らず、手元の記録は古いまま —— 配布は正常なのに
+	// verify だけが赤くなる。実体に倒したうえで、記録が陳腐化していることを言うために持つ。
+	Behind string
 }
 
 // expected は失敗メッセージで使う「期待の版と、その根拠」。
@@ -149,8 +153,7 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		targets = []config.ResolvedChannel{sel}
 	}
 
-	// 記録が無いチャネルの基点(実体 → git のタグ)。要るときに 1 度だけ決める —— 記録が揃って
-	// いる通常の運転で、無用な問い合わせを増やさない。
+	// 記録に頼らない基点(実体 → git のタグ)。チャネルごとに問い合わせず、1 度だけ決めて使い回す。
 	var (
 		fallback verifyTarget
 		resolved bool
@@ -202,21 +205,29 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 // verifyTargetFor は 1 チャネルの期待(版・書き先・その出どころ)を決める。
 //
 //	--version が在ればそれ(利用者が「確かめたい版」を名指しした)。
-//	無ければそのチャネルの publish 記録。
+//	無ければそのチャネルの publish 記録 —— ただし記録より新しい実体が在るなら、実体を採る。
 //	記録も無ければ実体から決めた fallback —— ここが「まっさらな clone でも確かめられる」の要。
+//
+// 記録より実体を優先するのは、記録(.wharfy/state.json)が生成物だから。CI で publish すると記録は
+// runner 側にしか残らず、手元は古い版のまま —— それを信じると、配布は正常なのに verify だけが
+// 赤くなる。実体(GitHub Release の最新版)は誰から見ても同じで、配ってあるものそのもの。
+// ただし倒す先は実体に限る: タグは打っただけで配っていない版でもありうるので、記録の方が確かな根拠。
 func verifyTargetFor(st *state.State, ch config.ResolvedChannel, fallback func() verifyTarget) verifyTarget {
 	rec, published := publishedRecord(st, ch.Name)
 	if flagVerifyVersion != "" {
 		return verifyTarget{Version: strings.TrimPrefix(flagVerifyVersion, "v"), Target: rec.Target, Source: verifySourceRequested}
 	}
 	// goinstall は何も push しないチャネルなので publish 記録を持たない(基点は必ず fallback)。
-	if published && ch.Name != "goinstall" {
-		return verifyTarget{Version: rec.Version, Target: rec.Target, Source: verifySourceRecord}
+	if !published || ch.Name == "goinstall" {
+		return fallback()
 	}
-	return fallback()
+	if fb := fallback(); fb.Source == verifySourceRelease && state.CompareVersions(fb.Version, rec.Version) > 0 {
+		return verifyTarget{Version: fb.Version, Target: rec.Target, Source: verifySourceRelease, Behind: rec.Version}
+	}
+	return verifyTarget{Version: rec.Version, Target: rec.Target, Source: verifySourceRecord}
 }
 
-// resolveFallbackVersion は publish 記録が無いときに「何を確かめるか」を実体から決める。
+// resolveFallbackVersion は記録に頼らず「何を確かめるか」を実体から決める。
 //
 // 一番強い根拠は GitHub Release の最新版 —— 実際に配ってあるものそのもので、ローカルに何も
 // 要らない。取れなければ git の直近タグ(HEAD がタグより進んでいても、配ったのは直近のタグ)、
@@ -320,6 +331,9 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 		data.Version, data.VersionSource = v, src
 	}
 	res.Data = data
+	if w := staleRecordWarning(used); w != nil {
+		warnings = append(warnings, *w)
+	}
 	res.Warnings = warnings
 	res.Errors = problems
 	switch {
@@ -336,6 +350,24 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 		res.Next = verifiedNext(checks)
 	}
 	return res
+}
+
+// staleRecordWarning は「手元の publish 記録が実体より古い」を 1 度だけ言う。
+//
+// 検証は実体に倒して緑のまま通るが、黙って倒すと記録の陳腐化に配布者が気づけない —— status の
+// 記録と実体の食い違い(drift)と同じ事象なので、コードも同じものを使う。
+func staleRecordWarning(used []verifyTarget) *output.Warning {
+	for _, t := range used {
+		if t.Behind == "" {
+			continue
+		}
+		return &output.Warning{
+			Code: output.WarnDriftDetected,
+			Message: "the local publish record (" + t.Behind + ") is behind the latest release (" + t.Version +
+				") — verified " + t.Version + "; .wharfy/state.json is stale, which is expected when publish runs in CI",
+		}
+	}
+	return nil
 }
 
 // uniformTarget は確かめた期待が全チャネルで同じ版かを見る。版がばらけている(記録が

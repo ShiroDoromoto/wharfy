@@ -113,6 +113,7 @@ var Commands = []Command{
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{selfGeneratorNote}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]", Notes: []string{
 		"it needs no local state: with no .wharfy/ record it takes the version from the channels themselves (the latest github release, else the latest git tag), so a bare clone can ask 'does what we shipped still install?' — name the version explicitly with --version <v>",
+		"a .wharfy/ record that is behind the latest github release loses to the release (it is stale, as it always is when publish ran in CI) and you get a drift_detected warning — the record is never allowed to fail a distribution that is actually fine",
 	}},
 	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},
 }

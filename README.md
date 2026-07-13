@@ -92,7 +92,10 @@ It needs nothing local to run. Which version it checks comes from the publish re
 one, and otherwise from the channels themselves: the latest GitHub release, or failing that the
 latest git tag. So a bare clone — a separate CI job, a scheduled workflow, your laptop a month
 later — can still ask *does what we shipped still install?*, which is the question you actually want
-to keep asking. `wharfy verify --version 0.4.1` names the version instead.
+to keep asking. When the record is behind the latest release, the release wins: `state.json` is a
+build artifact, so a `publish` that ran in CI leaves your local copy stale, and trusting it would
+turn `verify` red on a distribution that is perfectly fine. You get a `drift_detected` warning saying
+so. `wharfy verify --version 0.4.1` names the version instead.
 
 By default it installs nothing: it probes each channel over the network, so you can run it on every
 CI build. For `homebrew` it reads the formula off the tap and matches the version; for `releases` it
