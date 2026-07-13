@@ -72,21 +72,21 @@ func TestVerifyNothingPublished(t *testing.T) {
 	validateAgainst(t, resultSchemaID, res)
 }
 
-// verify がまだ扱わないチャネル(scoop 等)は skipped として checks に載る。
+// verify がまだ扱わないチャネル(cask 等)は skipped として checks に載る。
 // publish 済みでも「検証した」とは言わない — 検証ゼロなら ok=false のまま。
 func TestVerifyUncoveredChannelIsSkippedNotVerified(t *testing.T) {
 	root := scratchModule(t)
-	writeConfig(t, root, "project: demo\nchannels: [scoop]\nscoop:\n  bucket: acme/scoop-demo\n")
+	writeConfig(t, root, "project: demo\ngithub: acme/demo\nchannels: [cask]\n")
 	chdir(t, root)
-	recordPublishFor(t, root, "scoop", "1.2.0", "acme/scoop-demo")
+	recordPublishFor(t, root, "cask", "1.2.0", "acme/homebrew-demo")
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if res.OK || len(res.Errors) != 1 || res.Errors[0].Code != output.ErrNothingToVerify {
 		t.Fatalf("an uncovered channel is not a verified channel: %+v", res)
 	}
 	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Channel != "scoop" || ck[0].Status != verifyStatusSkipped {
-		t.Fatalf("scoop should be reported as skipped: %+v", ck)
+	if len(ck) != 1 || ck[0].Channel != "cask" || ck[0].Status != verifyStatusSkipped {
+		t.Fatalf("cask should be reported as skipped: %+v", ck)
 	}
 	if len(res.Warnings) != 0 {
 		t.Errorf("wharfy's own gap is not the distributor's warning: %+v", res.Warnings)
@@ -160,6 +160,80 @@ func TestVerifyVersionMismatch(t *testing.T) {
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
 		t.Fatalf("version mismatch should be verify_failed: %+v", res)
+	}
+}
+
+// plantScoopManifest は bucket に manifest を 1 枚置く(name は manifest のファイル名)。
+func plantScoopManifest(name, version string) *channel.InMemoryTapStore {
+	s := channel.NewInMemoryTapStore()
+	s.Files["bucket/"+name+".json"] = "{\n  \"version\": \"" + version + "\"\n}\n"
+	return s
+}
+
+// scratchScoop は scoop だけを配るプロジェクトを組み立て、その版を発行済みにする。
+func scratchScoop(t *testing.T, version string) string {
+	t.Helper()
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\ngithub: acme/demo\nchannels: [scoop]\n")
+	chdir(t, root)
+	recordPublishFor(t, root, "scoop", version, "acme/scoop-demo")
+	return root
+}
+
+// bucket の manifest の版が期待と一致 → verified。scoop の install は Windows でしか踏めないが、
+// bucket は HTTP で読めるので Linux の CI でも壊れたマニフェストを捕まえられる(#1486)。
+func TestVerifyScoopMatch(t *testing.T) {
+	scratchScoop(t, "1.2.0")
+	defer swapTapStore(plantScoopManifest("demo", "1.2.0"))()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("matching bucket manifest should verify ok: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Channel != "scoop" || ck[0].Status != verifyStatusOK {
+		t.Fatalf("scoop should be verified, not skipped: %+v", ck)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// bucket に manifest が無い → verify_failed(publish したはずのものが配られていない)。
+func TestVerifyScoopMissingManifest(t *testing.T) {
+	scratchScoop(t, "1.2.0")
+	defer swapTapStore(channel.NewInMemoryTapStore())()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a missing bucket manifest should be verify_failed: %+v", res)
+	}
+	if !hasNextDo(res, "wharfy publish scoop --yes") {
+		t.Errorf("verify must guide to the scoop publish: %+v", res.Next)
+	}
+}
+
+// bucket の manifest が古い版のまま → verify_failed。
+func TestVerifyScoopVersionMismatch(t *testing.T) {
+	scratchScoop(t, "1.2.0")
+	defer swapTapStore(plantScoopManifest("demo", "1.1.0"))()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a stale bucket manifest should be verify_failed: %+v", res)
+	}
+}
+
+// GUI(bundle)の scoop は bucket/<project>-app.json を所有する。verify が CLI 規約の
+// bucket/<project>.json を読みに行くと、健全な配布を「manifest が無い」と誤診する。
+func TestVerifyScoopBundleReadsTheAppManifest(t *testing.T) {
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\ngithub: acme/demo\nchannels: [scoop]\nbundle:\n  name: Demo\n  bundles:\n    - { os: windows, arch: amd64, kind: zip, path: dist/Demo-x64.zip }\n")
+	chdir(t, root)
+	recordPublishFor(t, root, "scoop", "1.2.0", "acme/scoop-demo")
+	defer swapTapStore(plantScoopManifest("demo-app", "1.2.0"))()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the bundle's app manifest should verify ok: %+v", res)
 	}
 }
 
