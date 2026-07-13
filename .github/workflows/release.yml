@@ -1,0 +1,59 @@
+name: release
+
+# 配るものは公衆の面前でビルドする(OSS の既定)。手元のリリースは「いま入っている wharfy」が
+# 生成器になるため、それが repo の HEAD と同じコードだという保証がどこにも無かった
+# (selfrelease.go の stale_generator は、まさにその穴を検知するために在る)。
+# CI はタグを clean に checkout してその場で go build するので、生成器 = そのタグのコード、で確定する。
+#
+# 引き金は意図的に絞る: タグ push と手動 dispatch だけで、main への merge では動かさない。
+# 依存の bump は溜めておいて、配るときに配る。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # ref にタグを選んで実行する(ブランチを選ぶと版が取れない)
+
+# GitHub Release を書くので read では足りない。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # Actions が既定で渡す GITHUB_TOKEN はこの repo にしか書けない。homebrew tap と scoop bucket は
+      # 別 repo なので、repo scope の PAT が要る(wharfy secrets がこの note を出す)。
+      GITHUB_TOKEN: ${{ secrets.WHARFY_GITHUB_TOKEN }}
+      # apt / rpm を fury.io の hosted repo へ push する。
+      PACKAGE_REPO_TOKEN: ${{ secrets.PACKAGE_REPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # wharfy は版をタグから取る。既定の shallow clone はタグを持って来ない
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # build / release / publish は goreleaser に shell out する(Go のビルド経路)。
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+
+      # go run ではなく go build。go run したバイナリは vcs.revision を持たず、生成器の素性が
+      # 不明なまま(= stale_generator)になり、--yes は拒否される。build なら HEAD が刻まれる。
+      - name: build wharfy from this tag
+        run: go build -o "$RUNNER_TEMP/wharfy" ./cmd/wharfy
+
+      # 何を配ろうとしているかをログに残してから配る(書く前に必ず差分を見せる、は wharfy の作法)。
+      - name: plan
+        run: $RUNNER_TEMP/wharfy publish --dry-run
+
+      # release(GitHub Release の作成とアセット)も publish が内包する。同一タグで再実行しても、
+      # release はアセットを貼り替え、publish は完了済みチャネルを飛ばす — 途中で死んだら再実行でよい。
+      - name: publish
+        run: $RUNNER_TEMP/wharfy publish --yes
+
+      # 配った先を消費者側から見に行く。上げたつもりで配れていない、を CI で捕まえる。
+      - name: verify
+        run: $RUNNER_TEMP/wharfy verify
