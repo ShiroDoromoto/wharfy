@@ -445,8 +445,10 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 
 // verifyReleases は Release に「配ったはずの資産」が実在するかを照合する。
 //
-// 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。どちらも無い旧リリースは
-// 照合の基準を持たないので skip する — 資産の欠落を見ていないのに verified とは言わない(D-4)。
+// 期待集合は wharfy 自身が書く latest.json(在れば GoReleaser の checksums も)。latest.json を
+// 持たない Release は failed — release は github(owner/repo)が解決できる限り必ずこれを上げるので、
+// 無いのは上げ損ねたか消されたかで、どちらも更新チェックの向き先が 404 になっている。checksums が
+// 在れば期待集合は組めてしまうが、それで緑を通すと配布者は壊れたまま気づけない(D-242・D-191 と同じ形)。
 //
 // 既定は資産本体を落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。名前が在っても
 // 中身が壊れていることはある(アップロードが途中で切れた・後から差し替えられた)。--install なら
@@ -469,10 +471,13 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTa
 			"the expected release does not exist",
 			"re-run release to cut the tag and upload its assets",
 			"", "wharfy release --yes"), nil
-	case len(audit.Manifests) == 0:
-		return verifySkip("releases",
-			"releases skipped: v"+tgt.Version+" carries neither "+channel.ManifestLatestJSON+
-				" nor a *_"+channel.ManifestChecksums+", so the expected assets cannot be established"), nil
+	case !audit.HasLatestJSON:
+		return verifyFailure("releases",
+			"releases: v"+tgt.Version+" carries no "+channel.ManifestLatestJSON,
+			"the release has no update manifest, so releases/latest/download/"+channel.ManifestLatestJSON+
+				" is a 404 for everyone already running the app",
+			"re-run release to upload "+channel.ManifestLatestJSON+" to this tag",
+			"", "wharfy release --yes"), nil
 	case audit.Version != "" && audit.Version != tgt.Version:
 		return verifyFailure("releases",
 			channel.ManifestLatestJSON+" on v"+tgt.Version+" says "+audit.Version+", expected "+tgt.Version,

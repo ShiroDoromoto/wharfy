@@ -98,8 +98,10 @@ By default it installs nothing: it probes each channel over the network, so you 
 CI build. For `homebrew` it reads the formula off the tap and matches the version; for `releases` it
 checks that every asset listed in the release's own manifest (`latest.json`, plus the checksums file
 `<project>_<version>_checksums.txt` when GoReleaser wrote one) really exists on the release — a user
-following that manifest would otherwise hit a `404`. The binaries themselves are not downloaded, and
-a release carrying neither manifest is reported `skipped`, not verified. For `script` it fetches both
+following that manifest would otherwise hit a `404`. The binaries themselves are not downloaded. A
+release with no `latest.json` at all fails the check: `release` always uploads one, so its absence
+means `…/releases/latest/download/latest.json` is a `404` and the update check of everyone who
+already installed is pointing at nothing. For `script` it fetches both
 published installers — `install.sh` and `install.ps1` — and matches the version each one installs; a
 missing or stale `install.ps1` fails the check on any OS, so a Linux CI catches a Windows-only break
 before your users do. For `goinstall` it asks the module proxy whether your tag resolves; for

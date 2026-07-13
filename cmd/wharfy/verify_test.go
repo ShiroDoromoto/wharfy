@@ -796,26 +796,41 @@ func TestVerifyReleasesReleaseAbsentFails(t *testing.T) {
 	}
 }
 
-// マニフェストの無い旧リリースは照合の基準を持たない → skip(緑にしない)。
-// 検証が 1 つも走らないので ok=false(nothing_to_verify)のまま。
-func TestVerifyReleasesWithoutManifestSkips(t *testing.T) {
+// latest.json を持たない Release は verify_failed(D-242)。release は必ずこれを上げるので、
+// 無いのは配布が壊れている——更新チェックの向き先が 404 になっている。
+func TestVerifyReleasesWithoutLatestJSONFails(t *testing.T) {
 	srv := ghReleaseServer(t, "v0.9.0", map[string]string{"demo_linux.tar.gz": "bin"})
 	chdir(t, scratchReleases(t, "0.9.0"))
 	swapReleasesProbe(t, srv.URL)
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
-	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrNothingToVerify {
-		t.Fatalf("an unverifiable release must not be green: %+v", res)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a release without %s must be verify_failed: %+v", channel.ManifestLatestJSON, res)
 	}
 	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Status != verifyStatusSkipped {
-		t.Fatalf("releases should be skipped: %+v", ck)
+	if len(ck) != 1 || ck[0].Status != verifyStatusFailed {
+		t.Fatalf("releases should be failed: %+v", ck)
 	}
 	if !strings.Contains(ck[0].Message, channel.ManifestLatestJSON) {
-		t.Errorf("the skip must say why it could not check: %q", ck[0].Message)
+		t.Errorf("the failure must name what is missing: %q", ck[0].Message)
 	}
-	if len(res.Warnings) == 0 || res.Warnings[0].Code != output.WarnChannelSkipped {
-		t.Errorf("skipping the check must be visible as a warning: %+v", res.Warnings)
+	if !hasNextDo(res, "wharfy release --yes") {
+		t.Errorf("a missing manifest is fixed by re-running release: %+v", res.Next)
+	}
+}
+
+// checksums だけが在る Release も verify_failed。期待集合は checksums から組めてしまうので、
+// ここを見張らないと資産照合だけが通って緑になり、latest.json の欠落を配布者が見ない(#1488 の実害)。
+func TestVerifyReleasesWithChecksumsButNoLatestJSONFails(t *testing.T) {
+	assets := map[string]string{"demo_linux.tar.gz": "bin"}
+	assets["demo_0.9.0_checksums.txt"] = checksumsFor(assets, "demo_linux.tar.gz")
+	srv := ghReleaseServer(t, "v0.9.0", assets)
+	chdir(t, scratchReleases(t, "0.9.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("checksums alone must not make a release without %s green: %+v", channel.ManifestLatestJSON, res)
 	}
 }
 
