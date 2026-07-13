@@ -28,12 +28,17 @@ import (
 // 既定は probe だけ ——ネットワーク越しの照合で終わり、何もインストールしない(D-4)。CI で毎回
 // 叩けるように軽く保つ。実インストールまで踏むのは `--install` を明示したときに限る(人間の決定)。
 //
-// homebrew は自前 tap の formula の、scoop は自前 bucket の manifest の、有無と版を照合する。
-// releases は Release の資産マニフェスト(latest.json / checksums)が載せる資産が実在するかを照合する
-// (本体は落とさない・D-4)。この 3 つは verify が踏める最大をここで踏み切っている(scoop の install は
-// Windows でしか踏めないが、bucket の manifest は HTTP で読めるので Linux の CI でも見張れる)。
-// 残る apt / rpm / script / goinstall には「実際に入れて動かす」余地があり、既定ではそこを踏まないので
-// partial に落とす。
+// owned チャネルは、配ったものが消費側に実在するかを probe で照合する ——homebrew は自前 tap の
+// formula、cask は同じ tap の cask、scoop は自前 bucket の manifest、container は registry の tag、
+// aur は AUR の pkgver。releases は Release の資産マニフェスト(latest.json / checksums)が載せる資産が
+// 実在するかを照合する(本体は落とさない・D-4)。これらは verify が踏める最大をここで踏み切っている
+// (macOS / Windows / Arch でしか install を踏めないチャネルも、配布物は HTTP で読めるので、Linux の
+// CI が他 OS 向けの破損を先に捕まえる・D-11)。残る apt / rpm / script / goinstall には「実際に入れて
+// 動かす」余地があり、既定ではそこを踏まないので partial に落とす。
+//
+// winget は gated —— 配るのは wharfy ではなく Microsoft で、申請 PR が中央リポジトリに merge されて
+// 初めて `winget install` が届く。中央の manifest が在れば verified、無ければ partial(審査待ちか、
+// 提出そのものが無いか)。配布者に打てる手が「待つ」しかないものを failed にはしない(D-243)。
 //
 // `--install` はその余地を踏む。apt/rpm は使い捨てコンテナで repo を足して install する。script は
 // 一時 PREFIX へ install.sh を、goinstall は一時 GOBIN へ go install を走らせる(→ verify_install.go)。
@@ -193,6 +198,14 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 				return internalError(c, err)
 			}
 			outcomes = append(outcomes, oc)
+		case "cask":
+			outcomes = append(outcomes, verifyCask(ctx, cfg, in, ch, tgt))
+		case "container":
+			outcomes = append(outcomes, verifyContainer(ctx, ch, tgt))
+		case "aur":
+			outcomes = append(outcomes, verifyAur(ctx, ch, tgt))
+		case "winget":
+			outcomes = append(outcomes, verifyWinget(ctx, ch, tgt))
 		case "releases":
 			oc, err := verifyReleases(ctx, ch, tgt)
 			if err != nil {
@@ -396,21 +409,26 @@ func uniformTarget(used []verifyTarget) (version, source string, uniform bool) {
 // を勧める ——「verify が緑」と「利用者が入れられる」は別の主張で、後者は --install でしか言えない。
 func verifiedNext(checks []verifyCheck) []output.NextDo {
 	var next []output.NextDo
-	if !flagInstall && hasStatus(checks, verifyStatusPartial) {
+	if !flagInstall && hasInstallablePartial(checks) {
 		next = append(next, output.NextDo{Reason: "the installs were probed but never exercised", Do: "wharfy verify --install"})
 	}
 	return append(next, output.NextDo{Reason: "distribution looks consistent; review overall state", Do: "wharfy status"})
 }
 
-// hasStatus は checks にその状態が 1 つでもあるか。
-func hasStatus(checks []verifyCheck, status string) bool {
+// hasInstallablePartial は --install で先まで踏めるチャネルが partial で止まっているか。
+// gated(winget)の partial は「上流にまだ merge されていない」であって、install で踏める先が無い
+// —— そこへ --install を勧めると、待つしかないものに手を打てるかのように読める。
+func hasInstallablePartial(checks []verifyCheck) bool {
 	for _, ck := range checks {
-		if ck.Status == status {
+		if ck.Status == verifyStatusPartial && !gatedChannel(ck.Channel) {
 			return true
 		}
 	}
 	return false
 }
+
+// gatedChannel は配るのが wharfy ではないチャネル(申請 → 上流のレビュアが merge して初めて配れる)。
+func gatedChannel(name string) bool { return name == "winget" || name == "homebrew-core" }
 
 // nothingToVerifyNext は検証対象ゼロのときの次の一手。channels: にあるチャネルだけを勧める
 // (設定から外したチャネルへの publish を勧めない・D-4)。
@@ -515,6 +533,132 @@ func verifyScoop(ctx context.Context, cfg config.Config, in config.File, ch conf
 	default:
 		return verifySuccess("scoop", "scoop "+rs.Version+" verified: manifest present at "+bucket+":"+sc.ManifestPath()+", version matches record"), nil
 	}
+}
+
+// verifyCask は自前 tap の cask が在り、版が期待と一致するかを照合する(homebrew と同型)。
+//
+// cask の install は macOS でしか踏めないが、tap の cask は HTTP だけで読める。Formula と同じ tap に
+// 同居しているので、同じ TapStore で読む —— 読む先(Casks/<token>.rb)は publish と同じ規約で決める。
+func verifyCask(ctx context.Context, cfg config.Config, in config.File, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
+	tap := firstNonEmptyStr(ch.Target, tgt.Target)
+	owner, repo, ok := splitOwnerName(tap)
+	if !ok {
+		return verifySkip("cask", "cask skipped: the tap is unresolved (set github: owner/repo or cask.tap)")
+	}
+	ck := &channel.Cask{
+		Token: caskToken(cfg, in),
+		Tap:   tap,
+		Store: newTapStore(owner, repo, os.Getenv("GITHUB_TOKEN")),
+	}
+	rs, perr := ck.Probe(ctx)
+	if perr != nil {
+		return probeFailedOutcome("cask", perr)
+	}
+	switch {
+	case !rs.Found:
+		return verifyFailure("cask",
+			"cask: no cask at "+tap+":"+ck.CaskPath()+" for the expected "+tgt.expected(),
+			"the expected version is not on the tap",
+			"re-publish to restore the cask",
+			"", "wharfy publish cask --yes")
+	case rs.Version != tgt.Version:
+		return verifyFailure("cask",
+			"tap has "+rs.Version+", expected "+tgt.expected(),
+			"the tap cask is not the expected version",
+			"re-publish to align the tap with the expected version",
+			"", "wharfy publish cask --yes")
+	default:
+		return verifySuccess("cask", "cask "+rs.Version+" verified: cask present at "+tap+":"+ck.CaskPath()+", version matches record")
+	}
+}
+
+// verifyContainer は registry に版の tag が在るかを照合する(manifest を GET するだけ・本体は引かない)。
+//
+// registry は tag を消せる。消された tag を指す `docker pull <image>:<version>` は 404 になるので、
+// 「push した」ことではなく「今も在る」ことを見る。tag が在れば版は一致とみなす —— tag の名前が版だから。
+func verifyContainer(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
+	image := firstNonEmptyStr(ch.Target, tgt.Target)
+	if image == "" {
+		return verifySkip("container", "container skipped: the image is unresolved (set github: owner/repo or container.image)")
+	}
+	rs, perr := (&channel.OCIProbe{Image: image, Token: os.Getenv("GITHUB_TOKEN"), Base: ociProbeBase}).Probe(ctx, tgt.Version)
+	if perr != nil {
+		return probeFailedOutcome("container", perr)
+	}
+	if !rs.Found {
+		return verifyFailure("container",
+			"container: "+image+" has no tag "+tgt.Version+" (expected "+tgt.expected()+")",
+			"the expected tag is not in the registry",
+			"re-publish to push the image; `docker pull "+image+":"+tgt.Version+"` is a 404 for users",
+			"", "wharfy publish container --yes")
+	}
+	return verifySuccess("container", "container "+tgt.Version+" verified: "+image+":"+tgt.Version+" exists in the registry")
+}
+
+// verifyAur は AUR RPC で pkgver を引き、期待と一致するかを照合する(status と同じ照合器)。
+//
+// AUR の install は Arch でしか踏めないが、RPC は HTTP だけで読める。pkgrel(1.2.0-1 の -1)は
+// AUR 側の再ビルド番号なので、照合の前に落とす(AurProbe が落とす)。
+func verifyAur(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
+	pkg := firstNonEmptyStr(ch.Target, tgt.Target)
+	if pkg == "" {
+		return verifySkip("aur", "aur skipped: the package name is unresolved (set github: owner/repo or aur.package)")
+	}
+	rs, perr := (&channel.AurProbe{Base: aurRPCBase}).Probe(ctx, pkg)
+	if perr != nil {
+		return probeFailedOutcome("aur", perr)
+	}
+	switch {
+	case !rs.Found:
+		return verifyFailure("aur",
+			"aur: no package "+pkg+" on the AUR for the expected "+tgt.expected(),
+			"the expected version is not on the AUR",
+			"re-publish to push the PKGBUILD",
+			"", "wharfy publish aur --yes")
+	case rs.Version != tgt.Version:
+		return verifyFailure("aur",
+			"aur has "+rs.Version+", expected "+tgt.expected(),
+			"the AUR package is not the expected version",
+			"re-publish to align the AUR with the expected version",
+			"", "wharfy publish aur --yes")
+	default:
+		return verifySuccess("aur", "aur "+rs.Version+" verified: "+pkg+" "+rs.Version+" is on the AUR")
+	}
+}
+
+// wingetCentral は winget の中央リポジトリ(申請の宛先＝利用者に届く唯一の場所)。
+const wingetCentral = "microsoft/winget-pkgs"
+
+// verifyWinget は中央リポジトリに版の manifest が在るかを照合する。
+//
+// winget は gated ——「提出した」と「配れている」が別の事実で、後者は Microsoft のレビュアが merge
+// して初めて成立する。だから確かめる先は自前の PR ではなく中央の manifest(利用者が `winget install`
+// で引くもの)。読み方は tap と同じで、GitHub の Contents API で 1 ファイル引くだけ。
+//
+// 無いことは配布の壊れとは限らない(審査待ちのこともある)ので failed にはしない —— 配布者に打てる手が
+// 「待つ」しかないものを赤くすると、CI がその赤に慣れて本当の赤を見なくなる。partial + 警告で、
+// 「この版はまだ利用者に届いていない」とだけ言う(D-243)。提出そのものの状態(PR が open か閉じたか)は
+// status が記録した PR URL から見せる。
+func verifyWinget(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
+	id := firstNonEmptyStr(ch.Target, tgt.Target)
+	if id == "" {
+		return verifySkip("winget", "winget skipped: the package identifier is unresolved (set github: owner/repo or winget.identifier)")
+	}
+	owner, repo, ok := splitOwnerName(wingetCentral)
+	if !ok {
+		return verifySkip("winget", "winget skipped: the central repository is unresolved: "+wingetCentral)
+	}
+	path := channel.WingetInput{Identifier: id, Version: tgt.Version}.ManifestDir() + id + ".yaml"
+	_, found, err := newTapStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, path)
+	if err != nil {
+		return probeFailedOutcome("winget", err)
+	}
+	if !found {
+		return verifyGatedPending("winget",
+			"winget "+tgt.Version+" is not in "+wingetCentral+" yet: no "+path+
+				" — `winget install "+id+"` still serves the previous version (the submission is merged by Microsoft, not by wharfy)")
+	}
+	return verifySuccess("winget", "winget "+tgt.Version+" verified: "+wingetCentral+" carries "+path)
 }
 
 // newReleasesProbe は Release の照合器を組む末端(テストで差し替える)。
@@ -966,6 +1110,16 @@ func verifyPartial(name, msg string) verifyOutcome {
 // ——毎回の verify が warning を吐けば、本当の warning が埋もれる。--install は next で案内する。
 func verifyProbedOnly(name, msg string) verifyOutcome {
 	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusPartial, Message: msg}}
+}
+
+// verifyGatedPending は gated チャネル(winget)で「この版はまだ中央に載っていない」。審査待ちと
+// 未提出をここでは区別しない —— どちらも「利用者にはまだ届いていない」で、確かめられるのはそこまで。
+// ok は落とさないが(配布者に打てる手は待つことだけ)、黙ってもいない(status の gated と同じ警告)。
+func verifyGatedPending(name, msg string) verifyOutcome {
+	return verifyOutcome{
+		check:   verifyCheck{Channel: name, Status: verifyStatusPartial, Message: msg},
+		warning: &output.Warning{Code: output.WarnGatedPending, Message: msg},
+	}
 }
 
 func verifyFailure(name, msg, problem, hint, detail, next string) verifyOutcome {

@@ -72,21 +72,21 @@ func TestVerifyNothingPublished(t *testing.T) {
 	validateAgainst(t, resultSchemaID, res)
 }
 
-// verify がまだ扱わないチャネル(cask 等)は skipped として checks に載る。
+// verify がまだ扱わないチャネル(homebrew-core)は skipped として checks に載る。
 // publish 済みでも「検証した」とは言わない — 検証ゼロなら ok=false のまま。
 func TestVerifyUncoveredChannelIsSkippedNotVerified(t *testing.T) {
 	root := scratchModule(t)
-	writeConfig(t, root, "project: demo\ngithub: acme/demo\nchannels: [cask]\n")
+	writeConfig(t, root, "project: demo\ngithub: acme/demo\nchannels: [homebrew-core]\n")
 	chdir(t, root)
-	recordPublishFor(t, root, "cask", "1.2.0", "acme/homebrew-demo")
+	recordPublishFor(t, root, "homebrew-core", "1.2.0", "demo")
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if res.OK || len(res.Errors) != 1 || res.Errors[0].Code != output.ErrNothingToVerify {
 		t.Fatalf("an uncovered channel is not a verified channel: %+v", res)
 	}
 	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Channel != "cask" || ck[0].Status != verifyStatusSkipped {
-		t.Fatalf("cask should be reported as skipped: %+v", ck)
+	if len(ck) != 1 || ck[0].Channel != "homebrew-core" || ck[0].Status != verifyStatusSkipped {
+		t.Fatalf("homebrew-core should be reported as skipped: %+v", ck)
 	}
 	if len(res.Warnings) != 0 {
 		t.Errorf("wharfy's own gap is not the distributor's warning: %+v", res.Warnings)
