@@ -339,6 +339,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	// release が済んでいれば(同 version)再アップロードしない(c2)。途中失敗からの再開で高コストな
 	// release を繰り返さない土台。無ければ 1 回だけ走らせて記録する。
 	var archs []build.Artifact
+	released := false
 	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
 		archs = set.Artifacts
 	} else if cfg.Prebuilt || cfg.Bundle {
@@ -350,6 +351,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 		}
 		_ = build.SaveArtifacts(root, version, a)
 		archs = a
+		released = true
 	} else {
 		a, rerr := newMultiReleaser(config.DistDir).ReleaseAll(ctx, root, configPath, skipDocker)
 		if rerr != nil {
@@ -357,6 +359,14 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 		}
 		_ = build.SaveArtifacts(root, version, a)
 		archs = a
+		released = true
+	}
+	// release をここで内包したなら latest.json も同じ Release へ出す(runRelease と同じ合流点)。
+	// 出さないと、release を独立に叩かず publish だけで配ったリリースから latest.json が落ちる。
+	if released {
+		if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+			return internalError(c, err)
+		}
 	}
 
 	st, _ := state.Load(root, cfg.Project)
@@ -941,14 +951,9 @@ func publishWinget(ctx context.Context, c registry.Command, root string, cfg con
 		return *guard
 	}
 	// 実 release: windows zip を GitHub Releases へ上げ、実 sha256 を得る(installer が参照)。
-	// BYO-bundle(GUI・依頼③)は再 archive せず持ち込み zip をそのまま上げる。
-	var archs []build.Artifact
-	var rerr error
-	if cfg.Prebuilt || cfg.Bundle {
-		archs, rerr = byoRelease(ctx, root, cfg, in, version) // 併用時は両方を出す(依頼②)
-	} else {
-		archs, rerr = newReleaser(config.DistDir).Release(ctx, root, configPath)
-	}
+	// 他の単体 publish と同じ合流点を通す — 記録済み成果物を再利用し、release を内包したときは
+	// latest.json も出す(BYO-bundle は再 archive せず持ち込み zip をそのまま上げる)。
+	archs, _, rerr := releaseArtifacts(ctx, root, configPath, cfg, in, version)
 	if rerr != nil {
 		return buildErrorResult(c, rerr)
 	}
@@ -1683,6 +1688,12 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 		return nil, false, err
 	}
 	_ = build.SaveArtifacts(root, version, archs) // 後続の publish <ch> が再利用できるよう記録
+	// release を内包した経路も latest.json を出す。runRelease だけが出していたため、release を
+	// 独立に叩かず publish だけで配ると Release から latest.json が落ち、更新チェックが 404 を
+	// 引いていた(v0.20.0)。実 release を走らせたここが、その経路の合流点になる。
+	if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+		return nil, false, err
+	}
 	return archs, false, nil
 }
 

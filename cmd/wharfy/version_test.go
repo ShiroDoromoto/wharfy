@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 )
 
 // TestMain は package 全体のテストを外部依存から隔離する(設計: go test に network/keychain 不要)。
@@ -17,6 +19,9 @@ func TestMain(m *testing.M) {
 	releasesAPIURL = ""
 	keyring.MockInit()
 	checkPkgIndex = nil // publish 直後の索引確認は実 repo を叩くので、明示したテストでだけ動かす
+	// latest.json のアップロードは実 GitHub を叩く。既定は in-memory にし、上がったものを
+	// 検証するテストだけが swapReleaseStore で自前の store を挿す。
+	newReleaseStore = func(string, string, string) channel.ReleaseStore { return channel.NewInMemoryReleaseStore() }
 	os.Exit(m.Run())
 }
 

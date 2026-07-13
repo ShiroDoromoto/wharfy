@@ -6,6 +6,7 @@ import (
 
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
@@ -80,6 +81,8 @@ func TestPublishAllApply(t *testing.T) {
 	defer swapMultiReleaser(mr)()
 	store := channel.NewInMemoryTapStore()
 	defer swapTapStore(store)()
+	rel := channel.NewInMemoryReleaseStore()
+	defer swapReleaseStore(rel)()
 	defer func() { flagYes = false }()
 	flagYes = true
 
@@ -89,6 +92,11 @@ func TestPublishAllApply(t *testing.T) {
 	}
 	if mr.calls != 1 {
 		t.Errorf("release must run exactly once for the whole batch, calls = %d", mr.calls)
+	}
+	// release を独立に叩かず publish だけで配っても latest.json は Release に載る。
+	// これが落ちると更新チェックの向き先が 404 になる(v0.20.0 が実際にそうなった)。
+	if _, ok := rel.Tags["v1.0.0"][config.LatestJSONName]; !ok {
+		t.Errorf("publish must upload %s to the release, got %+v", config.LatestJSONName, rel.Tags)
 	}
 	if !res.Data.(publishData).Applied {
 		t.Errorf("expected applied")
@@ -117,6 +125,7 @@ func TestPublishAllSkipsUnconfigured(t *testing.T) {
 	t.Setenv("AUR_SSH_KEY", "") // aur は鍵なし → skip
 	defer swapMultiReleaser(&fakeMultiReleaser{arts: sampleArchiveArtifacts()})()
 	defer swapTapStore(channel.NewInMemoryTapStore())()
+	defer swapReleaseStore(channel.NewInMemoryReleaseStore())()
 	defer func() { flagYes = false }()
 	flagYes = true
 
