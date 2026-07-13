@@ -577,28 +577,66 @@ func verifyCask(ctx context.Context, cfg config.Config, in config.File, ch confi
 	}
 }
 
-// verifyContainer は registry に版の tag が在るかを照合する(manifest を GET するだけ・本体は引かない)。
+// verifyContainer は registry の版の tag と :latest を照合する(manifest を GET するだけ・本体は引かない)。
 //
-// registry は tag を消せる。消された tag を指す `docker pull <image>:<version>` は 404 になるので、
-// 「push した」ことではなく「今も在る」ことを見る。tag が在れば版は一致とみなす —— tag の名前が版だから。
+// registry は tag を動かせるし消せる。だから「push した」ことではなく「今も在る」ことを見る。
+// 見るのは 2 つ:
+//
+//	:<version> が在るか —— 消えていれば `docker pull <image>:<version>` は 404。
+//	:latest が同じものを指しているか —— publish は両方を push するが、:latest だけが古い版を
+//	指したままなら、tag を省いた `docker pull <image>` を踏む利用者が古い版を掴む。tag は名前
+//	なので、同一性は digest でしか言えない。
+//
+// :latest の照合は「確かめる版が最新のはず」のときだけ行う。--version で古い版を名指した検証では、
+// :latest がそこを指していないのが正しい姿で、それを赤くすると嘘になる。
 func verifyContainer(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) verifyOutcome {
 	image := firstNonEmptyStr(ch.Target, tgt.Target)
 	if image == "" {
 		return verifySkip("container", "container skipped: the image is unresolved (set github: owner/repo or container.image)")
 	}
-	rs, perr := (&channel.OCIProbe{Image: image, Token: os.Getenv("GITHUB_TOKEN"), Base: ociProbeBase}).Probe(ctx, tgt.Version)
+	probe := &channel.OCIProbe{Image: image, Token: os.Getenv("GITHUB_TOKEN"), Base: ociProbeBase}
+	digest, found, perr := probe.Digest(ctx, tgt.Version)
 	if perr != nil {
 		return probeFailedOutcome("container", perr)
 	}
-	if !rs.Found {
+	if !found {
 		return verifyFailure("container",
 			"container: "+image+" has no tag "+tgt.Version+" (expected "+tgt.expected()+")",
 			"the expected tag is not in the registry",
 			"re-publish to push the image; `docker pull "+image+":"+tgt.Version+"` is a 404 for users",
 			"", "wharfy publish container --yes")
 	}
-	return verifySuccess("container", "container "+tgt.Version+" verified: "+image+":"+tgt.Version+" exists in the registry")
+	present := "container " + tgt.Version + " verified: " + image + ":" + tgt.Version + " exists in the registry"
+	if tgt.Source == verifySourceRequested {
+		return verifySuccess("container", present+"; :latest was not compared (a named version is not necessarily the latest one)")
+	}
+
+	latest, found, perr := probe.Digest(ctx, containerLatestTag)
+	switch {
+	case perr != nil:
+		return probeFailedOutcome("container", perr)
+	case !found:
+		return verifyFailure("container",
+			"container: "+image+" has no :"+containerLatestTag+" tag, though "+tgt.Version+" is there",
+			"the image has no "+containerLatestTag+" tag",
+			"re-publish to push the image; `docker pull "+image+"` (no tag) is a 404 for users",
+			"", "wharfy publish container --yes")
+	case digest != "" && latest != "" && digest != latest:
+		return verifyFailure("container",
+			"container: "+image+":"+containerLatestTag+" does not point at "+tgt.Version,
+			"the "+containerLatestTag+" tag serves a different image than the expected version",
+			"re-publish to move "+containerLatestTag+"; users who omit the tag (`docker pull "+image+"`) get the older image",
+			containerLatestTag+": "+latest+"\n"+tgt.Version+": "+digest, "wharfy publish container --yes")
+	case digest == "" || latest == "":
+		// digest を返さないレジストリでは、tag が在ることまでしか言えない(嘘の緑を返さない)。
+		return verifyProbedOnly("container", present+", and :"+containerLatestTag+
+			" exists; the registry served no digest, so wharfy cannot tell whether they are the same image")
+	}
+	return verifySuccess("container", present+", and :"+containerLatestTag+" points at the same image")
 }
+
+// containerLatestTag は publish が版の tag と一緒に push する可動 tag(tag を省いた pull の行き先)。
+const containerLatestTag = "latest"
 
 // verifyAur は AUR RPC で pkgver を引き、期待と一致するかを照合する(status と同じ照合器)。
 //

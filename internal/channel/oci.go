@@ -51,15 +51,30 @@ func (p *OCIProbe) base() string {
 
 // Probe は image:version のタグが在るかを確認する(在れば found・version 一致扱い)。
 func (p *OCIProbe) Probe(ctx context.Context, version string) (RemoteState, error) {
-	repo := registryRepo(p.Image)
-	token, err := p.authToken(ctx, repo)
+	_, found, err := p.Digest(ctx, version)
 	if err != nil {
 		return RemoteState{}, err
 	}
-	url := p.base() + "/v2/" + repo + "/manifests/" + version
+	if !found {
+		return RemoteState{Found: false}, nil
+	}
+	return RemoteState{Version: version, Found: true}, nil
+}
+
+// Digest は image:ref の manifest digest を返す(無ければ found=false)。
+//
+// 2 つの tag が同じものを指しているかは、この digest でしか言えない —— tag は動かせるので、
+// :latest が在ることと、:latest が今の版を指していることは別の事実(verify の container が見る)。
+func (p *OCIProbe) Digest(ctx context.Context, ref string) (digest string, found bool, err error) {
+	repo := registryRepo(p.Image)
+	token, err := p.authToken(ctx, repo)
+	if err != nil {
+		return "", false, err
+	}
+	url := p.base() + "/v2/" + repo + "/manifests/" + ref
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return RemoteState{}, err
+		return "", false, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -67,17 +82,17 @@ func (p *OCIProbe) Probe(ctx context.Context, version string) (RemoteState, erro
 	req.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json")
 	resp, err := p.client().Do(req)
 	if err != nil {
-		return RemoteState{}, err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return RemoteState{Version: version, Found: true}, nil
+		return resp.Header.Get("Docker-Content-Digest"), true, nil
 	case http.StatusNotFound:
-		return RemoteState{Found: false}, nil
+		return "", false, nil
 	default:
-		return RemoteState{}, fmt.Errorf("registry %s: %s", url, resp.Status)
+		return "", false, fmt.Errorf("registry %s: %s", url, resp.Status)
 	}
 }
 

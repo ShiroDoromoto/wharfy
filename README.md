@@ -100,8 +100,10 @@ so. `wharfy verify --version 0.4.1` names the version instead.
 By default it installs nothing: it probes each channel over the network, so you can run it on every
 CI build. For `homebrew` it reads the formula off the tap and matches the version; for `scoop` it
 reads the manifest off your bucket and matches it the same way; for `cask` it reads the cask off the
-same tap; for `container` it asks the registry whether the image tag is still there (a tag that was
-never pushed, or was deleted later, turns `docker pull` into a `404`); for `aur` it reads the package
+same tap; for `container` it asks the registry whether the image tag is still there and whether
+`:latest` points at the same image (a tag that was never pushed, or was deleted later, turns
+`docker pull` into a `404`; a `:latest` left on the old image quietly serves it to everyone who omits
+the tag — only the digest can tell you); for `aur` it reads the package
 version out of the AUR. Installing those needs Windows, macOS, Docker or Arch — but every one of them
 is plain HTTP, so a Linux CI still catches a manifest that was never written or is stuck on an old
 version. `winget` and `homebrew-core` are gated: what reaches users is the manifest Microsoft merges

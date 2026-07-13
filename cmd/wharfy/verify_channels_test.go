@@ -85,17 +85,20 @@ func TestVerifyCaskVersionMismatch(t *testing.T) {
 	}
 }
 
-// ociRegistry は tag の有無を返すレジストリ(found の tag だけ 200)。
-func ociRegistry(t *testing.T, found string) {
+// ociRegistry は tag→digest を返すレジストリ(在る tag だけ 200 + Docker-Content-Digest)。
+func ociRegistry(t *testing.T, tags map[string]string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/token" {
 			_, _ = w.Write([]byte(`{"token":"t"}`))
 			return
 		}
-		if found != "" && strings.HasSuffix(r.URL.Path, "/manifests/"+found) {
-			w.WriteHeader(http.StatusOK)
-			return
+		for tag, digest := range tags {
+			if strings.HasSuffix(r.URL.Path, "/manifests/"+tag) {
+				w.Header().Set("Docker-Content-Digest", digest)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -103,10 +106,10 @@ func ociRegistry(t *testing.T, found string) {
 	t.Cleanup(swapOCIProbeBase(srv.URL))
 }
 
-// registry に版の tag が在る → verified。
+// 版の tag が在り、:latest が同じ image を指す → verified。
 func TestVerifyContainerTagPresent(t *testing.T) {
 	scratchChannel(t, "container", "1.2.0", "ghcr.io/acme/demo")
-	ociRegistry(t, "1.2.0")
+	ociRegistry(t, map[string]string{"1.2.0": "sha256:aaa", "latest": "sha256:aaa"})
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if !res.OK {
@@ -122,7 +125,7 @@ func TestVerifyContainerTagPresent(t *testing.T) {
 // tag が消えている(または push できていない)→ verify_failed。`docker pull` が 404 になる。
 func TestVerifyContainerTagMissing(t *testing.T) {
 	scratchChannel(t, "container", "1.2.0", "ghcr.io/acme/demo")
-	ociRegistry(t, "")
+	ociRegistry(t, nil)
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
@@ -130,6 +133,50 @@ func TestVerifyContainerTagMissing(t *testing.T) {
 	}
 	if !hasNextDo(res, "wharfy publish container --yes") {
 		t.Errorf("verify must guide to the container publish: %+v", res.Next)
+	}
+}
+
+// :latest が古い image を指したまま → verify_failed。tag を省いた `docker pull <image>` を踏む
+// 利用者は古い版を掴むのに、版の tag だけを見ていると緑で通ってしまう(#1532)。
+func TestVerifyContainerLatestPointsAtAnotherImage(t *testing.T) {
+	scratchChannel(t, "container", "1.2.0", "ghcr.io/acme/demo")
+	ociRegistry(t, map[string]string{"1.2.0": "sha256:new", "latest": "sha256:old"})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a latest tag left on the old image should be verify_failed: %+v", res)
+	}
+	if !strings.Contains(res.Errors[0].Detail, "sha256:old") {
+		t.Errorf("the detail should show what latest actually points at: %+v", res.Errors[0])
+	}
+}
+
+// :latest がそもそも無い → verify_failed(`docker pull <image>` が 404)。
+func TestVerifyContainerLatestMissing(t *testing.T) {
+	scratchChannel(t, "container", "1.2.0", "ghcr.io/acme/demo")
+	ociRegistry(t, map[string]string{"1.2.0": "sha256:aaa"})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK || len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("a missing latest tag should be verify_failed: %+v", res)
+	}
+}
+
+// --version で古い版を名指した検証では :latest を照合しない —— :latest がその版を指していないのが
+// 正しい姿で、赤くすると嘘になる。
+func TestVerifyContainerRequestedVersionDoesNotCompareLatest(t *testing.T) {
+	scratchChannel(t, "container", "1.2.0", "ghcr.io/acme/demo")
+	ociRegistry(t, map[string]string{"1.1.0": "sha256:old", "latest": "sha256:new"})
+	flagVerifyVersion = "v1.1.0"
+	t.Cleanup(func() { flagVerifyVersion = "" })
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a named older version is published; latest is not its business: %+v", res)
+	}
+	ck := checksOf(t, res)
+	if len(ck) != 1 || ck[0].Status != verifyStatusOK {
+		t.Fatalf("the named version exists, so it verifies: %+v", ck)
 	}
 }
 

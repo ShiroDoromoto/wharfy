@@ -40,6 +40,36 @@ func TestOCIProbe(t *testing.T) {
 	}
 }
 
+// Digest は manifest の digest を返す。tag は動かせるので、2 つの tag(:<version> と :latest)が
+// 同じ image を指しているかは、これでしか言えない(verify の container が使う)。
+func TestOCIDigest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_, _ = w.Write([]byte(`{"token":"anon-token"}`))
+		case "/v2/acme/widget/manifests/1.2.3", "/v2/acme/widget/manifests/latest":
+			w.Header().Set("Docker-Content-Digest", "sha256:abc")
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	p := &OCIProbe{Image: "ghcr.io/acme/widget", Base: srv.URL, HTTP: srv.Client()}
+	version, found, err := p.Digest(context.Background(), "1.2.3")
+	if err != nil || !found || version != "sha256:abc" {
+		t.Fatalf("digest = %q found=%v err=%v", version, found, err)
+	}
+	latest, found, err := p.Digest(context.Background(), "latest")
+	if err != nil || !found || latest != version {
+		t.Errorf("latest should resolve to the same image: %q found=%v err=%v", latest, found, err)
+	}
+	if _, found, err := p.Digest(context.Background(), "9.9.9"); err != nil || found {
+		t.Errorf("absent tag → not found: found=%v err=%v", found, err)
+	}
+}
+
 func TestJSONField(t *testing.T) {
 	if v := jsonField(`{"a":1,"token":"xyz","b":2}`, "token"); v != "xyz" {
 		t.Errorf("jsonField = %q", v)
