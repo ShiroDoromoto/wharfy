@@ -390,6 +390,18 @@ func InstallURL(cfg Config) string {
 	return fmt.Sprintf("https://github.com/%s/%s/releases/latest/download/%s", owner, repo, InstallScriptName)
 }
 
+// ReleaseAssetURL は「そのタグの Release に上がっている資産」の URL(tag 直リンク)。
+// latest 経由(InstallURL)と違い、昇格していない版の資産もそのまま引ける —— 昇格前に
+// 「これから配る実物」を確かめられるのはこの URL だけ(D-263: 検証の窓は prerelease で開く)。
+// github が解決できなければ空。
+func ReleaseAssetURL(cfg Config, version, name string) string {
+	owner, repo, ok := splitOwnerRepo(cfg.Github)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", owner, repo, strings.TrimPrefix(version, "v"), name)
+}
+
 // resolvedTarget は解決済み cfg.Channels から指定チャネルの Target を引く(無ければ空)。
 func resolvedTarget(cfg Config, name string) string {
 	for _, ch := range cfg.Channels {

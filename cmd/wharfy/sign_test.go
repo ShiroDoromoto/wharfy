@@ -32,10 +32,16 @@ func TestSignWiring(t *testing.T) {
 }
 
 func hasWarning(res output.Result, code string) bool {
+	return countWarnings(res, code) > 0
+}
+
+// countWarnings は同じ code の warning が何本出たかを数える(同じ事実を 2 度言っていないかを見る)。
+func countWarnings(res output.Result, code string) int {
+	n := 0
 	for _, w := range res.Warnings {
 		if w.Code == code {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }

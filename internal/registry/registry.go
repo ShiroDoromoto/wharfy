@@ -167,9 +167,10 @@ var Commands = []Command{
 	}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]", Notes: []string{
 		"verifying a prerelease is the point of one: `wharfy verify --version <v>` checks the assets on that release — the real bytes CI built — " +
-			"and says they are not what users get yet (prerelease_not_latest), without turning red. the channels that only get the version when you " +
-			"publish (tap, bucket, hosted repo, registry, and install.sh, which is served from releases/latest/download/) are not checked against it: " +
-			"they still serve the previous version, and that is correct, not a failure",
+			"and says they are not what users get yet (prerelease_not_latest), without turning red. install.sh and install.ps1 are checked too, " +
+			"from the tag-direct url (releases/download/v<v>/), since that is where the bytes you are about to ship already are — the latest url " +
+			"users curl still serves the previous installer until you promote. the channels that only get the version when you publish (tap, bucket, " +
+			"hosted repo, registry) are not checked against it: they still serve the previous version, and that is correct, not a failure",
 		"it needs no local state: with no .wharfy/ record it takes the version from the channels themselves (the latest github release, else the latest git tag), so a bare clone can ask 'does what we shipped still install?' — name the version explicitly with --version <v>",
 		"the default (probe) run downloads no artifact, but it does not take their contents on trust either: github reports a sha256 digest for every release asset it serves, and verify compares those against the checksums manifest — a truncated upload or an asset swapped out after the fact is caught on every run, not only under --install (which additionally downloads them and installs from the channel)",
 		"a .wharfy/ record that is behind the latest github release loses to the release (it is stale, as it always is when publish ran in CI) and you get a drift_detected warning — the record is never allowed to fail a distribution that is actually fine",

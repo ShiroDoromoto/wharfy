@@ -107,6 +107,11 @@ wharfy promote --yes                # make it latest — this is when users see 
 wharfy publish --yes                # write the channels against the release you just promoted
 ```
 
+In that window `verify` reads the installers from the tag itself
+(`releases/download/v1.2.0/install.sh`), not from the `latest` URL your users `curl` — that one still
+serves the previous installer until you promote. The most-walked path into your project is therefore
+checked *before* it is handed to anyone, against the very bytes that will be handed over.
+
 `promote` flips one flag on the release GitHub already holds: nothing is re-uploaded and no
 attestation is re-signed, so **the bytes you verified are the bytes users get**. It is idempotent —
 promoting a release that is already latest changes nothing and reports ok. If verification goes red,

@@ -195,6 +195,8 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 	var outcomes []verifyOutcome
 	var unpublished []string
 	var used []verifyTarget
+	// 確かめた版が prerelease だったなら、走り 1 回につき 1 度だけそう言う(下の prereleaseNotice)。
+	preVersion := ""
 	for _, ch := range targets {
 		tgt := verifyTargetFor(st, ch, fallbackFor)
 		if tgt.Version == "" {
@@ -205,7 +207,11 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		// 確かめようとしている版がまだ prerelease なら、release が配る物(releases / script / 来歴)
 		// 以外のチャネルはその版を持っていなくて当たり前 —— 持っていないことを赤くしない。
 		// 昇格していないだけで、配布は壊れていない(赤にすれば、検証の窓が使い物にならなくなる)。
-		if isPrerelease(tgt.Version) && !releaseBorneChannel(ch.Name) {
+		pre := isPrerelease(tgt.Version)
+		if pre {
+			preVersion = tgt.Version
+		}
+		if pre && !releaseBorneChannel(ch.Name) {
 			used = append(used, tgt)
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" not checked: v"+tgt.Version+
 				" is a prerelease — this channel still serves the previous version until you promote"))
@@ -242,14 +248,14 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			if err != nil {
 				return internalError(c, err)
 			}
-			outcomes = append(outcomes, prereleaseNotice(oc, audit, tgt.Version))
+			outcomes = append(outcomes, oc)
 			// 来歴は Release の成果物に付く(subject は資産の digest)。資産の実在照合が落ちているなら、
 			// 確かめる対象そのものが揃っていない —— そこは releases の失敗として語れば足りる。
 			if oc.check.Status != verifyStatusFailed {
 				outcomes = append(outcomes, verifyAttest(ctx, cfg, ch, tgt, audit))
 			}
 		case "script":
-			outcomes = append(outcomes, verifyScript(ctx, cfg, in, tgt))
+			outcomes = append(outcomes, verifyScript(ctx, cfg, in, tgt, pre))
 		case "apt", "rpm":
 			outcomes = append(outcomes, verifyLinuxRepo(ctx, ch, cfg, in, tgt))
 		default:
@@ -258,7 +264,7 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: verify does not cover this channel yet"))
 		}
 	}
-	return verifyResult(c, outcomes, unpublished, used)
+	return verifyResult(c, outcomes, unpublished, used, preVersion)
 }
 
 // verifyTargetFor は 1 チャネルの期待(版・書き先・その出どころ)を決める。
@@ -358,7 +364,8 @@ func publishedRecord(st *state.State, name string) (state.PublishRecord, bool) {
 //
 // unpublished は channels: にあるが未発行のチャネル(検証対象ゼロのときの次の一手に使う)。
 // used は各チャネルが確かめた期待(版と出どころ)。全部が同じ版なら data に載せる。
-func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []string, used []verifyTarget) output.Result {
+// preVersion が空でなければ、確かめた版はまだ昇格しておらず利用者に届いていない(prereleaseNotice)。
+func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []string, used []verifyTarget, preVersion string) output.Result {
 	var checks []verifyCheck
 	var problems []output.Problem
 	var warnings []output.Warning
@@ -392,6 +399,10 @@ func verifyResult(c registry.Command, outcomes []verifyOutcome, unpublished []st
 	res.Data = data
 	if w := staleRecordWarning(used); w != nil {
 		warnings = append(warnings, *w)
+	}
+	// 赤いときは言わない —— 直すのが先で、届いていないのは見ればわかる。
+	if preVersion != "" && !failed {
+		warnings = append(warnings, prereleaseNotice(preVersion))
 	}
 	res.Warnings = warnings
 	res.Errors = problems
@@ -927,11 +938,11 @@ func mismatchDetail(bad []channel.ChecksumMismatch) string {
 // 走っているホストの OS によらず**両方**を照合する ——さもなければ Linux の CI で verify を回す
 // 配布者は、install.ps1 が release から欠けても、古い版を入れる本文でも、緑を受け取る。
 // 実際に走らせる(--install)のは、このホストの利用者が踏む一方だけ ——Windows なら install.ps1。
-func verifyScript(ctx context.Context, cfg config.Config, in config.File, tgt verifyTarget) verifyOutcome {
-	url := scriptProbeURL
-	if url == "" {
-		url = config.InstallURL(cfg)
-	}
+//
+// pre(その版がまだ prerelease)なら、見に行くのは tag 直リンクの実物 —— 昇格前に確かめられるのは
+// そこだけで、利用者がいま踏む URL とは別物(scriptVerifyURL)。
+func verifyScript(ctx context.Context, cfg config.Config, in config.File, tgt verifyTarget, pre bool) verifyOutcome {
+	url := scriptVerifyURL(cfg, tgt.Version, pre)
 	if url == "" {
 		return verifySkip("script", "script skipped: the install.sh url is unresolved (set github: owner/repo or script.base_url)")
 	}
@@ -944,7 +955,8 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, tgt ve
 		return bad
 	}
 	if !flagInstall {
-		return verifyProbedOnly("script", "script "+version+" probed: install.sh and install.ps1 both install "+version+"; neither install was exercised")
+		return verifyProbedOnly("script", "script "+version+" probed at "+url+
+			": install.sh and install.ps1 both install "+version+"; neither install was exercised")
 	}
 
 	inst := hostScriptInstaller(runtime.GOOS, url)
@@ -960,6 +972,24 @@ func verifyScript(ctx context.Context, cfg config.Config, in config.File, tgt ve
 			tail(out, 4000), "wharfy release --yes")
 	}
 	return verifySuccess("script", "script "+version+" verified: installed from "+inst.URL+" into a temporary prefix and ran")
+}
+
+// scriptVerifyURL は「これから配る install.sh」が在る URL を選ぶ。
+//
+// 昇格した後は利用者が踏む URL そのもの(releases/latest/download/ か vanity な base_url)。まだ
+// 昇格していない(pre)なら、そこから返るのは旧版なので tag 直リンクを見る —— 確かめたいのは
+// 「利用者がいま踏む物」ではなく「これから配る実物」で、その 2 つは昇格までの窓の間だけ食い違う。
+// 一番踏まれる導線を、配る前に一度も踏まないままにはしない(D-263 の窓は script にも開ける)。
+func scriptVerifyURL(cfg config.Config, version string, pre bool) string {
+	if scriptProbeURL != "" {
+		return scriptProbeURL
+	}
+	if pre {
+		if u := config.ReleaseAssetURL(cfg, version, config.InstallScriptName); u != "" {
+			return u
+		}
+	}
+	return config.InstallURL(cfg)
 }
 
 // probeInstaller は公開インストーラ 1 本を確かめる —— 在るか、記録どおりの版を入れるか。
@@ -1304,29 +1334,30 @@ func verifyNotRun(name, msg string) verifyOutcome {
 	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusSkipped, Message: msg}}
 }
 
-// releaseBorneChannel は、prerelease の窓でも**その版を実際に見に行けるチャネル**。tag を名指しで
-// 引ける releases だけがそれで、来歴もこの Release の資産に付くので一緒に確かめられる。
+// releaseBorneChannel は、prerelease の窓でも**その版を実際に見に行けるチャネル**。その版の実物が
+// Release の資産として上がっており、tag 直リンクで引けるもの —— releases(来歴もこの資産に付く)と
+// script(install.sh / install.ps1 は Release へ同梱アップロードされる)。
 //
-// script は入らない —— install.sh は releases/latest/download/ から配るので、昇格するまで利用者に
-// 返るのは旧版の install.sh であり、そこを新版として確かめれば嘘になる。tap / bucket / hosted repo /
-// registry も同じで、書くのは publish(＝昇格の後)。
+// script が入るのは、確かめる URL を latest 経由ではなく tag 直リンクに切り替えるため(scriptVerifyURL)。
+// releases/latest/download/ から引けば昇格まで旧版が返り、そこを新版として確かめれば嘘になる ——
+// 一番踏まれる導線を、配る前に一度も踏まないままにはしない。tap / bucket / hosted repo / registry は
+// 入らない: 書くのは publish(＝昇格の後)で、その版はまだどこにも無い。
 func releaseBorneChannel(name string) bool {
-	return name == "releases"
+	return name == "releases" || name == "script"
 }
 
 // prereleaseNotice は「確かめた物は、まだ利用者に届いていない」を緑のまま添える。prerelease を
 // 赤にはしない —— 検証はまさにこの窓で回すもので、赤くすれば窓が使い物にならなくなる。
-func prereleaseNotice(oc verifyOutcome, audit channel.ReleaseAudit, version string) verifyOutcome {
-	if !audit.Prerelease || oc.check.Status == verifyStatusFailed || oc.warning != nil {
-		return oc
-	}
-	oc.warning = &output.Warning{
+//
+// 出すのはチャネルごとではなく走り 1 回につき 1 度(同じ事実を何度も言わない)。チャネルを名指しで
+// 検証した(`wharfy verify script`)ときにも同じ注記が付く。
+func prereleaseNotice(version string) output.Warning {
+	return output.Warning{
 		Code: output.WarnPrereleaseNotLatest,
 		Message: "v" + version + " is a prerelease: what you just checked is not what users get — " +
 			"releases/latest/download/ and latest.json still serve the previous version. " +
 			"run `wharfy promote --yes` to hand these exact bytes to them",
 	}
-	return oc
 }
 
 func probeFailedOutcome(name string, err error) verifyOutcome {

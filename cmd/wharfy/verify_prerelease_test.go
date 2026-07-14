@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 )
 
@@ -81,5 +82,59 @@ func TestVerifyPrereleaseStaysGreen(t *testing.T) {
 	hb := checkFor(t, res, "homebrew")
 	if hb.Status != verifyStatusSkipped || !strings.Contains(hb.Message, "prerelease") {
 		t.Errorf("the tap cannot have an unpromoted version — that is not a failure: %+v", hb)
+	}
+}
+
+// TestVerifyPrereleaseChecksInstaller: install.sh は一番踏まれる導線なので、昇格前でも確かめる。
+// 実物は tag 直リンクの資産として既に上がっている —— skip すれば、配る前に一度も踏まないまま配ることになる。
+func TestVerifyPrereleaseChecksInstaller(t *testing.T) {
+	gh := ghPrereleaseServer(t, "v1.2.0", map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	})
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [releases, script]\ngithub: acme/demo\n")
+	chdir(t, root)
+	swapReleasesProbe(t, gh.URL)
+	defer swapScriptProbeURL(installScriptServer(t, "1.2.0").URL)()
+
+	store := channel.NewInMemoryReleaseStore()
+	if err := store.Upload(context.Background(), "v1.2.0", "demo 1.2.0",
+		[]channel.ReleaseAsset{{Name: "demo_linux.tar.gz"}}, channel.ReleaseOptions{Prerelease: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer swapReleaseStore(store)()
+
+	flagVerifyVersion = "1.2.0"
+	defer func() { flagVerifyVersion = "" }()
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("the installer on the prerelease is exactly what verify is for: %+v", res)
+	}
+	sc := checkFor(t, res, "script")
+	if sc.Status == verifyStatusSkipped {
+		t.Fatalf("install.sh is on the tagged release: it must be checked before it ships, not skipped: %+v", sc)
+	}
+	if sc.Status == verifyStatusFailed {
+		t.Fatalf("the installer serves the expected version: %+v", sc)
+	}
+	// 同じ事実を 2 度言わない(releases と script の両方が prerelease を見ている)。
+	if n := countWarnings(res, output.WarnPrereleaseNotLatest); n != 1 {
+		t.Errorf("the release is one prerelease, so it is said once: got %d", n)
+	}
+}
+
+// TestScriptVerifyURLPrereleaseIsTagDirect: 昇格前に見る URL は tag 直リンク(latest は旧版を返す)。
+// 昇格した後は利用者が踏む URL そのもの —— 「いま踏む物」と「これから配る実物」を言い分ける。
+func TestScriptVerifyURLPrereleaseIsTagDirect(t *testing.T) {
+	cfg := config.Config{Github: "acme/demo"}
+	pre := scriptVerifyURL(cfg, "1.2.0", true)
+	if want := "https://github.com/acme/demo/releases/download/v1.2.0/install.sh"; pre != want {
+		t.Errorf("prerelease install.sh must be read from the tag: got %q, want %q", pre, want)
+	}
+	promoted := scriptVerifyURL(cfg, "1.2.0", false)
+	if want := "https://github.com/acme/demo/releases/latest/download/install.sh"; promoted != want {
+		t.Errorf("a promoted release is read where users read it: got %q, want %q", promoted, want)
 	}
 }
