@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -403,8 +404,8 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	// release を繰り返さない土台。無ければ 1 回だけ走らせて記録する。
 	var archs []build.Artifact
 	released := false
-	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
-		archs = set.Artifacts
+	if a, found := releasedArtifacts(ctx, root, cfg, version); found {
+		archs = a
 	} else if cfg.Prebuilt || cfg.Bundle {
 		// BYO(依頼①②): GoReleaser を通さず、自前 archive＋ネイティブ Release upload。
 		// prebuilt(CLI)と bundle(GUI)は併用でき、両方あれば両方を出す(片方を落とさない)。
@@ -428,13 +429,13 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	// 出さないと、release を独立に叩かず publish だけで配ったリリースから latest.json が落ちる。
 	var extras []string
 	if released {
-		latestPath, err := uploadLatestJSON(ctx, root, cfg, version, archs)
+		manifests, err := uploadReleaseManifests(ctx, root, cfg, version, archs)
 		if err != nil {
 			return internalError(c, err)
 		}
 		// この run が上げた物だけを来歴の subject にする。上げていないなら、それを上げた前段
 		// (release / 単発 publish)が既に証明を付けている。
-		extras = releaseExtras(root, cfg, version, latestPath)
+		extras = releaseExtras(root, cfg, version, manifests)
 	}
 	// attest 段: release を内包した経路にも来歴を付ける。CI が叩くのは `publish --yes` なので、
 	// ここを落とすと証明が付くのは release を単独で叩いた人だけになる(＝ほぼ誰にも付かない)。
@@ -1790,12 +1791,41 @@ func publishViaRelease(ctx context.Context, c registry.Command, root string, cfg
 	return ownedReleaseApply(ctx, c, pub, root, cfg.Project, chName, target, cfg.Github, version, archs, fz)
 }
 
+// releasedArtifacts は publish がマニフェストに書く成果物を、**上げ直さずに**手に入れる。
+//
+//  1. 手元の記録(.wharfy/artifacts.json・同版) —— release と同じ run なら必ず在る
+//  2. Release 自身が持つ artifacts.json —— release と publish が別のジョブ/別のマシンで走るとき
+//
+// 2 が要るのは、prerelease → 検証 → promote → publish という動線では publish が別の run で走るから。
+// そこで「記録が無い」と読んで release をやり直せば、**検証したのとは別のバイト列**に貼り替わり、
+// 来歴もそのバイト列から外れる —— 窓を開けて確かめた意味が消える。引けたら手元にも書き戻す
+// (以降の publish <ch> がそのまま再利用できる)。
+func releasedArtifacts(ctx context.Context, root string, cfg config.Config, version string) ([]build.Artifact, bool) {
+	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
+		return set.Artifacts, true
+	}
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return nil, false
+	}
+	body, found, err := newReleasesProbe(owner, repo).FetchNamedAsset(ctx, version, channel.ManifestArtifacts)
+	if err != nil || !found {
+		return nil, false
+	}
+	var set build.ArtifactSet
+	if err := json.Unmarshal(body, &set); err != nil || set.Version != version || len(set.Artifacts) == 0 {
+		return nil, false
+	}
+	_ = build.SaveArtifacts(root, version, set.Artifacts)
+	return set.Artifacts, true
+}
+
 // releaseArtifacts は publish の apply で使う成果物を返す。release(同 version)が記録済みなら
 // 再アップロードせず再利用し(reused=true)、無ければ release パスを走らせて記録する(後方互換)。
 // BYO-binary(依頼①)では GoReleaser を通さず、自前 archive＋ネイティブ Release upload を使う。
 func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.Config, in config.File, version string) ([]build.Artifact, bool, error) {
-	if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
-		return set.Artifacts, true, nil
+	if archs, found := releasedArtifacts(ctx, root, cfg, version); found {
+		return archs, true, nil
 	}
 	var (
 		archs []build.Artifact
@@ -1813,14 +1843,14 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 	// release を内包した経路も latest.json を出す。runRelease だけが出していたため、release を
 	// 独立に叩かず publish だけで配ると Release から latest.json が落ち、更新チェックが 404 を
 	// 引いていた(v0.20.0)。実 release を走らせたここが、その経路の合流点になる。
-	latestPath, err := uploadLatestJSON(ctx, root, cfg, version, archs)
+	manifests, err := uploadReleaseManifests(ctx, root, cfg, version, archs)
 	if err != nil {
 		return nil, false, err
 	}
 	// 単発 publish <ch> が release を内包した経路にも来歴を付ける(この経路だけ証明が落ちる、を作らない)。
 	// 警告(CI なのに証明できない)を載せる欄がこの経路には無いので、ここで出るのは失敗だけ
 	// —— 欠落の告知は release / 一括 publish が担う。
-	if _, _, err := attestRelease(ctx, cfg, archs, releaseExtras(root, cfg, version, latestPath)); err != nil {
+	if _, _, err := attestRelease(ctx, cfg, archs, releaseExtras(root, cfg, version, manifests)); err != nil {
 		return nil, false, err
 	}
 	return archs, false, nil
@@ -2236,8 +2266,8 @@ func publishCask(ctx context.Context, c registry.Command, root string, cfg confi
 	// 実 release: バンドルを GitHub Release へ上げ、実 sha256 を得る(記録済みなら再利用)。
 	// 凍結中は release を走らせない — 配り直すのは既に release 済みの版だから。
 	archs, aerr := frozenArtifacts(fz, func() ([]build.Artifact, error) {
-		if set, found, _ := build.LoadArtifacts(root); found && set.Version == version {
-			return set.Artifacts, nil
+		if a, found := releasedArtifacts(ctx, root, cfg, version); found {
+			return a, nil
 		}
 		a, rerr := bundleRelease(ctx, root, cfg, version, in)
 		if rerr != nil {

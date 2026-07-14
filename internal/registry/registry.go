@@ -141,6 +141,9 @@ var Commands = []Command{
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json); attest its build provenance in CI", Next: []string{"publish"}, Notes: []string{
 		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
+		"the release describes itself: alongside the artifacts it carries latest.json (what your product's update check reads) and artifacts.json " +
+			"(the asset names and their real sha256). that second one is what lets publish run in a different job, on a different machine, " +
+			"without rebuilding and replacing the very bytes you verified",
 		prereleaseNote,
 		attestNote,
 		"latest.json carries `latest_json.extra:` from wharfy.yaml verbatim (any JSON value): declare there what is not 'which version is newest' — your app's on-disk data format version, the minimum app version that can read it — and wharfy neither interprets nor validates it; the contract is the reading product's",
@@ -154,6 +157,8 @@ var Commands = []Command{
 		"the moment it lands, releases/latest/download/ and latest.json serve this version; publish then writes the channels (tap, bucket, …) against it",
 	}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{
+		"if the release for this version already exists, publish never re-uploads it: it takes the asset names and checksums from the release itself " +
+			"(artifacts.json) and only writes the channels — so the bytes users install are the bytes you verified, even when release and publish ran in different jobs",
 		"it refuses to publish a version whose github release is still a prerelease: writing it into the tap, the bucket and " +
 			"the rest would hand users the very version you have not verified yet — promote it first, or pass --allow-prerelease " +
 			"to ship it to the channels on purpose (a staged beta)",

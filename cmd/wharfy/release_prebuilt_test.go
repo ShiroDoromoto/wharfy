@@ -140,10 +140,10 @@ func TestReleasePrebuiltApply(t *testing.T) {
 	if mr.calls != 0 {
 		t.Errorf("prebuilt release must NOT call GoReleaser, calls=%d", mr.calls)
 	}
-	// 3 archive + install.sh + install.ps1 + latest.json = 6 アセットが v0.1.0 に上がる。
+	// 3 archive + install.sh + install.ps1 + latest.json + artifacts.json = 7 アセットが v0.1.0 に上がる。
 	uploaded := store.Tags["v0.1.0"]
-	if len(uploaded) != 6 {
-		t.Fatalf("uploaded assets = %v, want 6 (3 archives + install.sh + install.ps1 + latest.json)", uploaded)
+	if len(uploaded) != 7 {
+		t.Fatalf("uploaded assets = %v, want 7 (3 archives + install.sh + install.ps1 + latest.json + artifacts.json)", uploaded)
 	}
 	for _, name := range []string{
 		"app_0.1.0_darwin_arm64.tar.gz",
@@ -152,6 +152,7 @@ func TestReleasePrebuiltApply(t *testing.T) {
 		"install.sh",
 		"install.ps1",
 		"latest.json",
+		"artifacts.json",
 	} {
 		if _, ok := uploaded[name]; !ok {
 			t.Errorf("missing uploaded asset %q (have %v)", name, uploaded)

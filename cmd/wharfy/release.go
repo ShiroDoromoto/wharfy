@@ -132,13 +132,13 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	}
 	// 検知②: latest.json を同じ Release へ発行する(playbook §5)。Go/BYO 両経路が合流する
 	// ここで1度だけ行えば、経路に依らず「新版あり」の横串が揃う。
-	latestPath, err := uploadLatestJSON(ctx, root, cfg, version, archs)
+	manifests, err := uploadReleaseManifests(ctx, root, cfg, version, archs)
 	if err != nil {
 		return internalError(c, err)
 	}
 	// attest 段: 上げ切った物(実 sha256 が確定した後)に来歴を付ける。成果物だけでなく、release が
 	// 配る install.sh / install.ps1 / latest.json も subject に入れる —— 利用者が実際に踏むのはそこ。
-	att, attWarn, attErr := attestRelease(ctx, cfg, archs, releaseExtras(root, cfg, version, latestPath))
+	att, attWarn, attErr := attestRelease(ctx, cfg, archs, releaseExtras(root, cfg, version, manifests))
 	if attErr != nil {
 		return buildErrorResult(c, attErr)
 	}
@@ -267,38 +267,66 @@ func byoRelease(ctx context.Context, root string, cfg config.Config, in config.F
 	return archs, nil
 }
 
-// uploadLatestJSON は検知②の latest.json を生成し、同じ Release タグへ資産として上げる
-// (playbook §5)。全 release 経路(Go/BYO)共通の合流点で 1 度だけ行うため runRelease に置く。
-// tag/GITHUB_TOKEN は apply 経路で保証済み。github(owner/repo)を組めない等の個別失敗では
-// release 本体(バイナリは上がり済み)を壊さず skip する — latest.json は検知の付帯物ゆえ。
-// 上げた latest.json のパスを返す(skip したら空)——来歴の subject にするため、上げた物と
+// uploadReleaseManifests は release が配る 2 つのマニフェストを、成果物と同じ Release へ上げる。
+//
+//   - latest.json — 「新版が出た」を利用者のプロダクトが知る口(検知②・playbook §5)
+//   - artifacts.json — その Release が何を持っているか(資産名と実 sha256)。publish が別のジョブや
+//     別のマシンで走ると手元の .wharfy/artifacts.json は無い。それを「記録が無い」と読んで release を
+//     やり直せば、**検証したのとは別のバイト列**に貼り替わり、来歴もそのバイト列から外れる
+//     ——「検証したものがそのまま配られる」を守るには、記録が Release 自身に乗っている必要がある。
+//
+// 全 release 経路(Go/BYO)の合流点で 1 度だけ行う。github(owner/repo)を組めない等の個別失敗では
+// release 本体(成果物は上がり済み)を壊さず skip する — どちらも付帯物ゆえ。
+// 返すのは実際に上げたローカルパス(skip した物は入らない)——来歴の subject にするため、上げた物と
 // 上げなかった物をここで言い分ける。
-func uploadLatestJSON(ctx context.Context, root string, cfg config.Config, version string, archs []build.Artifact) (string, error) {
+func uploadReleaseManifests(ctx context.Context, root string, cfg config.Config, version string, archs []build.Artifact) ([]string, error) {
 	owner, repo, ok := splitOwnerName(cfg.Github)
 	if !ok {
-		return "", nil // URL を組めない — 検知ファイルは skip(release 本体は成功済み)
+		return nil, nil // URL を組めない — マニフェストは skip(release 本体は成功済み)
 	}
-	assets := make([]config.LatestAsset, 0, len(archs))
+	var (
+		paths  []string
+		assets []channel.ReleaseAsset
+	)
+	latestAssets := make([]config.LatestAsset, 0, len(archs))
 	for _, a := range archs {
-		assets = append(assets, config.LatestAsset{OS: a.OS, Arch: a.Arch, Name: filepath.Base(a.Path)})
+		latestAssets = append(latestAssets, config.LatestAsset{OS: a.OS, Arch: a.Arch, Name: filepath.Base(a.Path)})
 	}
-	content, ok := config.GenerateLatestJSON(cfg, version, assets)
-	if !ok {
-		return "", nil
+	if content, ok := config.GenerateLatestJSON(cfg, version, latestAssets); ok {
+		p, err := config.WriteLatestJSON(root, content)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        config.LatestJSONName,
+			Path:        p,
+			ContentType: channel.AssetContentType(config.LatestJSONName),
+		})
 	}
-	p, err := config.WriteLatestJSON(root, content)
-	if err != nil {
-		return "", err
+	// artifacts.json は SaveArtifacts が既に書いている手元の記録そのもの(推測で組み直さない)。
+	if p := filepath.Join(root, build.ArtifactsFile); fileExists(p) {
+		paths = append(paths, p)
+		assets = append(assets, channel.ReleaseAsset{
+			Name:        channel.ManifestArtifacts,
+			Path:        p,
+			ContentType: channel.AssetContentType(channel.ManifestArtifacts),
+		})
+	}
+	if len(assets) == 0 {
+		return nil, nil
 	}
 	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
-	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, []channel.ReleaseAsset{{
-		Name:        config.LatestJSONName,
-		Path:        p,
-		ContentType: channel.AssetContentType(config.LatestJSONName),
-	}}, releaseOptions()); err != nil {
-		return "", err
+	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets, releaseOptions()); err != nil {
+		return nil, err
 	}
-	return p, nil
+	return paths, nil
+}
+
+// fileExists は path に読める実体が在るか。
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
 
 // prebuiltRelease は BYO-binary の実リリース(依頼①)。持ち込みバイナリを archive 化し、

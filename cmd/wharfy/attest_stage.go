@@ -114,11 +114,8 @@ func extraSubjects(paths []string) ([]attest.Subject, error) {
 //
 // latestPath は uploadLatestJSON が実際に上げた latest.json(上げていなければ空)。上げていない物を
 // subject にすると、Release に存在しない digest の証明を作ることになる。
-func releaseExtras(root string, cfg config.Config, version, latestPath string) []string {
-	var paths []string
-	if latestPath != "" {
-		paths = append(paths, latestPath)
-	}
+func releaseExtras(root string, cfg config.Config, version string, manifests []string) []string {
+	paths := append([]string(nil), manifests...)
 	if _, ship := installScriptTarget(root, cfg, version); config.HasChannel(cfg, "script") && ship {
 		paths = append(paths,
 			filepath.Join(root, config.InstallScriptRelPath),

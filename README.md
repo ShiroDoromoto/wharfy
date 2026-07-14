@@ -112,6 +112,12 @@ attestation is re-signed, so **the bytes you verified are the bytes users get**.
 promoting a release that is already latest changes nothing and reports ok. If verification goes red,
 you simply don't promote: the broken build was never visible to a single user.
 
+`publish` never re-uploads a release that already exists — it reads the asset names and checksums off
+the release itself (`artifacts.json`, which `release` uploads next to `latest.json`) and only writes
+the channels. That holds even when `release` and `publish` run in different CI jobs, which is exactly
+what this flow does: rebuilding there would replace the bytes you just verified, and the build
+provenance signed for the old bytes would no longer match.
+
 `publish` refuses a version that is still a prerelease, so an unverified build cannot slip into the
 tap or the bucket by a mistyped command — writing the channels is exactly what would hand it to
 users. When you *mean* to ship one (a staged beta), `--allow-prerelease` says so out loud.

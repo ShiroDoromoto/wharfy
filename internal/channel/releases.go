@@ -29,6 +29,11 @@ import (
 // 資産マニフェストの名前(Release アセットとして上がっている)。
 const (
 	ManifestLatestJSON = "latest.json"
+	// ManifestArtifacts は release が上げる成果物の記録(資産名と実 sha256)。手元の
+	// .wharfy/artifacts.json と同じ中身を、Release 自身に持たせたもの —— publish が別のジョブや
+	// 別のマシンで走るとき、これが無いと publish は「記録が無い」と見なして release をやり直し、
+	// 検証したのとは別のバイト列に貼り替えてしまう(来歴もそのバイト列から外れる)。
+	ManifestArtifacts = "artifacts.json"
 	// ManifestChecksums は GoReleaser の checksums マニフェストの素名。実際の資産名は既定の
 	// name_template `{{ .ProjectName }}_{{ .Version }}_checksums.txt` が効いてプロジェクト名と版を
 	// 含むので、固定名では実リリースに一度も当たらない(D-5)。拾うのは IsChecksumsManifest。
@@ -284,6 +289,26 @@ func (p *ReleasesProbe) fetchLatestJSON(ctx context.Context, url string) (latest
 		return latestJSONDoc{}, fmt.Errorf("parse %s: %w", ManifestLatestJSON, err)
 	}
 	return doc, nil
+}
+
+// FetchNamedAsset は tag の Release から名前で資産 1 つを取ってくる(無ければ found=false)。
+// 落とすのは wharfy 自身が上げた小さなマニフェストだけを想定する(成果物本体ではない)。
+func (p *ReleasesProbe) FetchNamedAsset(ctx context.Context, version, name string) ([]byte, bool, error) {
+	rel, found, err := p.releaseByTag(ctx, "v"+version)
+	if err != nil || !found {
+		return nil, false, err
+	}
+	for _, a := range rel.Assets {
+		if a.Name != name {
+			continue
+		}
+		body, err := p.fetchAsset(ctx, a.DownloadURL)
+		if err != nil {
+			return nil, false, err
+		}
+		return body, true, nil
+	}
+	return nil, false, nil
 }
 
 // fetchChecksums は checksums.txt の各行を 資産名 → sha256 に読む(GoReleaser 形式 "<sha>  <name>"、

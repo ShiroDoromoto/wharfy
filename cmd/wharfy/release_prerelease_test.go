@@ -69,7 +69,7 @@ func TestReleasePrereleaseApply(t *testing.T) {
 	if !store.Pre["v0.1.0"] {
 		t.Error("the release must be created as a prerelease (or users get it the moment it lands)")
 	}
-	if len(store.Tags["v0.1.0"]) != 6 {
+	if len(store.Tags["v0.1.0"]) != 7 {
 		t.Errorf("assets must still be uploaded (that is the whole point): %v", store.Tags["v0.1.0"])
 	}
 	if !hasWarning(res, output.WarnPrereleaseNotLatest) {
