@@ -94,37 +94,79 @@ func planFile(existing string, exists bool) (content, action string) {
 	return base + "\n\n" + block + "\n", "append"
 }
 
-// agentInstructionsPresent は cwd の AGENTS.md / CLAUDE.md のどれかに管理ブロックがあるかを返す。
-// 「既存ユーザーが wharfy を使っているのに init していない」を status から気づかせるための判定。
-// 読めないファイルはそのファイル単位で未検出扱い(誤検知でうるさく促さない安全側)。
-func agentInstructionsPresent() bool {
+// instructionsState は cwd の AGENTS.md / CLAUDE.md にある管理ブロックの現況。
+//
+// 「有る／無い」だけでは足りない。ブロックは各プロジェクトへ撒かれた写しなので、wharfy が本文を
+// 変えれば撒かれた先は古いまま残り、エージェントは古い入口を読む——しかも誰も気づけない。
+// だから「今の wharfy が書く本文と一致するか」まで見る(指紋は持たせない。本文そのものが指紋で、
+// 版を埋め込めばそれ自体が毎版の差分ノイズになる)。
+type instructionsState int
+
+const (
+	instructionsMissing instructionsState = iota // ブロックがどこにも無い(init 未実施)
+	instructionsStale                            // ブロックはあるが、今の wharfy が書く本文と違う
+	instructionsCurrent                          // 現行版のブロックがある
+)
+
+// agentInstructionsState は管理ブロックの現況を返す。判定は planFile に委ねる(書く側と読む側で
+// 判定が二重化すればいずれずれる)。読めないファイルはそのファイル単位で見なかったことにする
+// (誤検知でうるさく促さない安全側)。1 ファイルでも古ければ全体を stale と言う——そのファイルを
+// 読むエージェントは現に古い入口を読むのだから、他方が新しくても救いにならない。
+func agentInstructionsState() instructionsState {
+	state := instructionsMissing
 	for _, name := range initTargets {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(data), initBeginMarker) {
-			return true
+		switch _, action := planFile(string(data), true); action {
+		case "update":
+			return instructionsStale
+		case "unchanged":
+			state = instructionsCurrent
 		}
 	}
-	return false
+	return state
 }
 
-// withInitNudge は init 未実施なら成功 Result に「次は wharfy init」を一手足す。
+// initAdvice は管理ブロックの現況から「言うべき一手」を返す(ok=false なら言うことは無い)。
+// status と withInitNudge が同じ語り口で促すための単一の口。
+//
+// 見つけても黙って書き換えはしない。管理ブロックが載るのは利用者のファイル(AGENTS.md /
+// CLAUDE.md)で、release や status の副作用でそこが書き換わるのは驚きが大きすぎる。
+// 書くのは init だけ、という境界は保ったまま、気づけなかった陳腐化を言葉にする。
+func initAdvice() (output.Warning, output.NextDo, bool) {
+	switch agentInstructionsState() {
+	case instructionsMissing:
+		return output.Warning{
+				Code:    output.WarnInitMissing,
+				Message: "agents aren't told to release via wharfy yet (no AGENTS.md/CLAUDE.md block); run `wharfy init`",
+			}, output.NextDo{
+				Reason: "tell agents to release via wharfy (so they don't reinvent it next time)",
+				Do:     "wharfy init --yes",
+			}, true
+	case instructionsStale:
+		return output.Warning{
+				Code:    output.WarnInitStale,
+				Message: "the wharfy block in AGENTS.md/CLAUDE.md was written by an older wharfy and no longer matches what this one writes; run `wharfy init` to refresh it",
+			}, output.NextDo{
+				Reason: "refresh the managed block agents read (it is a copy, and this wharfy writes a different one)",
+				Do:     "wharfy init --yes",
+			}, true
+	}
+	return output.Warning{}, output.NextDo{}, false
+}
+
+// withInitNudge は管理ブロックが無い/古いなら成功 Result に「次は wharfy init」を一手足す。
 // リリースを通した直後(release / publish 一括成功)こそ「次回はエージェントに wharfy で
-// やらせたい」と気づく価値が高い。init 済みなら何も足さない(冪等・自己沈静)。
+// やらせたい」と気づく価値が高い。整っていれば何も足さない(冪等・自己沈静)。
 func withInitNudge(res output.Result) output.Result {
-	if agentInstructionsPresent() {
+	warn, next, ok := initAdvice()
+	if !ok {
 		return res
 	}
-	res.Warnings = append(res.Warnings, output.Warning{
-		Code:    output.WarnInitMissing,
-		Message: "agents aren't told to release via wharfy yet; run `wharfy init` so the next release goes through wharfy",
-	})
-	res.Next = append(res.Next, output.NextDo{
-		Reason: "tell agents to release via wharfy (so they don't reinvent it next time)",
-		Do:     "wharfy init --yes",
-	})
+	res.Warnings = append(res.Warnings, warn)
+	res.Next = append(res.Next, next)
 	return res
 }
 

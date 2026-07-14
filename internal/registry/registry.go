@@ -119,7 +119,9 @@ var Commands = []Command{
 		"wharfy reads every credential from the environment, so the same commands run on a laptop and in a GitHub Actions workflow",
 		"the token GitHub Actions hands a workflow can only write to that repository: channels that write elsewhere (tap, bucket, gated forks) need a PAT registered as a secret",
 	}},
-	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}},
+	{Name: "init", Summary: "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)", Next: []string{"agent"}, Notes: []string{
+		"the managed block is the entrance and nothing else — it says 'run wharfy agent', and no steps or policy are baked into it, so a copy sitting in your repo cannot go out of date. if a wharfy update does change it, status says so (init_stale) and re-running `wharfy init --yes` refreshes the block in place; nothing else ever writes those files",
+	}},
 	{Name: "build", Summary: "cross-compile for every os/arch", Next: []string{"sign", "release"}, Notes: []string{
 		"the Go build path shells out to goreleaser, so it must be on PATH — on a CI runner install it explicitly (wharfy secrets lists the tools your config needs); BYO inputs (prebuilt: / bundle:) never call it",
 	}},

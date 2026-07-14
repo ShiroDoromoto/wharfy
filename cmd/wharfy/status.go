@@ -115,17 +115,11 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	out.Next = statusNext(out.Channels)
 	out.Message = statusMessage(out.Channels)
 
-	// 既存ユーザーが wharfy を使っているのに init していない場合に気づかせる(非致命)。
+	// 管理ブロックが無い(init 未実施)か、古い wharfy が書いたまま残っている場合に気づかせる(非致命)。
 	// コード付きなので agent は status --json を読んで自力で wharfy init に回れる。
-	if !agentInstructionsPresent() {
-		out.Warnings = append(out.Warnings, output.Warning{
-			Code:    output.WarnInitMissing,
-			Message: "agents aren't told to release via wharfy yet (no AGENTS.md/CLAUDE.md block); run `wharfy init`",
-		})
-		out.Next = append(out.Next, output.NextDo{
-			Reason: "tell agents to release via wharfy (so they don't reinvent it next time)",
-			Do:     "wharfy init --yes",
-		})
+	if warn, next, ok := initAdvice(); ok {
+		out.Warnings = append(out.Warnings, warn)
+		out.Next = append(out.Next, next)
 	}
 	return out, nil
 }

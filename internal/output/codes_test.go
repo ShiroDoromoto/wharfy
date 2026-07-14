@@ -31,6 +31,7 @@ var expectedCodes = []string{
 	"github_unresolved",
 	"goinstall_only_go",
 	"init_missing",
+	"init_stale",
 	"init_write_failed",
 	"internal",
 	"keychain_failed",

@@ -21,6 +21,9 @@ const (
 	WarnGoinstallOnlyGo   = "goinstall_only_go"   // goinstall 指定だが Go ターゲットでない
 	WarnTapWillBeCreated  = "tap_will_be_created" // 自前 tap/bucket が未作成で作る予定
 	WarnInitMissing       = "init_missing"        // AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)
+	// WarnInitStale: 管理ブロックはあるが、今の wharfy が書く本文と違う(古い版が書いたまま)。
+	// ブロックは各プロジェクトへ撒かれた写しなので放っておけば陳腐化し、エージェントは古い入口を読む。
+	WarnInitStale = "init_stale"
 	// WarnDeprecateNoSurface: 畳むと宣言したチャネルに告知を載せる欄が無い(goinstall/container 等)。
 	// 黙って落とすと配布者は「告知したつもり」で気づけないので、載らなかったことを明示する(D-3)。
 	WarnDeprecateNoSurface = "deprecate_no_notice_surface"
@@ -108,6 +111,7 @@ var Catalog = []CatalogEntry{
 	{WarnGoinstallOnlyGo, KindWarning, "goinstall 指定だが Go ターゲットでない"},
 	{WarnTapWillBeCreated, KindWarning, "自前 tap/bucket が未作成で作る予定"},
 	{WarnInitMissing, KindWarning, "AGENTS.md / CLAUDE.md が wharfy を指していない(wharfy init 未実施)"},
+	{WarnInitStale, KindWarning, "管理ブロックが古い wharfy の本文のまま(wharfy init で差し替え)"},
 	{WarnDeprecateNoSurface, KindWarning, "畳むチャネルに告知を載せる欄が無い(latest.json 経由でのみ届く)"},
 	{WarnDeprecateOrphan, KindWarning, "channels に無いチャネルへの deprecate 宣言(告知の更新が止まっている)"},
 	{WarnDeprecateFrozen, KindWarning, "ship:false のチャネルを最後に配った版で据え置いた"},

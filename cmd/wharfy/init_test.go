@@ -211,7 +211,60 @@ func TestStatusNudgesWhenInitMissing(t *testing.T) {
 	}
 }
 
-// withInitNudge は init 未実施なら成功 Result に促しを足し、済みなら素通しする。
+// 古い wharfy が書いたブロックが残っている状態。「有る」だけで黙ると、エージェントは古い入口を
+// 読み続ける——status は init_stale で言い、init に回す。
+func TestStatusFlagsStaleBlock(t *testing.T) {
+	root := scratchModule(t)
+	chdir(t, root)
+
+	stale := initBeginMarker + "\n## Releasing\n\nold body from a previous wharfy.\n" + initEndMarker + "\n"
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := buildStatus(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarn(out, "init_missing") {
+		t.Errorf("a stale block is not a missing one: %+v", out.Warnings)
+	}
+	if !hasWarn(out, "init_stale") {
+		t.Errorf("stale block should warn init_stale: %+v", out.Warnings)
+	}
+	if !hasNextDoOut(out, "wharfy init --yes") {
+		t.Errorf("stale block should suggest wharfy init --yes: %+v", out.Next)
+	}
+
+	// 差し替えれば黙る(wharfy init が begin/end で冪等に直すのと同じ本文)。
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(managedBlock()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = buildStatus(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasWarn(out, "init_stale") {
+		t.Errorf("refreshed block must not warn init_stale: %+v", out.Warnings)
+	}
+}
+
+// 片方だけ古い混在。新しい方が在っても、古い方を読むエージェントは古い入口を読む——だから言う。
+func TestAgentInstructionsStateStaleWins(t *testing.T) {
+	withTempDir(t)
+
+	if err := os.WriteFile("CLAUDE.md", []byte(managedBlock()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := initBeginMarker + "\n## Releasing\n\nold body.\n" + initEndMarker + "\n"
+	if err := os.WriteFile("AGENTS.md", []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentInstructionsState(); got != instructionsStale {
+		t.Errorf("one stale file should make the whole state stale: got %v", got)
+	}
+}
+
+// withInitNudge は管理ブロックが無い/古いなら成功 Result に促しを足し、現行なら素通しする。
 func TestWithInitNudge(t *testing.T) {
 	withTempDir(t)
 
@@ -220,12 +273,39 @@ func TestWithInitNudge(t *testing.T) {
 		t.Errorf("missing init should add nudge: %+v", res)
 	}
 
+	stale := initBeginMarker + "\n## Releasing\n\nold body.\n" + initEndMarker + "\n"
+	if err := os.WriteFile("AGENTS.md", []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = withInitNudge(output.New("release", "released", true))
+	if !hasResWarn(res, "init_stale") || !hasResNext(res, "wharfy init --yes") {
+		t.Errorf("stale block should add nudge: %+v", res)
+	}
+
 	if err := os.WriteFile("AGENTS.md", []byte(managedBlock()+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res = withInitNudge(output.New("release", "released", true))
-	if hasResWarn(res, "init_missing") || hasResNext(res, "wharfy init --yes") {
-		t.Errorf("with block present, nudge must not be added: %+v", res)
+	if hasResWarn(res, "init_missing") || hasResWarn(res, "init_stale") || hasResNext(res, "wharfy init --yes") {
+		t.Errorf("with a current block, nudge must not be added: %+v", res)
+	}
+}
+
+// 促しは言うだけ——release/publish の副作用で利用者のファイルを黙って書き換えない(書くのは init だけ)。
+func TestNudgeNeverWritesFiles(t *testing.T) {
+	withTempDir(t)
+
+	stale := initBeginMarker + "\n## Releasing\n\nold body.\n" + initEndMarker + "\n"
+	if err := os.WriteFile("AGENTS.md", []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withInitNudge(output.New("release", "released", true))
+	got, err := os.ReadFile("AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != stale {
+		t.Errorf("the nudge rewrote the file; only wharfy init may write it\n---\n%s", got)
 	}
 }
 

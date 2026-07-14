@@ -65,6 +65,11 @@ sitting in your repo cannot follow wharfy as it changes, while `wharfy agent` is
 Without `--yes` it previews; on a file you already have, it appends one block (re-running just
 refreshes it — idempotent).
 
+Should a wharfy update change that block anyway, you don't have to notice it yourself: `wharfy
+status` compares what is in your files with what this wharfy writes and warns `init_stale`, so
+re-running `wharfy init --yes` puts it right. Nothing but `init` writes those files — a release
+never edits your `AGENTS.md` behind your back.
+
 Then drive — start by asking the tool what it can do:
 
 ```sh

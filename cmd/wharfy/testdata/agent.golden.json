@@ -56,6 +56,9 @@
       "summary": "tell agents to release via wharfy (writes AGENTS.md / CLAUDE.md)",
       "next": [
         "agent"
+      ],
+      "notes": [
+        "the managed block is the entrance and nothing else — it says 'run wharfy agent', and no steps or policy are baked into it, so a copy sitting in your repo cannot go out of date. if a wharfy update does change it, status says so (init_stale) and re-running `wharfy init --yes` refreshes the block in place; nothing else ever writes those files"
       ]
     },
     {
