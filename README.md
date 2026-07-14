@@ -120,7 +120,10 @@ that is what `verify` reads — not your submission. While it is still under rev
 merging is the reviewer's call and waiting is the only move you have. For `releases` it checks that every asset listed in the release's own manifest
 (`latest.json`, plus the checksums file `<project>_<version>_checksums.txt` when GoReleaser wrote one)
 really exists on the release — a user following that manifest would otherwise hit a `404`. The
-binaries themselves are not downloaded. A release with no `latest.json` at all fails the check:
+binaries themselves are still not downloaded, but their contents are not taken on trust either:
+GitHub reports a sha256 digest for every asset it serves, so `verify` compares those digests against
+the checksums manifest and catches an upload that was truncated, or an asset swapped out after the
+fact, on every run rather than only under `--install`. A release with no `latest.json` at all fails the check:
 `release` always uploads one, so its absence means `…/releases/latest/download/latest.json` is a
 `404` and the update check of everyone who already installed is pointing at nothing. For `script` it
 fetches both
