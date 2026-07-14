@@ -42,6 +42,10 @@ const (
 	// 索引の生成待ち(数分)か、パッケージが非公開のまま(fury は既定で非公開として受け取り、
 	// ダッシュボードで公開に切り替えるまで公開 repo に載せない)。
 	WarnPkgNotIndexed = "pkg_not_indexed"
+	// WarnPrereleaseNotLatest: リリースは prerelease である —— 資産は上がっていて公開 URL から落とせるが、
+	// GitHub の latest ではないので releases/latest/download/ は旧版を指したまま＝**利用者にはまだ届いていない**。
+	// 配る実物を検証するための窓が開いている状態で、赤ではない。黙っていると「配ったつもり」で止まる。
+	WarnPrereleaseNotLatest = "prerelease_not_latest"
 	// WarnAttestUnavailable: CI で release を回しているのに、来歴の証明を作れなかった。
 	// 証明は「無くても配れてしまう」ので、黙って落とすと配布者は付いているつもりのまま配り続ける。
 	// 原因はほぼ workflow の permissions 欠落(id-token: write / attestations: write)。
@@ -87,7 +91,11 @@ const (
 	// 透明性ログに載っていない)。作る側(ErrAttestFailed)は成功したまま、検算だけが通らないことがある
 	// ——「付けたつもり」を捕まえるのは verify だけなので、ここは緑にしない。
 	ErrAttestUnverified = "attest_unverified"
-	ErrInternal         = "internal" // 想定外(バグ)
+	// ErrReleaseAlreadyPublic: --prerelease を求められたが、そのタグのリリースは既に latest として
+	// 公開されている。上げ直せば**利用者が今まさに落としている資産を差し替える**ことになるので、
+	// 「検証の窓を開ける」つもりの操作が逆に本番を触る。窓は後から開けられない —— だから拒む。
+	ErrReleaseAlreadyPublic = "release_already_public"
+	ErrInternal             = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -123,6 +131,7 @@ var Catalog = []CatalogEntry{
 	{WarnStaleGenerator, KindWarning, "実行中の wharfy が repo の HEAD からビルドされていない(生成物が古い生成器で作られる)"},
 	{WarnPkgNotIndexed, KindWarning, "hosted repo へ上げた版が公開索引にまだ無い(取り込み待ち、または非公開のまま)"},
 	{WarnAttestUnavailable, KindWarning, "CI で回しているのに来歴の証明を作れなかった(workflow の permissions 不足)"},
+	{WarnPrereleaseNotLatest, KindWarning, "リリースが prerelease(資産は落とせるが latest ではない＝利用者にはまだ届いていない)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},
@@ -147,6 +156,7 @@ var Catalog = []CatalogEntry{
 	{ErrStaleGeneratorBlocked, KindError, "版ズレのまま --yes で apply しようとした(--allow-stale-generator で上書き可)"},
 	{ErrAttestFailed, KindError, "来歴の証明の生成/登録に失敗(証明の無いリリースを緑で返さない)"},
 	{ErrAttestUnverified, KindError, "配ってある物の来歴が消費者の目で検算できない(一部にしか付いていない/引けない)"},
+	{ErrReleaseAlreadyPublic, KindError, "--prerelease を求められたが、そのタグのリリースは既に latest として公開済み"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

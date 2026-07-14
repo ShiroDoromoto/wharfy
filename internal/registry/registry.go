@@ -91,6 +91,16 @@ const attestNote = "build provenance is attached only in GitHub Actions (it is s
 	"add permissions id-token: write and attestations: write — there is no secret to register. releasing from a laptop attaches nothing, " +
 	"and a release run in Actions without those permissions warns (attest_unavailable) instead of silently shipping unattested artifacts"
 
+// prereleaseNote は release の注記。CI でビルドするほど「配る実物」は手元から消える——実物を
+// 検証するには一度上げるしかないのに、上げた瞬間それが latest になって利用者が掴む、という鶏と卵。
+// --prerelease はその窓を開ける: 資産は公開 URL から普通に落とせるのに GitHub の latest ではない。
+// draft ではこの窓は開かない(認証なしに落とせず、実物検証に使えない)。
+const prereleaseNote = "--prerelease uploads the release but does not make it github's latest: the assets download from their " +
+	"public URLs (so you can install and run the real bytes, on a real machine, with your own data), while " +
+	"releases/latest/download/ and latest.json keep serving the previous version — users are untouched until you make it latest, " +
+	"which is a separate and explicit step. this is the only way to verify what you actually ship when CI builds it: a laptop build " +
+	"is not those bytes. a draft release cannot do it (its assets need authentication to download)"
+
 // triggerNote は release / publish の注記。「どこで走らせるか」と「いつ引き金を引くか」は別の話で、
 // 縛るべきは後者だけ——なのに配布は身構えられがちで、CI 上で回すこと自体を避ける判断に倒れやすい。
 // wharfy 自身が非対話である事実(--yes は TTY を要らない・資格情報は env から来る)と、引き金は
@@ -128,6 +138,7 @@ var Commands = []Command{
 	{Name: "sign", Summary: "codesign macOS binaries with your identity (opt-in; skipped if none)", Next: []string{"release"}},
 	{Name: "release", Summary: "upload the github release (archives, packages, install.sh, install.ps1, latest.json); attest its build provenance in CI", Next: []string{"publish"}, Notes: []string{
 		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
+		prereleaseNote,
 		attestNote,
 		"latest.json carries `latest_json.extra:` from wharfy.yaml verbatim (any JSON value): declare there what is not 'which version is newest' — your app's on-disk data format version, the minimum app version that can read it — and wharfy neither interprets nor validates it; the contract is the reading product's",
 		triggerNote,

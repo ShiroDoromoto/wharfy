@@ -100,9 +100,12 @@ type glRelease struct {
 	// mode はリリース**ノート**の扱い(keep-existing/append/prepend/replace)であって、アセットには効かない。
 	// アセットの置換は replace_existing_artifacts が唯一の口 — これが無いと、同じタグで release を
 	// やり直したとき同名アセットの upload が 422 already_exists で必ず落ちる。
-	Mode                     string        `yaml:"mode,omitempty"`
-	ReplaceExistingArtifacts bool          `yaml:"replace_existing_artifacts,omitempty"`
-	ExtraFiles               []glExtraFile `yaml:"extra_files,omitempty"`
+	Mode                     string `yaml:"mode,omitempty"`
+	ReplaceExistingArtifacts bool   `yaml:"replace_existing_artifacts,omitempty"`
+	// Prerelease はリリースを prerelease として作る。GitHub は prerelease を latest として扱わない
+	// ので、資産は公開 URL から落ちるのに releases/latest/download/ は旧版を指したままになる。
+	Prerelease bool          `yaml:"prerelease,omitempty"`
+	ExtraFiles []glExtraFile `yaml:"extra_files,omitempty"`
 }
 
 // glExtraFile は release に同梱アップロードする追加アセット(script の install.sh 等)。
@@ -119,7 +122,8 @@ type glRepository struct {
 // homebrew.dependencies)から GoReleaser 設定 YAML を組み立てる。
 //
 // cfg は config.json で凍結した公開サブセット、in は生成のための非公開入力。両方を使う。
-func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
+// opts はその一回の呼び出しの意図(prerelease にする等)。
+func GenerateGoReleaser(cfg Config, in File, opts ...GoReleaserOption) ([]byte, error) {
 	if cfg.Main == "" {
 		// main 未解決のまま生成はしない(曖昧は config 段階で停止しているはず)。
 		return nil, fmt.Errorf("cannot generate goreleaser config: 'main' is unresolved")
@@ -181,7 +185,24 @@ func GenerateGoReleaser(cfg Config, in File) ([]byte, error) {
 		}
 	}
 
+	for _, opt := range opts {
+		opt(&gl)
+	}
 	return marshalGoReleaser(gl)
+}
+
+// GoReleaserOption は生成設定への局所的な上書き。**その一回のリリースの意図**(prerelease にする等)
+// であって wharfy.yaml に書く設定ではないので、Config には持たせず引数で渡す。
+type GoReleaserOption func(*glConfig)
+
+// AsPrerelease はリリースを prerelease として作らせる(latest にしない)。release 節を持たない構成
+// (releases も script も無い)では何も足すところが無いので、何もしない。
+func AsPrerelease() GoReleaserOption {
+	return func(gl *glConfig) {
+		if gl.Release != nil {
+			gl.Release.Prerelease = true
+		}
+	}
 }
 
 // dockerV2Block は image に対する dockers_v2 エントリ(全 platform ＋ :version/:latest)を組む。

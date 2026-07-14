@@ -199,3 +199,25 @@ func assertContains(t *testing.T, hay []string, needle string) {
 	}
 	t.Errorf("expected %q in %v", needle, hay)
 }
+
+// TestGenerateGoReleaserPrerelease: Go 経路ではリリースを作るのは GoReleaser なので、
+// 「latest にしない」という意図は生成設定に載せるしかない(既定では載らない)。
+func TestGenerateGoReleaserPrerelease(t *testing.T) {
+	data, err := GenerateGoReleaser(sampleConfig(), File{}, AsPrerelease())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, ok := parseGen(t, data)["release"].(map[string]any)
+	if !ok {
+		t.Fatalf("no release section:\n%s", data)
+	}
+	if rel["prerelease"] != true {
+		t.Errorf("release.prerelease = %v, want true (else github makes it latest at once)", rel["prerelease"])
+	}
+
+	data, _ = GenerateGoReleaser(sampleConfig(), File{})
+	rel, _ = parseGen(t, data)["release"].(map[string]any)
+	if _, present := rel["prerelease"]; present {
+		t.Errorf("a plain release must not carry prerelease: %v", rel)
+	}
+}

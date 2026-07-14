@@ -30,6 +30,10 @@ var (
 	flagVerifyVersion string
 	// flagAuthPrint は auth だけの局所フラグ(保存済みの資格情報を、そのまま使える形で stdout へ)。
 	flagAuthPrint bool
+	// flagPrerelease は release だけの局所フラグ(資産は上げるが、GitHub の latest にはしない)。
+	// 配る実物を利用者に見せる前に検証する窓を開けるためのもの。グローバルにしないのは、
+	// 昇格していない版を publish が黙って各チャネルへ流す口を作らないため。
+	flagPrerelease bool
 )
 
 // newRootCmd は registry から cobra コマンドツリーを生成する。
@@ -93,6 +97,9 @@ func newCommand(c registry.Command) *cobra.Command {
 	}
 	if c.Name == "auth" {
 		cmd.Flags().BoolVar(&flagAuthPrint, "print", false, "print the stored credential to stdout in usable form (e.g. wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN)")
+	}
+	if c.Name == "release" {
+		cmd.Flags().BoolVar(&flagPrerelease, "prerelease", false, "upload the release but do not make it latest: the assets are downloadable, users still get the old version — verify the real artifacts, then make it latest")
 	}
 	if c.Name == "verify" {
 		cmd.Flags().StringVar(&flagVerifyVersion, "version", "", "the version to check on each channel (default: the version wharfy works out — record, latest release, or latest tag)")

@@ -25,27 +25,45 @@ type ReleaseAsset struct {
 	ContentType string // 空なら application/octet-stream
 }
 
+// ReleaseOptions はリリースを**新しく作るとき**の属性。既に在るリリースには適用しない
+// —— 上げ直しが黙って公開状態を切り替えてしまわないため(切り替えは別の工程が明示的に行う)。
+type ReleaseOptions struct {
+	// Prerelease は prerelease として作る(資産は公開 URL から落ちるが、GitHub の latest にはならない
+	// ＝ releases/latest/download/ は旧版を指したまま)。配る実物を、利用者に見せる前に検証する窓。
+	Prerelease bool
+}
+
+// ReleaseState は tag のリリースの現状(上げる前に、上げ先が何であるかを知るため)。
+type ReleaseState struct {
+	Exists     bool
+	Prerelease bool
+}
+
 // ReleaseStore は tag のリリースを用意しアセットを(置換)アップロードする境界(末端差し替え)。
 type ReleaseStore interface {
-	Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset) error
+	Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset, opt ReleaseOptions) error
+	// Get は tag のリリースの現状を返す。無ければ Exists=false(エラーではない)。
+	Get(ctx context.Context, tag string) (ReleaseState, error)
 }
 
 // InMemoryReleaseStore はテスト用。tag ごとのアセット名→パスを記録する。
 type InMemoryReleaseStore struct {
 	Tags     map[string]map[string]string // tag → (name → local path)
+	Pre      map[string]bool              // tag → prerelease か
 	Uploads  int
 	Replaced int
 }
 
 func NewInMemoryReleaseStore() *InMemoryReleaseStore {
-	return &InMemoryReleaseStore{Tags: map[string]map[string]string{}}
+	return &InMemoryReleaseStore{Tags: map[string]map[string]string{}, Pre: map[string]bool{}}
 }
 
-func (s *InMemoryReleaseStore) Upload(_ context.Context, tag, _ string, assets []ReleaseAsset) error {
+func (s *InMemoryReleaseStore) Upload(_ context.Context, tag, _ string, assets []ReleaseAsset, opt ReleaseOptions) error {
 	m := s.Tags[tag]
 	if m == nil {
 		m = map[string]string{}
 		s.Tags[tag] = m
+		s.Pre[tag] = opt.Prerelease // 作るときだけ属性が効く(既存には触らない)
 	}
 	for _, a := range assets {
 		if _, ok := m[a.Name]; ok {
@@ -55,6 +73,13 @@ func (s *InMemoryReleaseStore) Upload(_ context.Context, tag, _ string, assets [
 		s.Uploads++
 	}
 	return nil
+}
+
+func (s *InMemoryReleaseStore) Get(_ context.Context, tag string) (ReleaseState, error) {
+	if _, ok := s.Tags[tag]; !ok {
+		return ReleaseState{}, nil
+	}
+	return ReleaseState{Exists: true, Prerelease: s.Pre[tag]}, nil
 }
 
 // GitHubReleaseStore は GitHub Releases API 経由の実体。
@@ -103,19 +128,30 @@ func (s *GitHubReleaseStore) auth(req *http.Request) {
 }
 
 type ghRelease struct {
-	ID     int64 `json:"id"`
-	Assets []struct {
+	ID         int64 `json:"id"`
+	Prerelease bool  `json:"prerelease"`
+	Assets     []struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	} `json:"assets"`
 }
 
+// Get は tag のリリースの現状を返す(無ければ Exists=false)。読むだけなので token は要らない。
+func (s *GitHubReleaseStore) Get(ctx context.Context, tag string) (ReleaseState, error) {
+	rel, found, err := s.getRelease(ctx, tag)
+	if err != nil || !found {
+		return ReleaseState{}, err
+	}
+	return ReleaseState{Exists: true, Prerelease: rel.Prerelease}, nil
+}
+
 // Upload は tag のリリースを get-or-create し、各アセットを(同名は置換して)アップロードする。
-func (s *GitHubReleaseStore) Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset) error {
+// opt は**新しく作るときだけ**効く(既存のリリースの prerelease 状態は変えない)。
+func (s *GitHubReleaseStore) Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset, opt ReleaseOptions) error {
 	if s.Token == "" {
 		return fmt.Errorf("GITHUB_TOKEN required to upload the release to %s/%s", s.Owner, s.Repo)
 	}
-	rel, err := s.ensureRelease(ctx, tag, releaseName)
+	rel, err := s.ensureRelease(ctx, tag, releaseName, opt)
 	if err != nil {
 		return err
 	}
@@ -136,18 +172,18 @@ func (s *GitHubReleaseStore) Upload(ctx context.Context, tag, releaseName string
 	return nil
 }
 
-// ensureRelease は tag のリリースを取得し、無ければ作る。
-func (s *GitHubReleaseStore) ensureRelease(ctx context.Context, tag, name string) (*ghRelease, error) {
+// getRelease は tag のリリースを引く。無ければ found=false(エラーではない)。
+func (s *GitHubReleaseStore) getRelease(ctx context.Context, tag string) (*ghRelease, bool, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", s.api(), s.Owner, s.Repo, tag)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	s.auth(req)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -155,21 +191,37 @@ func (s *GitHubReleaseStore) ensureRelease(ctx context.Context, tag, name string
 	case http.StatusOK:
 		var rel ghRelease
 		if err := json.Unmarshal(body, &rel); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return &rel, nil
+		return &rel, true, nil
 	case http.StatusNotFound:
-		return s.createRelease(ctx, tag, name)
+		return nil, false, nil
 	default:
-		return nil, fmt.Errorf("github get release %s: %s: %s", tag, resp.Status, snippet(body))
+		return nil, false, fmt.Errorf("github get release %s: %s: %s", tag, resp.Status, snippet(body))
 	}
 }
 
-func (s *GitHubReleaseStore) createRelease(ctx context.Context, tag, name string) (*ghRelease, error) {
+// ensureRelease は tag のリリースを取得し、無ければ opt の属性で作る。
+func (s *GitHubReleaseStore) ensureRelease(ctx context.Context, tag, name string, opt ReleaseOptions) (*ghRelease, error) {
+	rel, found, err := s.getRelease(ctx, tag)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return rel, nil
+	}
+	return s.createRelease(ctx, tag, name, opt)
+}
+
+func (s *GitHubReleaseStore) createRelease(ctx context.Context, tag, name string, opt ReleaseOptions) (*ghRelease, error) {
 	if name == "" {
 		name = tag
 	}
 	payload := map[string]any{"tag_name": tag, "name": name}
+	if opt.Prerelease {
+		// GitHub は prerelease を latest として扱わない —— releases/latest/download/ は旧版を指したまま。
+		payload["prerelease"] = true
+	}
 	b, _ := json.Marshal(payload)
 	url := fmt.Sprintf("%s/repos/%s/%s/releases", s.api(), s.Owner, s.Repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))

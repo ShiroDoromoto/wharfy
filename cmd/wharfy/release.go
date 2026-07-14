@@ -23,6 +23,9 @@ type releaseData struct {
 	Applied   bool             `json:"applied"`
 	Target    string           `json:"target,omitempty"`
 	Artifacts []build.Artifact `json:"artifacts,omitempty"`
+	// Prerelease は、このリリースが prerelease である(資産は落とせるが latest ではない)。
+	// 「上げた」と「利用者に届いた」を、出力の上で別の事実として読めるようにする。
+	Prerelease bool `json:"prerelease,omitempty"`
 	// Attest は付けた来歴(CI で証明できたときだけ出る)。手元では出ない=証明していない、と読める。
 	Attest *attest.Result `json:"attest,omitempty"`
 }
@@ -60,15 +63,23 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		if target == "" {
 			target = "(github unresolved)"
 		}
-		res := output.New(c.Name, "plan: upload the github release → "+target, true)
-		res.Data = releaseData{Applied: false, Target: cfg.Github}
+		plan := "plan: upload the github release → " + target
+		if flagPrerelease {
+			plan += " (prerelease: not latest — users keep getting the old version)"
+		}
+		res := output.New(c.Name, plan, true)
+		res.Data = releaseData{Applied: false, Target: cfg.Github, Prerelease: flagPrerelease}
 		var next []output.NextDo
 		for _, r := range reqs {
 			if !r.Met {
 				next = append(next, output.NextDo{Reason: "required before --yes: " + r.Requirement, Do: r.Hint})
 			}
 		}
-		res.Next = append(next, output.NextDo{Reason: "upload the release", Do: "wharfy release --yes"})
+		do := "wharfy release --yes"
+		if flagPrerelease {
+			do += " --prerelease"
+		}
+		res.Next = append(next, output.NextDo{Reason: "upload the release", Do: do})
 		return withStaleGeneratorWarning(root, c, res)
 	}
 
@@ -83,6 +94,18 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if os.Getenv("GITHUB_TOKEN") == "" {
 		return tokenMissingResult(c)
 	}
+	// 上げる前に、上げ先が何であるかを見る —— 窓は後からでは開けられない。既に latest として公開済みの
+	// リリースへ --prerelease で上げ直せば、利用者が今まさに落としている資産を差し替えることになる。
+	prior, perr := priorReleaseState(ctx, cfg, version)
+	if perr != nil {
+		return internalError(c, perr)
+	}
+	if flagPrerelease && prior.Exists && !prior.Prerelease {
+		return releaseAlreadyPublicResult(c, cfg, version)
+	}
+	// このリリースが結局 prerelease になるか。--prerelease で作る場合と、既に prerelease として在る
+	// タグへ上げ直す場合(公開状態は Upload では変えない)の両方。
+	prerelease := flagPrerelease || prior.Prerelease
 	// BYO(依頼①): GoReleaser を使わず、持ち込み成果物を自前で archive 化し GitHub Release へ上げる
 	// (D-1: prebuilt builder は Pro 専用のため)。prebuilt(CLI)と bundle(GUI)は併用でき、両方
 	// 宣言されていれば両方をリリースする(片方を黙って落とさない=依頼書四通目 依頼②)。
@@ -124,18 +147,20 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 			st.Publish = map[string]state.PublishRecord{}
 		}
 		now := nowUTC().Format(time.RFC3339)
-		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now}
+		st.Publish["releases"] = state.PublishRecord{Version: version, Target: cfg.Github, At: now, Prerelease: prerelease}
 		// script チャネルの実体(install.sh)はこの release が同梱アップロードしている。
 		// その事実を台帳へ書かないと publish script を後追いするまで script 記録が古いまま残り、
 		// status が実体(0.17.0)と記録(0.16.1)の drift=ahead を出す。releases と対で記録する。
+		// prerelease なら install.sh は上がっていても releases/latest/download/ からは引けない
+		// ——「上げた」であって「配った」ではないので、記録にもその印を付ける。
 		if config.HasChannel(cfg, "script") {
-			st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now}
+			st.Publish["script"] = state.PublishRecord{Version: version, Target: cfg.Github + " release:" + config.InstallScriptName, At: now, Prerelease: prerelease}
 		}
 		_ = state.Save(root, st)
 	}
 
-	res := output.New(c.Name, releaseMessage(cfg, version, len(archs), att), true)
-	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs, Attest: att}
+	res := output.New(c.Name, releaseMessage(cfg, version, len(archs), att, prerelease), true)
+	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs, Prerelease: prerelease, Attest: att}
 	if attWarn != nil {
 		res.Warnings = append(res.Warnings, *attWarn)
 		res.Next = append(res.Next, output.NextDo{
@@ -143,14 +168,70 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 			Do:     "add permissions: id-token: write and attestations: write to the release workflow",
 		})
 	}
+	if prerelease {
+		// 上げただけで配ってはいない、という事実を毎回言う。黙っていれば「リリースした」と読まれ、
+		// 検証の窓は開いたまま忘れられる(そして利用者は旧版のままになる)。
+		res.Warnings = append(res.Warnings, output.Warning{
+			Code: output.WarnPrereleaseNotLatest,
+			Message: "the release for v" + version + " is a prerelease: its assets download from their public URLs, " +
+				"but it is not github's latest — releases/latest/download/ and latest.json still serve the previous version, so users are untouched",
+		})
+		res.Next = append(res.Next, output.NextDo{
+			Reason: "verify the artifacts you will actually ship, while users still get the old version",
+			Do:     "gh release download v" + version + " && wharfy verify --version " + version,
+		})
+		return withInitNudge(withStaleGeneratorWarning(root, c, res))
+	}
 	res.Next = append(res.Next, nextFromSpec(c)...) // publish
 	return withInitNudge(withStaleGeneratorWarning(root, c, res))
 }
 
+// priorReleaseState は、これから上げる tag のリリースが**既に在るか・prerelease か**を見る。
+// github(owner/repo)を組めなければ判断材料が無いので「無い」として扱う(release 本体は続行する)。
+func priorReleaseState(ctx context.Context, cfg config.Config, version string) (channel.ReleaseState, error) {
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return channel.ReleaseState{}, nil
+	}
+	return newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, "v"+version)
+}
+
+// releaseOptions は今回のリリースに与える属性。**新しく作るときだけ**効く —— 既存のリリースの
+// 公開状態を release が黙って切り替えることはない(切り替えは明示の工程が行う)。
+func releaseOptions() channel.ReleaseOptions {
+	return channel.ReleaseOptions{Prerelease: flagPrerelease}
+}
+
+// releaseAlreadyPublicResult は「latest として公開済みのリリースへ --prerelease で上げ直そうとした」拒否。
+// 資産を置き換えれば、利用者が今まさに落としている物が変わる —— 検証の窓を開けるつもりの操作が
+// 本番に触ってしまうので、上げる前に止める。
+func releaseAlreadyPublicResult(c registry.Command, cfg config.Config, version string) output.Result {
+	res := output.New(c.Name, "refusing to re-upload v"+version+" as a prerelease: it is already public", false)
+	res.Errors = []output.Problem{{
+		Code: output.ErrReleaseAlreadyPublic,
+		Message: "the release for v" + version + " on " + cfg.Github + " is already published as the latest release: " +
+			"uploading to it would replace the assets users are downloading right now",
+		Hint: "cut the next version and release that one with --prerelease (a release cannot be un-published)",
+	}}
+	res.Next = []output.NextDo{{
+		Reason: "open the verification window on a version users have not seen",
+		Do:     "git tag vX.Y.Z && git push --tags   # then: wharfy release --yes --prerelease",
+	}}
+	return res
+}
+
 // releaseMessage は release の一行報告。来歴を付けたなら、付けたと言う——「証明したつもり」を
-// 残さないために、証明の有無は成功メッセージの側に出す。
-func releaseMessage(cfg config.Config, version string, n int, att *attest.Result) string {
-	msg := "released " + cfg.Project + " " + version + ": " + strconv.Itoa(n) + " artifact(s) → " + cfg.Github
+// 残さないために、証明の有無は成功メッセージの側に出す。prerelease も同じ理由で一行目に出す
+// (「配った」と読ませない)。
+func releaseMessage(cfg config.Config, version string, n int, att *attest.Result, prerelease bool) string {
+	verb := "released "
+	if prerelease {
+		verb = "prereleased "
+	}
+	msg := verb + cfg.Project + " " + version + ": " + strconv.Itoa(n) + " artifact(s) → " + cfg.Github
+	if prerelease {
+		msg += " (not latest: users still get the previous version)"
+	}
 	if att != nil {
 		msg += " (build provenance attested for " + strconv.Itoa(len(att.Subjects)) + " artifact(s))"
 	}
@@ -211,7 +292,7 @@ func uploadLatestJSON(ctx context.Context, root string, cfg config.Config, versi
 		Name:        config.LatestJSONName,
 		Path:        p,
 		ContentType: channel.AssetContentType(config.LatestJSONName),
-	}}); err != nil {
+	}}, releaseOptions()); err != nil {
 		return "", err
 	}
 	return p, nil
@@ -270,7 +351,7 @@ func prebuiltRelease(ctx context.Context, root string, cfg config.Config, in con
 	}
 
 	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
-	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets); err != nil {
+	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets, releaseOptions()); err != nil {
 		return nil, &build.FailedError{Err: err}
 	}
 	return archs, nil
@@ -303,7 +384,7 @@ func bundleRelease(ctx context.Context, root string, cfg config.Config, version 
 		})
 	}
 	store := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN"))
-	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets); err != nil {
+	if err := store.Upload(ctx, "v"+version, cfg.Project+" "+version, assets, releaseOptions()); err != nil {
 		return nil, &build.FailedError{Err: err}
 	}
 	return archs, nil

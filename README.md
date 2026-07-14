@@ -91,6 +91,19 @@ Both steps are re-runnable on the same tag: `release` reuses the existing GitHub
 replaces the assets already on it, and `publish` skips the channels it completed. A workflow that
 died halfway can just be run again — you never have to delete the release by hand first.
 
+### Verify the real artifacts before users see them
+
+Once CI builds what you ship, the bytes you distribute only exist after you upload them — so
+verifying them means releasing first, and a release is `latest` the moment it lands. `wharfy release
+--yes --prerelease` breaks that loop: the assets are uploaded and downloadable from their public
+URLs, but the release is **not** GitHub's `latest`, so `releases/latest/download/` and `latest.json`
+keep serving the previous version. Users are untouched while you install the real thing on a real
+machine, against data only you have. Making it `latest` is a separate, explicit step, so a version
+you never verified cannot reach anyone by accident.
+
+A draft release cannot do this — its assets need authentication to download, so you cannot exercise
+them the way a user would.
+
 `verify` checks the channels in your `channels:` from the consumer's side — that list is what
 decides the scope, not the publish history in `state.json` (a channel you dropped from the config
 is never verified, and its old record no longer makes `verify` green).

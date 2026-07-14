@@ -14,8 +14,10 @@ import (
 // fakeGitHub は Releases API の最小モック。tag のリリース有無・アセット置換を検証する。
 type fakeGitHub struct {
 	releaseExists bool
+	prerelease    bool             // 既存リリースが prerelease か(GET が返す)
 	assets        map[string]int64 // name → id(既存アセット)
 	created       int
+	createdPre    bool // create 時に prerelease: true を送ったか
 	deleted       []int64
 	uploaded      []string
 }
@@ -28,14 +30,19 @@ func (g *fakeGitHub) handler(t *testing.T) http.Handler {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		writeRelease(w, 100, g.assets)
+		writeRelease(w, 100, g.assets, g.prerelease)
 	})
 	// POST /repos/o/r/releases (create)
 	mux.HandleFunc("/repos/o/r/releases", func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		pre, _ := payload["prerelease"].(bool)
 		g.created++
+		g.createdPre = pre
 		g.releaseExists = true
+		g.prerelease = pre
 		w.WriteHeader(http.StatusCreated)
-		writeRelease(w, 100, nil)
+		writeRelease(w, 100, nil, pre)
 	})
 	// DELETE /repos/o/r/releases/assets/{id}
 	mux.HandleFunc("/repos/o/r/releases/assets/", func(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +54,8 @@ func (g *fakeGitHub) handler(t *testing.T) http.Handler {
 	return mux
 }
 
-func writeRelease(w http.ResponseWriter, id int64, assets map[string]int64) {
-	rel := map[string]any{"id": id}
+func writeRelease(w http.ResponseWriter, id int64, assets map[string]int64, prerelease bool) {
+	rel := map[string]any{"id": id, "prerelease": prerelease}
 	var as []map[string]any
 	for name, aid := range assets {
 		as = append(as, map[string]any{"id": aid, "name": name})
@@ -104,7 +111,7 @@ func TestReleaseUploadCreatesAndUploads(t *testing.T) {
 		tmpAsset(t, dir, "app_0.1.0_linux_amd64.tar.gz", "a"),
 		tmpAsset(t, dir, "install.sh", "#!/bin/sh"),
 	}
-	if err := s.Upload(context.Background(), "v0.1.0", "app 0.1.0", assets); err != nil {
+	if err := s.Upload(context.Background(), "v0.1.0", "app 0.1.0", assets, ReleaseOptions{}); err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
 	if g.created != 1 {
@@ -125,8 +132,11 @@ func TestReleaseUploadReplacesExisting(t *testing.T) {
 	defer srv.Close()
 	dir := t.TempDir()
 	assets := []ReleaseAsset{tmpAsset(t, dir, "app_0.1.0_linux_amd64.tar.gz", "a")}
-	if err := s.Upload(context.Background(), "v0.1.0", "app 0.1.0", assets); err != nil {
+	if err := s.Upload(context.Background(), "v0.1.0", "app 0.1.0", assets, ReleaseOptions{Prerelease: true}); err != nil {
 		t.Fatalf("Upload: %v", err)
+	}
+	if g.prerelease {
+		t.Error("uploading to an existing release must not turn it into a prerelease (promotion is a separate, explicit step)")
 	}
 	if g.created != 0 {
 		t.Errorf("created = %d, want 0 (release existed)", g.created)
@@ -142,16 +152,57 @@ func TestReleaseUploadReplacesExisting(t *testing.T) {
 // TestReleaseUploadNeedsToken: token 無しは即失敗。
 func TestReleaseUploadNeedsToken(t *testing.T) {
 	s := &GitHubReleaseStore{Owner: "o", Repo: "r"}
-	if err := s.Upload(context.Background(), "v0.1.0", "", nil); err == nil {
+	if err := s.Upload(context.Background(), "v0.1.0", "", nil, ReleaseOptions{}); err == nil {
 		t.Fatal("expected error without token")
 	}
 }
 
 func TestInMemoryReleaseStore(t *testing.T) {
 	s := NewInMemoryReleaseStore()
-	_ = s.Upload(context.Background(), "v1", "", []ReleaseAsset{{Name: "a"}, {Name: "b"}})
-	_ = s.Upload(context.Background(), "v1", "", []ReleaseAsset{{Name: "a"}})
+	_ = s.Upload(context.Background(), "v1", "", []ReleaseAsset{{Name: "a"}, {Name: "b"}}, ReleaseOptions{Prerelease: true})
+	_ = s.Upload(context.Background(), "v1", "", []ReleaseAsset{{Name: "a"}}, ReleaseOptions{})
 	if s.Uploads != 3 || s.Replaced != 1 {
 		t.Errorf("uploads=%d replaced=%d, want 3/1", s.Uploads, s.Replaced)
+	}
+	st, _ := s.Get(context.Background(), "v1")
+	if !st.Exists || !st.Prerelease {
+		t.Errorf("Get(v1) = %+v, want exists+prerelease (the second upload must not change it)", st)
+	}
+}
+
+// TestReleaseUploadCreatesPrerelease: 無ければ prerelease として作る(latest にならない)。
+func TestReleaseUploadCreatesPrerelease(t *testing.T) {
+	g := &fakeGitHub{releaseExists: false}
+	s, srv := newStore(t, g)
+	defer srv.Close()
+	dir := t.TempDir()
+	assets := []ReleaseAsset{tmpAsset(t, dir, "app_0.1.0_linux_amd64.tar.gz", "a")}
+	if err := s.Upload(context.Background(), "v0.1.0", "app 0.1.0", assets, ReleaseOptions{Prerelease: true}); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if !g.createdPre {
+		t.Error("created the release without prerelease: true — it would become github's latest at once")
+	}
+}
+
+// TestReleaseGet: tag のリリースの現状(無い/在る/prerelease)を、上げる前に読めること。
+func TestReleaseGet(t *testing.T) {
+	g := &fakeGitHub{releaseExists: false}
+	s, srv := newStore(t, g)
+	defer srv.Close()
+	st, err := s.Get(context.Background(), "v0.1.0")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if st.Exists {
+		t.Errorf("Get on a missing release = %+v, want not exists", st)
+	}
+	g.releaseExists, g.prerelease = true, true
+	st, err = s.Get(context.Background(), "v0.1.0")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !st.Exists || !st.Prerelease {
+		t.Errorf("Get = %+v, want exists+prerelease", st)
 	}
 }

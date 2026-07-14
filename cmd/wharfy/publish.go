@@ -2295,7 +2295,13 @@ func writeGeneratedConfig(root string, cfg config.Config, in config.File, versio
 		}
 		return "", nil
 	}
-	glYAML, err := config.GenerateGoReleaser(cfg, in)
+	// --prerelease は release だけの局所フラグなので、publish 経由でここへ来たときは常に false。
+	// Go 経路の release は GoReleaser がリリースを作るため、意図は生成設定に載せて渡すしかない。
+	var opts []config.GoReleaserOption
+	if flagPrerelease {
+		opts = append(opts, config.AsPrerelease())
+	}
+	glYAML, err := config.GenerateGoReleaser(cfg, in, opts...)
 	if err != nil {
 		return "", err
 	}
