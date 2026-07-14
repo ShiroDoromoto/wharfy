@@ -669,7 +669,7 @@ func applyChannel(ctx context.Context, ch, root string, cfg config.Config, in co
 			return skip("PACKAGE_REPO_TOKEN not set")
 		}
 		ext := map[string]string{"apt": ".deb", "rpm": ".rpm"}[ch]
-		if _, err := uploadLinuxPackages(ctx, archs, ext, pushURL, token); err != nil {
+		if _, err := uploadLinuxPackages(ctx, root, cfg, version, archs, ext, pushURL, token); err != nil {
 			return channel.PlanItem{}, nil, err
 		}
 		st.Publish[ch] = state.PublishRecord{Version: version, Target: repo, At: now}
@@ -765,18 +765,70 @@ func applyChannel(ctx context.Context, ch, root string, cfg config.Config, in co
 }
 
 // uploadLinuxPackages は archs の deb/rpm を hosted repo へ上げ、件数を返す。
-func uploadLinuxPackages(ctx context.Context, archs []build.Artifact, ext, repo, token string) (int, error) {
+func uploadLinuxPackages(ctx context.Context, root string, cfg config.Config, version string, archs []build.Artifact, ext, repo, token string) (int, error) {
 	n := 0
 	for _, a := range archs {
 		if filepath.Ext(a.Path) != ext {
 			continue
 		}
-		if err := uploadPackage(ctx, repo, token, a.Path); err != nil {
+		path, cleanup, err := packageBytes(ctx, root, cfg, version, a)
+		if err != nil {
+			return n, err
+		}
+		err = uploadPackage(ctx, repo, token, path)
+		cleanup()
+		if err != nil {
 			return n, err
 		}
 		n++
 	}
 	return n, nil
+}
+
+// packageBytes は hosted repo(apt/rpm)へ上げる 1 パッケージの実体を返す。deb/rpm だけは
+// マニフェストに URL を書くのではなく**バイト列そのもの**を hosted repo に渡すので、実ファイルが要る。
+//
+// 手元の dist に在ればそれを使い、無ければ**その版の Release 資産**を落として使う —— promote 後の
+// publish は release とは別の run で走り、資産を作り直さない(D-264)ので dist は空だからだ。ここで
+// 作り直せば、利用者が入れるのは**検証したのとは別のバイト列**になる。落としたものは artifacts.json の
+// sha256 と突き合わせ、食い違えば配らずに止める。
+func packageBytes(ctx context.Context, root string, cfg config.Config, version string, a build.Artifact) (string, func(), error) {
+	noop := func() {}
+	full := a.Path
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(root, a.Path)
+	}
+	if _, err := os.Stat(full); err == nil {
+		return full, noop, nil
+	}
+	name := filepath.Base(a.Path)
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return "", noop, fmt.Errorf("%s: not in %s, and the release it belongs to is unknown — set 'github: owner/repo' in wharfy.yaml", name, config.DistDir)
+	}
+	body, found, err := newReleasesProbe(owner, repo).FetchNamedAsset(ctx, version, name)
+	if err != nil {
+		return "", noop, fmt.Errorf("%s: fetch from release v%s: %w", name, version, err)
+	}
+	if !found {
+		return "", noop, fmt.Errorf("%s: not in %s, and release v%s does not carry it — run `wharfy release --yes` for this version first", name, config.DistDir, version)
+	}
+	if a.SHA256 != "" {
+		sum := sha256.Sum256(body)
+		if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, a.SHA256) {
+			return "", noop, fmt.Errorf("%s: the release asset is not the recorded bytes (recorded %s, downloaded %s) — the release was overwritten; re-release this version", name, a.SHA256, got)
+		}
+	}
+	dir, err := os.MkdirTemp("", "wharfy-pkg-")
+	if err != nil {
+		return "", noop, err
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", noop, err
+	}
+	return path, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 // publishHomebrew / publishScoop は archive を要する owned チャネル。tap/bucket(自前リポジトリ)
@@ -1500,53 +1552,47 @@ func publishLinuxPkg(ctx context.Context, c registry.Command, root string, cfg c
 		return res
 	}
 
+	// その版の Release が既に在るなら、そこに載っている deb/rpm が**検証されたバイト列**そのもの。
+	// 作り直せば別のバイト列になり、窓を開けて確かめた意味が消える(D-264)ので、記録を消費するだけにする。
 	// BYO-binary(依頼① #3): 持ち込みバイナリから nfpm で deb/rpm を作る(GoReleaser を通さない)。
 	// BYO-bundle(依頼③): 持ち込みの deb/rpm をそのまま使う(生成しない・ext フィルタで該当分だけ上げる)。
-	var pkgs []build.Artifact
-	if cfg.Prebuilt || cfg.Bundle {
-		// 併用時は両方から該当拡張子(.deb/.rpm)を集める(依頼②)。prebuilt=CLI パッケージ(nfpm)、
-		// bundle=持ち込み GUI パッケージ。以降の ext フィルタで該当分だけ hosted repo に上げる。
-		if cfg.Prebuilt {
-			p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
+	pkgs, released := releasedArtifacts(ctx, root, cfg, version)
+	if !released {
+		if cfg.Prebuilt || cfg.Bundle {
+			// 併用時は両方から該当拡張子(.deb/.rpm)を集める(依頼②)。prebuilt=CLI パッケージ(nfpm)、
+			// bundle=持ち込み GUI パッケージ。以降の ext フィルタで該当分だけ hosted repo に上げる。
+			if cfg.Prebuilt {
+				p, perr := build.PackagePrebuilt(root, config.DistDir, prebuiltPackageSpec(cfg, in, chName, ext, version), toPrebuiltBinaries(in))
+				if perr != nil {
+					return buildErrorResult(c, perr)
+				}
+				pkgs = append(pkgs, p...)
+			}
+			if cfg.Bundle {
+				p, perr := build.ValidateBundles(root, toBundles(in))
+				if perr != nil {
+					return buildErrorResult(c, perr)
+				}
+				pkgs = append(pkgs, p...)
+			}
+		} else {
+			configPath, err := writeGeneratedConfig(root, cfg, in, version)
+			if err != nil {
+				return internalError(c, err)
+			}
+			p, perr := newPackager(config.DistDir).Packages(ctx, root, configPath)
 			if perr != nil {
 				return buildErrorResult(c, perr)
 			}
-			pkgs = append(pkgs, p...)
+			pkgs = p
 		}
-		if cfg.Bundle {
-			p, perr := build.ValidateBundles(root, toBundles(in))
-			if perr != nil {
-				return buildErrorResult(c, perr)
-			}
-			pkgs = append(pkgs, p...)
-		}
-	} else {
-		configPath, err := writeGeneratedConfig(root, cfg, in, version)
-		if err != nil {
-			return internalError(c, err)
-		}
-		p, perr := newPackager(config.DistDir).Packages(ctx, root, configPath)
-		if perr != nil {
-			return buildErrorResult(c, perr)
-		}
-		pkgs = p
 	}
-	uploaded := 0
-	for _, p := range pkgs {
-		if filepath.Ext(p.Path) != ext {
-			continue
-		}
-		full := p.Path
-		if !filepath.IsAbs(full) {
-			full = filepath.Join(root, p.Path)
-		}
-		if uerr := uploadPackage(ctx, pushURL, token, full); uerr != nil {
-			res := output.New(c.Name, "publish failed", false)
-			res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: uerr.Error(), Hint: "check PACKAGE_REPO_TOKEN scope and the repo URL"}}
-			res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
-			return res
-		}
-		uploaded++
+	uploaded, uerr := uploadLinuxPackages(ctx, root, cfg, version, pkgs, ext, pushURL, token)
+	if uerr != nil {
+		res := output.New(c.Name, "publish failed", false)
+		res.Errors = []output.Problem{{Code: output.ErrPublishFailed, Message: uerr.Error(), Hint: "check PACKAGE_REPO_TOKEN scope and the repo URL"}}
+		res.Next = []output.NextDo{{Reason: "fix the cause then retry", Do: "wharfy publish " + chName + " --yes"}}
+		return res
 	}
 	if st, err := state.Load(root, cfg.Project); err == nil {
 		if st.Publish == nil {

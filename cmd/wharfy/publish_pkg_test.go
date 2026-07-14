@@ -15,14 +15,31 @@ import (
 	"github.com/ShiroDoromoto/wharfy/internal/state"
 )
 
-// fakePackager は goreleaser を起動せず固定の deb/rpm 成果物を返す。
+// fakePackager は goreleaser を起動せず固定の deb/rpm 成果物を返す。実 packager と同じく、
+// 返すパスに実ファイルも置く —— publish は hosted repo へ**バイト列そのもの**を渡すので、
+// パスだけ在ってファイルが無い状態は現実には起こらない(起きたら packageBytes が Release を引く)。
 type fakePackager struct {
 	arts []build.Artifact
 	err  error
 }
 
-func (f fakePackager) Packages(context.Context, string, string) ([]build.Artifact, error) {
-	return f.arts, f.err
+func (f fakePackager) Packages(_ context.Context, root, _ string) ([]build.Artifact, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for _, a := range f.arts {
+		p := a.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p, []byte(a.SHA256), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	return f.arts, nil
 }
 
 func swapPackager(p build.Packager) func() {
