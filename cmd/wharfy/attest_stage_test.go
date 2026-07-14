@@ -59,6 +59,16 @@ func actionsEnv(t *testing.T) {
 	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
 }
 
+// laptopEnv は「Actions の外(手元)」を模す。テスト自身が走る場所も CI なので、runner の
+// GITHUB_ACTIONS / OIDC がそのまま見えてしまう——手元を名乗るなら、その env は自分で落とす。
+// 落とさないと手元では通り CI でだけ赤くなる(逆も然り)。
+func laptopEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+}
+
 // TestReleaseAttestsInActions: CI で release すると、上げた成果物の digest に来歴が付く。
 func TestReleaseAttestsInActions(t *testing.T) {
 	root := scratchPrebuilt(t)
@@ -145,6 +155,7 @@ func TestReleaseInActionsWithoutPermissionsWarns(t *testing.T) {
 	tagScratch(t, root, "v0.1.0")
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
+	laptopEnv(t)
 	t.Setenv("GITHUB_ACTIONS", "true") // id-token: write が無い＝OIDC の取り口が無い
 
 	store := channel.NewInMemoryReleaseStore()
@@ -172,6 +183,7 @@ func TestReleaseOutsideActionsAttestsNothingQuietly(t *testing.T) {
 	tagScratch(t, root, "v0.1.0")
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
+	laptopEnv(t)
 
 	store := channel.NewInMemoryReleaseStore()
 	defer swapReleaseStore(store)()

@@ -173,6 +173,7 @@ func TestPublishContainerOutsideActionsAttestsNothingQuietly(t *testing.T) {
 	tagScratch(t, root, "v0.5.0")
 	chdir(t, root)
 	t.Setenv("GITHUB_TOKEN", "tok")
+	laptopEnv(t)
 	defer swapDockerAvailable(true)()
 	defer swapContainerizer(&fakeContainerizer{})()
 	defer swapRegistryLogin(&loginRec{}, nil)()
