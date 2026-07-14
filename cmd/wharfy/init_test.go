@@ -8,17 +8,39 @@ import (
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/output"
+	"github.com/ShiroDoromoto/wharfy/internal/registry"
 )
 
 // init の振る舞い: 無ければ作る / あれば確認の上ブロック追記 / 2回目は冪等 / プレビューは書かない。
 
-// 管理ブロックが「引き金は意図的に引く」作法を語ること(責務2)。走る場所(CI か手元か)は縛らない
-// ——縛るのは引き金(tag push / 手動 dispatch であって merge ではない)。
-func TestManagedBlockGatingDiscipline(t *testing.T) {
+// 管理ブロックは入口だけを語ること(責務2)。撒かれた本文は wharfy が変わっても追随しないので、
+// 仕様・方針(非対話であること、引き金の作法)を一行でも焼き込めば、その場で古い記述になりうる。
+func TestManagedBlockIsEntryOnly(t *testing.T) {
 	block := managedBlock()
-	for _, want := range []string{"wharfy release", "wharfy publish", "tag push", "never on every merge"} {
-		if !strings.Contains(block, want) {
-			t.Errorf("managed block missing gating discipline %q\n---\n%s", want, block)
+	if !strings.Contains(block, "wharfy agent") {
+		t.Errorf("managed block does not point at the capability map\n---\n%s", block)
+	}
+	// 変わりうる話の痕跡。ここに 1 つでも当たれば、それは撒かれた先で陳腐化する。
+	for _, stale := range []string{"--yes", "tag push", "every merge", "Dependabot", "GitHub Actions", "credential"} {
+		if strings.Contains(block, stale) {
+			t.Errorf("managed block bakes in a volatile detail %q (it belongs in `wharfy agent` notes)\n---\n%s", stale, block)
+		}
+	}
+}
+
+// 管理ブロックから落とした「引き金は意図的に引く」作法が、能力マップ側(常に現行版)で語られること。
+// 落としただけで語り口が消えれば、方針そのものが失われる。
+func TestTriggerDisciplineLivesInAgentNotes(t *testing.T) {
+	for _, name := range []string{"release", "publish"} {
+		spec, ok := registry.Lookup(name)
+		if !ok {
+			t.Fatalf("registry has no %q command", name)
+		}
+		notes := strings.Join(spec.Notes, "\n")
+		for _, want := range []string{"non-interactive", "tag push", "never on every merge"} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("%s notes missing trigger discipline %q\n---\n%s", name, want, notes)
+			}
 		}
 	}
 }

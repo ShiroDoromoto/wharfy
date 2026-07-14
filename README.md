@@ -60,8 +60,10 @@ misspelled key never runs on the defaults while you believe it took effect.
 
 Once, so future agents don't reinvent your release: `wharfy init --yes` writes a small managed
 block to `AGENTS.md` and `CLAUDE.md` telling agents to run `wharfy agent` instead of guessing
-release steps. Without `--yes` it previews; on a file you already have, it appends one block
-(re-running just refreshes it — idempotent).
+release steps. The block is the entrance and nothing else — no steps, no policy — because a copy
+sitting in your repo cannot follow wharfy as it changes, while `wharfy agent` is always current.
+Without `--yes` it previews; on a file you already have, it appends one block (re-running just
+refreshes it — idempotent).
 
 Then drive — start by asking the tool what it can do:
 
@@ -343,7 +345,8 @@ secret and passed as `GITHUB_TOKEN`. Channels that stay in your own repo (`relea
 `goinstall`, `container` on ghcr) run on the built-in token with the right `permissions:`.
 
 What stays deliberate is the trigger, not the machine: ship on a tag push or a manual dispatch,
-never on every merge (`wharfy init` writes that discipline into your `AGENTS.md` / `CLAUDE.md`).
+never on every merge (`wharfy agent` says so on `release` and `publish`, so an agent driving the
+tool reads it before it drives).
 
 #### Build provenance
 

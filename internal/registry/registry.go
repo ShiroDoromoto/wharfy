@@ -91,6 +91,18 @@ const attestNote = "build provenance is attached only in GitHub Actions (it is s
 	"add permissions id-token: write and attestations: write — there is no secret to register. releasing from a laptop attaches nothing, " +
 	"and a release run in Actions without those permissions warns (attest_unavailable) instead of silently shipping unattested artifacts"
 
+// triggerNote は release / publish の注記。「どこで走らせるか」と「いつ引き金を引くか」は別の話で、
+// 縛るべきは後者だけ——なのに配布は身構えられがちで、CI 上で回すこと自体を避ける判断に倒れやすい。
+// wharfy 自身が非対話である事実(--yes は TTY を要らない・資格情報は env から来る)と、引き金は
+// 意図的に引くという作法を、駆動する前に能力マップの側で語る。
+//
+// この注記はかつて `wharfy init` の管理ブロックに焼き込まれていた。撒かれた本文は wharfy が変わっても
+// 追随しないので、変わりうる話は全部こちら(常に現行版)へ寄せ、管理ブロックは入口だけにした。
+const triggerNote = "wharfy is non-interactive: --yes needs no TTY and every credential comes from the environment, " +
+	"so the same commands run on a laptop and in a GitHub Actions workflow — building what you distribute in public CI is fine, " +
+	"and for open source it is the better default. what stays deliberate is the trigger, not the machine: ship on a tag push or a " +
+	"manual dispatch, never on every merge (auto-merging dependency bumps is fine — let them accumulate, then ship on purpose)"
+
 // Commands は唯一の真実。順番は「通常の操作順」。
 //
 // status/build/sign/publish/verify はドメインコマンド。agent/config/version も
@@ -116,9 +128,10 @@ var Commands = []Command{
 		"re-running it on the same tag is safe: the release is reused and assets already there are replaced, so a workflow that failed at publish can simply be re-run",
 		attestNote,
 		"latest.json carries `latest_json.extra:` from wharfy.yaml verbatim (any JSON value): declare there what is not 'which version is newest' — your app's on-disk data format version, the minimum app version that can read it — and wharfy neither interprets nor validates it; the contract is the reading product's",
+		triggerNote,
 		selfGeneratorNote,
 	}},
-	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{selfGeneratorNote, attestNote}},
+	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{triggerNote, selfGeneratorNote, attestNote}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]", Notes: []string{
 		"it needs no local state: with no .wharfy/ record it takes the version from the channels themselves (the latest github release, else the latest git tag), so a bare clone can ask 'does what we shipped still install?' — name the version explicitly with --version <v>",
 		"a .wharfy/ record that is behind the latest github release loses to the release (it is stale, as it always is when publish ran in CI) and you get a drift_detected warning — the record is never allowed to fail a distribution that is actually fine",
