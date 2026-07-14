@@ -39,6 +39,10 @@ const (
 	// 索引の生成待ち(数分)か、パッケージが非公開のまま(fury は既定で非公開として受け取り、
 	// ダッシュボードで公開に切り替えるまで公開 repo に載せない)。
 	WarnPkgNotIndexed = "pkg_not_indexed"
+	// WarnAttestUnavailable: CI で release を回しているのに、来歴の証明を作れなかった。
+	// 証明は「無くても配れてしまう」ので、黙って落とすと配布者は付いているつもりのまま配り続ける。
+	// 原因はほぼ workflow の permissions 欠落(id-token: write / attestations: write)。
+	WarnAttestUnavailable = "attest_unavailable"
 )
 
 // エラーコード(errors・ok=false で停止)。
@@ -71,7 +75,11 @@ const (
 	// 警告どまりで済むのは plan 経路だけで、--yes は非対話ゆえ警告が読まれる頃にはもう上がっている。
 	// 判断できる時点で止めるため、apply では警告ではなく拒否にする(--allow-stale-generator で上書き可)。
 	ErrStaleGeneratorBlocked = "stale_generator_blocked"
-	ErrInternal              = "internal" // 想定外(バグ)
+	// ErrAttestFailed: 来歴の証明を作れる環境なのに、作るか預けるかに失敗した。証明が付いていない
+	// リリースを緑で返すと、配布者は付いているつもりのまま配る——だから release ごと赤くする
+	// (同じタグでの再実行は安全: アセットは貼り替えられる)。
+	ErrAttestFailed = "attest_failed"
+	ErrInternal     = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -105,6 +113,7 @@ var Catalog = []CatalogEntry{
 	{WarnDeprecateFrozen, KindWarning, "ship:false のチャネルを最後に配った版で据え置いた"},
 	{WarnStaleGenerator, KindWarning, "実行中の wharfy が repo の HEAD からビルドされていない(生成物が古い生成器で作られる)"},
 	{WarnPkgNotIndexed, KindWarning, "hosted repo へ上げた版が公開索引にまだ無い(取り込み待ち、または非公開のまま)"},
+	{WarnAttestUnavailable, KindWarning, "CI で回しているのに来歴の証明を作れなかった(workflow の permissions 不足)"},
 
 	{ErrConfigInvalid, KindError, "wharfy.yaml が不正(スキーマ違反)"},
 	{ErrMainAmbiguous, KindError, "main を推測できない(複数 main)"},
@@ -127,6 +136,7 @@ var Catalog = []CatalogEntry{
 	{ErrVerifyFailed, KindError, "verify で install/実行が失敗"},
 	{ErrNothingToVerify, KindError, "channels: のどのチャネルも検証できなかった(検証成功と区別する)"},
 	{ErrStaleGeneratorBlocked, KindError, "版ズレのまま --yes で apply しようとした(--allow-stale-generator で上書き可)"},
+	{ErrAttestFailed, KindError, "来歴の証明の生成/登録に失敗(証明の無いリリースを緑で返さない)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

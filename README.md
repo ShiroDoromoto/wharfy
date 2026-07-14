@@ -345,6 +345,39 @@ secret and passed as `GITHUB_TOKEN`. Channels that stay in your own repo (`relea
 What stays deliberate is the trigger, not the machine: ship on a tag push or a manual dispatch,
 never on every merge (`wharfy init` writes that discipline into your `AGENTS.md` / `CLAUDE.md`).
 
+#### Build provenance
+
+Building in public CI only helps if someone can check that what you shipped really came out of that
+workflow, from that commit. So `release` (and the `release` that `publish` embeds) attests it: the
+artifacts' sha256 digests go into a SLSA provenance statement, signed keyless with the OIDC identity
+Actions hands the workflow, and stored on your repository. There is **no secret to register** — two
+permissions are the whole setup:
+
+```yaml
+permissions:
+  contents: write
+  id-token: write        # sign the provenance (keyless — no key to keep)
+  attestations: write    # store it on the repository
+```
+
+Consumers check it with one command, wherever they got the file from:
+
+```sh
+gh attestation verify wharfy_0.21.0_darwin_arm64.tar.gz --repo ShiroDoromoto/wharfy
+```
+
+Attestations are looked up by **digest**, not by host — so a channel that serves those exact bytes
+(your tap, bucket, AUR, apt/rpm repo) carries the same provenance. What it does *not* cover, wharfy
+says out loud rather than letting you assume otherwise (`wharfy status`, under `attest`): the
+container image (its digest is a separate subject), `homebrew-core` (it rebuilds from source, so the
+bytes users install are not the bytes wharfy signed), and `install.sh` / `install.ps1` / `latest.json`.
+
+Releasing from a laptop attaches nothing (there is no OIDC identity to sign with) and says so. A
+release that runs *in* Actions without those permissions warns (`attest_unavailable`) instead of
+quietly shipping unattested artifacts, and a provenance step that fails where it *could* have
+succeeded fails the release (`attest_failed`) rather than going green — re-running the same tag is
+safe.
+
 `apt`/`rpm` need a hosted package repo (a deb/rpm server is more than a git repo: it serves
 index metadata, and `apt`/`rpm` upload and serve from different hosts). Set it in `wharfy.yaml`
 the low-friction way — a managed service via `provider`, where one user namespace yields both

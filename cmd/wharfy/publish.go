@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
@@ -65,6 +66,8 @@ type publishData struct {
 	Applied  bool               `json:"applied"`
 	Plan     []channel.PlanItem `json:"plan"`
 	Requires []requirement      `json:"requires,omitempty"`
+	// Attest は release を内包した publish が付けた来歴(CI で証明できたときだけ出る)。
+	Attest *attest.Result `json:"attest,omitempty"`
 }
 
 // requirement は実 apply(--yes)の前提条件と充足状況(publish.json requirement)。
@@ -368,6 +371,17 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 			return internalError(c, err)
 		}
 	}
+	// attest 段: release を内包した経路にも来歴を付ける。CI が叩くのは `publish --yes` なので、
+	// ここを落とすと証明が付くのは release を単独で叩いた人だけになる(＝ほぼ誰にも付かない)。
+	// released を条件にしない: 前回の run が release まで済ませて途中で落ちた再開でも、来歴は要る。
+	att, attWarn, attErr := attestRelease(ctx, cfg, archs)
+	if attErr != nil {
+		return buildErrorResult(c, attErr)
+	}
+	var warns []output.Warning
+	if attWarn != nil {
+		warns = append(warns, *attWarn)
+	}
 
 	st, _ := state.Load(root, cfg.Project)
 	if st.Publish == nil {
@@ -376,7 +390,6 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	now := nowUTC().Format(time.RFC3339)
 
 	var items []channel.PlanItem
-	var warns []output.Warning
 	for _, ch := range chans {
 		// 凍結(ship:false)なら配るのは新版ではなく最後に配った版。生成器へ渡す版と成果物を差し替える。
 		chVersion, chArchs := version, archs
@@ -418,10 +431,20 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	}
 	_ = state.Save(root, st)
 
-	res := publishResult(c, fmt.Sprintf("published %d channel(s) at %s", len(items), version), true, items)
-	res.Data = publishData{Applied: true, Plan: items}
+	msg := fmt.Sprintf("published %d channel(s) at %s", len(items), version)
+	if att != nil {
+		msg += fmt.Sprintf(" (build provenance attested for %d artifact(s))", len(att.Subjects))
+	}
+	res := publishResult(c, msg, true, items)
+	res.Data = publishData{Applied: true, Plan: items, Attest: att}
 	res.Warnings = append(warns, deprecationWarnings(cfg)...)
 	res.Next = []output.NextDo{{Reason: "verify installs work", Do: "wharfy verify"}}
+	if attWarn != nil {
+		res.Next = append(res.Next, output.NextDo{
+			Reason: "attach build provenance to what you ship",
+			Do:     "add permissions: id-token: write and attestations: write to the release workflow",
+		})
+	}
 	return withInitNudge(res)
 }
 
@@ -1692,6 +1715,12 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 	// 独立に叩かず publish だけで配ると Release から latest.json が落ち、更新チェックが 404 を
 	// 引いていた(v0.20.0)。実 release を走らせたここが、その経路の合流点になる。
 	if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+		return nil, false, err
+	}
+	// 単発 publish <ch> が release を内包した経路にも来歴を付ける(この経路だけ証明が落ちる、を作らない)。
+	// 警告(CI なのに証明できない)を載せる欄がこの経路には無いので、ここで出るのは失敗だけ
+	// —— 欠落の告知は release / 一括 publish が担う。
+	if _, _, err := attestRelease(ctx, cfg, archs); err != nil {
 		return nil, false, err
 	}
 	return archs, false, nil

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
@@ -176,6 +177,19 @@ func buildErrorResult(c registry.Command, berr error) output.Result {
 		}
 		res.Errors = []output.Problem{{Code: output.ErrSignFailed, Message: signFailed.Error(), Hint: hint}}
 		res.Next = []output.NextDo{{Reason: "fix signing then retry", Do: "wharfy release --yes"}}
+		return res
+	}
+	// attest 段の失敗も release 中に起こりうる。証明の無いリリースを緑で通さないため fail loud にし、
+	// ビルド失敗にも internal(バグ)にも紛れさせない。
+	var attestErr *attest.Error
+	if errors.As(berr, &attestErr) {
+		res := output.New(c.Name, "build provenance failed", false)
+		res.Errors = []output.Problem{{
+			Code:    output.ErrAttestFailed,
+			Message: attestErr.Error(),
+			Hint:    "the release assets are uploaded; re-running the same tag replaces them and retries the attestation",
+		}}
+		res.Next = []output.NextDo{{Reason: "retry (re-running the same tag is safe)", Do: "wharfy release --yes"}}
 		return res
 	}
 	return internalError(c, berr)

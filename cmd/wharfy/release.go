@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
@@ -22,6 +23,8 @@ type releaseData struct {
 	Applied   bool             `json:"applied"`
 	Target    string           `json:"target,omitempty"`
 	Artifacts []build.Artifact `json:"artifacts,omitempty"`
+	// Attest は付けた来歴(CI で証明できたときだけ出る)。手元では出ない=証明していない、と読める。
+	Attest *attest.Result `json:"attest,omitempty"`
 }
 
 // runRelease は GitHub Release を作る独立工程(build→sign→release→publish の release)。
@@ -109,6 +112,11 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 	if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
 		return internalError(c, err)
 	}
+	// attest 段: 上げ切った成果物(実 sha256 が確定した後)に来歴を付ける。
+	att, attWarn, attErr := attestRelease(ctx, cfg, archs)
+	if attErr != nil {
+		return buildErrorResult(c, attErr)
+	}
 	if st, err := state.Load(root, cfg.Project); err == nil {
 		if st.Publish == nil {
 			st.Publish = map[string]state.PublishRecord{}
@@ -124,10 +132,27 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		_ = state.Save(root, st)
 	}
 
-	res := output.New(c.Name, "released "+cfg.Project+" "+version+": "+strconv.Itoa(len(archs))+" artifact(s) → "+cfg.Github, true)
-	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs}
-	res.Next = nextFromSpec(c) // publish
+	res := output.New(c.Name, releaseMessage(cfg, version, len(archs), att), true)
+	res.Data = releaseData{Applied: true, Target: cfg.Github, Artifacts: archs, Attest: att}
+	if attWarn != nil {
+		res.Warnings = append(res.Warnings, *attWarn)
+		res.Next = append(res.Next, output.NextDo{
+			Reason: "attach build provenance to what you ship",
+			Do:     "add permissions: id-token: write and attestations: write to the release workflow",
+		})
+	}
+	res.Next = append(res.Next, nextFromSpec(c)...) // publish
 	return withInitNudge(withStaleGeneratorWarning(root, c, res))
+}
+
+// releaseMessage は release の一行報告。来歴を付けたなら、付けたと言う——「証明したつもり」を
+// 残さないために、証明の有無は成功メッセージの側に出す。
+func releaseMessage(cfg config.Config, version string, n int, att *attest.Result) string {
+	msg := "released " + cfg.Project + " " + version + ": " + strconv.Itoa(n) + " artifact(s) → " + cfg.Github
+	if att != nil {
+		msg += " (build provenance attested for " + strconv.Itoa(len(att.Subjects)) + " artifact(s))"
+	}
+	return msg
 }
 
 // byoRelease は BYO モード(prebuilt=CLI / bundle=GUI)の実リリース。両方宣言されていれば

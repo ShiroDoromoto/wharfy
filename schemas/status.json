@@ -55,6 +55,9 @@
         "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/signTarget"
       }
     },
+    "attest": {
+      "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/attestState"
+    },
     "channels": {
       "type": "array",
       "items": {

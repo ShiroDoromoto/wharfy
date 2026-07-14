@@ -141,6 +141,38 @@
       },
       "required": ["signed"],
       "additionalProperties": false
+    },
+    "attestState": {
+      "description": "来歴(build provenance)の証明の状態。available=いま証明できるか(できないなら reason を持つ)。covered / uncovered は証明が及ぶ範囲・及ばない範囲を 1 行 1 点で述べる——全チャネルに来歴が付くわけではないので、そう読まれないために不在の側も出す。",
+      "type": "object",
+      "properties": {
+        "available": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "covered": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "uncovered": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "required": ["available"],
+      "additionalProperties": false
+    },
+    "attestResult": {
+      "description": "実際に付けた来歴。subject は配ったバイト列の digest で、証明はこれで引かれる(名前は人間向けの札に過ぎない)。id は GitHub が採番した attestation。",
+      "type": "object",
+      "properties": {
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "minLength": 1 }
+            },
+            "required": ["name", "sha256"],
+            "additionalProperties": false
+          }
+        },
+        "id": { "type": "integer" }
+      },
+      "additionalProperties": false
     }
   }
 }

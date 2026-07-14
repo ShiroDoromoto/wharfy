@@ -12,6 +12,8 @@ import (
 // 追加・削除を検知できるよう、コードとは別に固定しておく golden。
 // 変更時はここも更新する→契約変更がレビューに乗る(agent の golden snapshot と同思想)。
 var expectedCodes = []string{
+	"attest_failed",
+	"attest_unavailable",
 	"auth_failed",
 	"build_failed",
 	"builder_unavailable",

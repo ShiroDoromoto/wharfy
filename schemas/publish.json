@@ -24,6 +24,10 @@
           "description": "実 apply(--yes)の前提条件と充足状況。preview で出すことで、credential を持たないエージェントが1往復で「実 apply できるか」を判断できる(09 の tag_missing/token_missing を事前に可視化)。",
           "type": "array",
           "items": { "$ref": "#/$defs/requirement" }
+        },
+        "attest": {
+          "description": "release を内包した publish が付けた来歴。CI で証明できたときだけ出る(不在 = 証明していない)。",
+          "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/attestResult"
         }
       },
       "required": ["plan"],

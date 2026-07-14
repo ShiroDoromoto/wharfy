@@ -13,8 +13,13 @@ on:
   workflow_dispatch:   # ref にタグを選んで実行する(ブランチを選ぶと版が取れない)
 
 # GitHub Release を書くので read では足りない。
+# id-token / attestations は来歴の証明(attest 段)に要る——登録する秘密は無く、要るのは権限だけ。
+# id-token: write が OIDC の身分を配らせ(keyless 署名)、attestations: write がその証明を repo に預けさせる。
+# 書き忘れると証明の無いリリースが緑で通る(wharfy 自身は attest_unavailable で警告する)。
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:

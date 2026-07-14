@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
@@ -17,17 +18,20 @@ import (
 
 // statusOutput は `wharfy status --json`(schemas/status.json)。
 type statusOutput struct {
-	SchemaVersion string           `json:"schema_version"`
-	Command       string           `json:"command"`
-	OK            bool             `json:"ok"`
-	Message       string           `json:"message,omitempty"`
-	Project       string           `json:"project"`
-	Version       string           `json:"version,omitempty"`
-	Tag           string           `json:"tag,omitempty"`
-	Build         *statusBuild     `json:"build,omitempty"`
-	Channels      []statusChannel  `json:"channels"`
-	Warnings      []output.Warning `json:"warnings,omitempty"`
-	Next          []output.NextDo  `json:"next"`
+	SchemaVersion string       `json:"schema_version"`
+	Command       string       `json:"command"`
+	OK            bool         `json:"ok"`
+	Message       string       `json:"message,omitempty"`
+	Project       string       `json:"project"`
+	Version       string       `json:"version,omitempty"`
+	Tag           string       `json:"tag,omitempty"`
+	Build         *statusBuild `json:"build,omitempty"`
+	// Attest は来歴の証明の状態。「いま証明できるか」だけでなく、証明が**及ばない**範囲も出す
+	// ——全チャネルに来歴が付くと読まれたら、それは status が吐いた嘘になる。
+	Attest   *attest.State    `json:"attest,omitempty"`
+	Channels []statusChannel  `json:"channels"`
+	Warnings []output.Warning `json:"warnings,omitempty"`
+	Next     []output.NextDo  `json:"next"`
 }
 
 type statusBuild struct {
@@ -96,6 +100,8 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 	if st.Build != nil {
 		out.Build = &statusBuild{OK: true, Artifacts: st.Build.Artifacts}
 	}
+	as := attest.Status(resolveAttestOptions(cfg))
+	out.Attest = &as
 
 	for _, ch := range cfg.Channels {
 		cs, warn := assessChannel(ctx, ch, cfg, in, st, probe, tag)
@@ -440,6 +446,13 @@ func printStatusHuman(out statusOutput) {
 	fmt.Printf("%s %s\n", out.Project, out.Version)
 	if out.Build != nil {
 		fmt.Printf("build: ok (%d artifacts)\n", len(out.Build.Artifacts))
+	}
+	if a := out.Attest; a != nil {
+		if a.Available {
+			fmt.Println("attest: build provenance will be attached to the release artifacts")
+		} else {
+			fmt.Printf("attest: %s\n", a.Reason)
+		}
 	}
 	fmt.Println("channels:")
 	for _, c := range out.Channels {

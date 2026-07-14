@@ -107,6 +107,11 @@ func buildSecrets(cfg config.Config, in config.File) secretsData {
 			crossRepo[name] = where
 		}
 	}
+	// 来歴の証明は登録する秘密を要さず、権限だけで効く。だから配るチャネルの中身に依らず、CI で
+	// リリースを回すなら常に要る行として出す(黙っていると、証明の無いリリースが緑のまま出続ける)。
+	for _, p := range registry.AttestPermissions {
+		perms[p] = true
+	}
 	// 署名は宣言したときだけ要る(持ち込み署名を尊重する既定は no-op)。
 	if signDeclared(in) {
 		for _, env := range registry.SignCredentials {
@@ -186,6 +191,7 @@ func actionsFor(needs []credentialNeed, tools []toolNeed, perms map[string]bool,
 	// tag が版の唯一の真実である以上、浅いクローンでは何も始まらない。runner に道具を入れる話と
 	// 同じで、手元では絶対に踏まないので、CI の節で先に言う。
 	g.Notes = append(g.Notes, registry.CheckoutNote)
+	g.Notes = append(g.Notes, registry.AttestNote)
 	for _, t := range tools {
 		g.Notes = append(g.Notes, "the runner needs "+t.Bin+" on PATH: "+t.Install)
 	}
