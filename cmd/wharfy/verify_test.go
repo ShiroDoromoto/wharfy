@@ -344,6 +344,19 @@ func checksOf(t *testing.T, res output.Result) []verifyCheck {
 	return d.Checks
 }
 
+// checkFor は名前で 1 行を引く。位置で引くと、確かめる事実が増える(来歴の attest 行など)たびに
+// 無関係なテストが落ちる。
+func checkFor(t *testing.T, res output.Result, name string) verifyCheck {
+	t.Helper()
+	for _, ck := range checksOf(t, res) {
+		if ck.Channel == name {
+			return ck
+		}
+	}
+	t.Fatalf("verify should carry a %q check: %+v", name, checksOf(t, res))
+	return verifyCheck{}
+}
+
 // 既定の verify は repo の版を照合するだけで、コンテナを起こさない(D-4)。CI で毎回叩けるように
 // 軽く保つ ——踏んでいない事実は partial と next(--install)で言う。
 func TestVerifyAptProbesOnlyByDefault(t *testing.T) {
@@ -609,6 +622,7 @@ func TestVerifyRejectsUnsafeContainerInputs(t *testing.T) {
 }
 
 // ghReleaseServer は tag の Release とアセット本体(name → 中身)を返す最小の GitHub API。
+// 資産には digest を載せる —— 実 GitHub がそう返すからで、来歴(attest)はその digest で引く。
 func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
@@ -618,8 +632,12 @@ func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httpte
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": tag})
 		case r.URL.Path == "/repos/acme/demo/releases/tags/"+tag:
 			list := make([]map[string]string, 0, len(assets))
-			for name := range assets {
-				list = append(list, map[string]string{"name": name, "browser_download_url": srv.URL + "/dl/" + name})
+			for name, body := range assets {
+				list = append(list, map[string]string{
+					"name":                 name,
+					"browser_download_url": srv.URL + "/dl/" + name,
+					"digest":               "sha256:" + sha256Hex(body),
+				})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"assets": list})
 		case strings.HasPrefix(r.URL.Path, "/dl/"):
@@ -654,6 +672,10 @@ func swapReleasesProbe(t *testing.T, apiURL string) {
 		return &channel.ReleasesProbe{Owner: owner, Repo: repo, API: apiURL}
 	}
 	t.Cleanup(func() { newReleasesProbe = old })
+	// 来歴の末端も同時に差し替える。fake の Release に本物の証明は預けられないので、既定は
+	// 「全部に付いている」——実 CI が出す Release の姿——にしておく。来歴そのものを試すテストだけが
+	// swapAttest でこれを差し替える(ここを差し替え忘れると、テストが実 GitHub と Sigstore を叩く)。
+	swapAttestVerify(t, attestedRelease{})
 }
 
 // latestJSON は version と資産名から latest.json 本文を組む。
@@ -689,7 +711,7 @@ func TestVerifyWithoutRecordFallsBackToTheLatestRelease(t *testing.T) {
 	if d.Version != "1.2.0" || d.VersionSource != verifySourceRelease {
 		t.Fatalf("the basis should be the latest release, and it should say so: %+v", d)
 	}
-	if len(d.Checks) != 1 || d.Checks[0].Status == verifyStatusSkipped {
+	if ck := checkFor(t, res, "releases"); ck.Status == verifyStatusSkipped {
 		t.Fatalf("no record must not mean nothing to verify: %+v", d.Checks)
 	}
 }
@@ -774,12 +796,12 @@ func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("a release whose assets all exist should verify ok: %+v", res)
 	}
-	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+	ck := checkFor(t, res, "releases")
+	if ck.Status != verifyStatusPartial {
 		t.Fatalf("releases should stop at probe without --install: %+v", ck)
 	}
-	if !strings.Contains(ck[0].Message, "contents are unchecked") {
-		t.Errorf("the probe must say the contents were not checked: %q", ck[0].Message)
+	if !strings.Contains(ck.Message, "contents are unchecked") {
+		t.Errorf("the probe must say the contents were not checked: %q", ck.Message)
 	}
 	// probe で止めたことは warning にしない(既定どおりに動いただけ)。--install は next で案内する。
 	if len(res.Warnings) != 0 {
@@ -804,12 +826,12 @@ func TestVerifyReleasesInstallChecksumsMatch(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("assets that match their sha256 should verify ok: %+v", res)
 	}
-	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Status != verifyStatusOK {
+	ck := checkFor(t, res, "releases")
+	if ck.Status != verifyStatusOK {
 		t.Fatalf("releases check should be verified: %+v", ck)
 	}
-	if !strings.Contains(ck[0].Message, "match their sha256") {
-		t.Errorf("the success must say the sha256 were compared: %q", ck[0].Message)
+	if !strings.Contains(ck.Message, "match their sha256") {
+		t.Errorf("the success must say the sha256 were compared: %q", ck.Message)
 	}
 	validateAgainst(t, resultSchemaID, res)
 }
@@ -853,8 +875,8 @@ func TestVerifyReleasesInstallWithoutChecksumsIsPartial(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("a release without checksums should not fail: %+v", res)
 	}
-	ck := checksOf(t, res)
-	if len(ck) != 1 || ck[0].Status != verifyStatusPartial {
+	ck := checkFor(t, res, "releases")
+	if ck.Status != verifyStatusPartial {
 		t.Fatalf("releases should be partial when there is nothing to compare against: %+v", ck)
 	}
 	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0].Message, "no sha256 to compare against") {
@@ -870,6 +892,11 @@ func checksumsFor(assets map[string]string, names ...string) string {
 		fmt.Fprintf(&b, "%x  %s\n", sha256.Sum256([]byte(assets[n])), n)
 	}
 	return b.String()
+}
+
+// sha256Hex は資産の中身の sha256(GitHub が資産に載せる digest と同じもの)。
+func sha256Hex(body string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
 }
 
 // latest.json に載る資産が Release に無い → verify_failed(利用者はその URL で 404 を踏む)。

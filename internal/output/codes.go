@@ -82,7 +82,12 @@ const (
 	// リリースを緑で返すと、配布者は付いているつもりのまま配る——だから release ごと赤くする
 	// (同じタグでの再実行は安全: アセットは貼り替えられる)。
 	ErrAttestFailed = "attest_failed"
-	ErrInternal     = "internal" // 想定外(バグ)
+	// ErrAttestUnverified: 配ってある物の来歴が、消費者の目で検算できない。証明が一部の成果物にしか
+	// 付いていないか、付いていても引けない(別の digest を指す・想定と違う workflow が署名した・
+	// 透明性ログに載っていない)。作る側(ErrAttestFailed)は成功したまま、検算だけが通らないことがある
+	// ——「付けたつもり」を捕まえるのは verify だけなので、ここは緑にしない。
+	ErrAttestUnverified = "attest_unverified"
+	ErrInternal         = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -141,6 +146,7 @@ var Catalog = []CatalogEntry{
 	{ErrNothingToVerify, KindError, "channels: のどのチャネルも検証できなかった(検証成功と区別する)"},
 	{ErrStaleGeneratorBlocked, KindError, "版ズレのまま --yes で apply しようとした(--allow-stale-generator で上書き可)"},
 	{ErrAttestFailed, KindError, "来歴の証明の生成/登録に失敗(証明の無いリリースを緑で返さない)"},
+	{ErrAttestUnverified, KindError, "配ってある物の来歴が消費者の目で検算できない(一部にしか付いていない/引けない)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

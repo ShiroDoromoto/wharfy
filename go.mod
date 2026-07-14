@@ -3,6 +3,7 @@ module github.com/ShiroDoromoto/wharfy
 go 1.26.4
 
 require (
+	github.com/golang/snappy v0.0.4
 	github.com/goreleaser/nfpm/v2 v2.47.0
 	github.com/klauspost/compress v1.18.6
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

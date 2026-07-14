@@ -383,13 +383,9 @@ func TestVerifyCoversReleasesScriptAndGoinstall(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("three covered channels must not report nothing_to_verify: %+v", res)
 	}
-	ck := checksOf(t, res)
-	if len(ck) != 3 {
-		t.Fatalf("every configured channel should be checked: %+v", ck)
-	}
-	for _, c := range ck {
-		if c.Status == verifyStatusSkipped {
-			t.Errorf("%s should be verified or probed, not skipped: %+v", c.Channel, c)
+	for _, name := range []string{"releases", "script", "goinstall"} {
+		if c := checkFor(t, res, name); c.Status == verifyStatusSkipped {
+			t.Errorf("%s should be verified or probed, not skipped: %+v", name, c)
 		}
 	}
 	validateAgainst(t, resultSchemaID, res)

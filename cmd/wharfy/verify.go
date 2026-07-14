@@ -46,6 +46,9 @@ import (
 // 供給側(hosted repo への push、Release へのアップロード)はアップロードが 200 を返せば成功するので、
 // 生成物の依存やファイル配置が壊れていても気づけない。踏むのは利用者になる。
 //
+// checks にはチャネルでない行が 1 つ混じる: attest —— 配ってある成果物の**来歴**を消費者の目で
+// 検算する(→ verify_attest.go)。来歴は digest で引くのでチャネル横断に効き、チャネルごとの行にはならない。
+//
 // `wharfy verify [channel]` は対象を 1 チャネルに絞る。channels: に無い名前は publish と同じ
 // channel_not_configured で拒む。
 //
@@ -210,11 +213,16 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		case "homebrew-core":
 			outcomes = append(outcomes, verifyHomebrewCore(ctx, cfg, ch, tgt))
 		case "releases":
-			oc, err := verifyReleases(ctx, ch, tgt)
+			oc, audit, err := verifyReleases(ctx, ch, tgt)
 			if err != nil {
 				return internalError(c, err)
 			}
 			outcomes = append(outcomes, oc)
+			// 来歴は Release の成果物に付く(subject は資産の digest)。資産の実在照合が落ちているなら、
+			// 確かめる対象そのものが揃っていない —— そこは releases の失敗として語れば足りる。
+			if oc.check.Status != verifyStatusFailed {
+				outcomes = append(outcomes, verifyAttest(ctx, ch, tgt, audit))
+			}
 		case "script":
 			outcomes = append(outcomes, verifyScript(ctx, cfg, in, tgt))
 		case "apt", "rpm":
@@ -422,10 +430,11 @@ func verifiedNext(checks []verifyCheck) []output.NextDo {
 
 // hasInstallablePartial は --install で先まで踏めるチャネルが partial で止まっているか。
 // gated(winget)の partial は「上流にまだ merge されていない」であって、install で踏める先が無い
-// —— そこへ --install を勧めると、待つしかないものに手を打てるかのように読める。
+// —— そこへ --install を勧めると、待つしかないものに手を打てるかのように読める。来歴(attest)の
+// partial も同じで、打つ手は install ではなく workflow の permissions。
 func hasInstallablePartial(checks []verifyCheck) bool {
 	for _, ck := range checks {
-		if ck.Status == verifyStatusPartial && !gatedChannel(ck.Channel) {
+		if ck.Status == verifyStatusPartial && !gatedChannel(ck.Channel) && ck.Channel != attestCheckName {
 			return true
 		}
 	}
@@ -755,16 +764,19 @@ var newReleasesProbe = func(owner, repo string) *channel.ReleasesProbe {
 // 既定は資産本体を落とさない(D-4)ので、ここで捕まえるのは「名前が無い」ことだけ。名前が在っても
 // 中身が壊れていることはある(アップロードが途中で切れた・後から差し替えられた)。--install なら
 // 資産を落として checksums マニフェストの sha256 と突き合わせ、そこまで見る。
-func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) (verifyOutcome, error) {
+//
+// audit は来歴の検算(verifyAttest)にも渡す —— 資産の digest を持っているのはここで引いた Release
+// だけで、同じものを 2 度引かない。
+func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget) (verifyOutcome, channel.ReleaseAudit, error) {
 	repo := firstNonEmptyStr(ch.Target, tgt.Target)
 	owner, name, ok := splitOwnerName(repo)
 	if !ok {
-		return verifyOutcome{}, errString("releases target is unresolved: " + repo)
+		return verifyOutcome{}, channel.ReleaseAudit{}, errString("releases target is unresolved: " + repo)
 	}
 	probe := newReleasesProbe(owner, name)
 	audit, perr := probe.Audit(ctx, tgt.Version)
 	if perr != nil {
-		return probeFailedOutcome("releases", perr), nil
+		return probeFailedOutcome("releases", perr), audit, nil
 	}
 	switch {
 	case !audit.Found:
@@ -772,35 +784,35 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTa
 			"releases: "+repo+" has no release tagged v"+tgt.Version+" (expected "+tgt.expected()+")",
 			"the expected release does not exist",
 			"re-run release to cut the tag and upload its assets",
-			"", "wharfy release --yes"), nil
+			"", "wharfy release --yes"), audit, nil
 	case !audit.HasLatestJSON:
 		return verifyFailure("releases",
 			"releases: v"+tgt.Version+" carries no "+channel.ManifestLatestJSON,
 			"the release has no update manifest, so releases/latest/download/"+channel.ManifestLatestJSON+
 				" is a 404 for everyone already running the app",
 			"re-run release to upload "+channel.ManifestLatestJSON+" to this tag",
-			"", "wharfy release --yes"), nil
+			"", "wharfy release --yes"), audit, nil
 	case audit.Version != "" && audit.Version != tgt.Version:
 		return verifyFailure("releases",
 			channel.ManifestLatestJSON+" on v"+tgt.Version+" says "+audit.Version+", expected "+tgt.Version,
 			"the release manifest names a different version than the published record",
 			"re-run release so the release and its "+channel.ManifestLatestJSON+" agree",
-			"", "wharfy release --yes"), nil
+			"", "wharfy release --yes"), audit, nil
 	case len(audit.Missing) > 0:
 		return verifyFailure("releases",
 			"releases "+tgt.Version+" is missing "+strconv.Itoa(len(audit.Missing))+" of "+
 				strconv.Itoa(len(audit.Expected))+" assets listed in "+strings.Join(audit.Manifests, " and "),
 			"assets listed in the release manifest are not on the release",
 			"re-run release to upload the missing assets; users following the manifest hit a 404",
-			strings.Join(audit.Missing, "\n"), "wharfy release --yes"), nil
+			strings.Join(audit.Missing, "\n"), "wharfy release --yes"), audit, nil
 	}
 
 	present := "releases " + tgt.Version + ": all " + strconv.Itoa(len(audit.Expected)) +
 		" assets listed in " + strings.Join(audit.Manifests, " and ") + " exist on the release at " + repo
 	if !flagInstall {
-		return verifyProbedOnly("releases", present+"; the assets were not downloaded, so their contents are unchecked"), nil
+		return verifyProbedOnly("releases", present+"; the assets were not downloaded, so their contents are unchecked"), audit, nil
 	}
-	return verifyReleaseChecksums(ctx, probe, audit, present), nil
+	return verifyReleaseChecksums(ctx, probe, audit, present), audit, nil
 }
 
 // verifyReleaseChecksums は --install のときに資産を落として sha256 を検算する。

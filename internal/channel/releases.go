@@ -31,14 +31,14 @@ const (
 	ManifestLatestJSON = "latest.json"
 	// ManifestChecksums は GoReleaser の checksums マニフェストの素名。実際の資産名は既定の
 	// name_template `{{ .ProjectName }}_{{ .Version }}_checksums.txt` が効いてプロジェクト名と版を
-	// 含むので、固定名では実リリースに一度も当たらない(D-5)。拾うのは isChecksumsManifest。
+	// 含むので、固定名では実リリースに一度も当たらない(D-5)。拾うのは IsChecksumsManifest。
 	ManifestChecksums = "checksums.txt"
 )
 
-// isChecksumsManifest は Release 資産の名前が checksums マニフェストかを判定する。
+// IsChecksumsManifest は Release 資産の名前が checksums マニフェストかを判定する。
 // 既定の name_template が付ける `<project>_<version>_` 前置と、name_template を素名に潰した
 // 配布者の両方を拾う。
-func isChecksumsManifest(name string) bool {
+func IsChecksumsManifest(name string) bool {
 	return name == ManifestChecksums || strings.HasSuffix(name, "_"+ManifestChecksums)
 }
 
@@ -68,6 +68,13 @@ type ReleaseAudit struct {
 	Checksums map[string]string
 	// URLs は 資産名 → ダウンロード URL(Release に実在するものだけ)。VerifyChecksums が使う。
 	URLs map[string]string
+	// Digests は 資産名 → sha256(GitHub が**実際に配っているバイト列**から出したもの・16 進小文字)。
+	//
+	// 配布者が書いた checksums マニフェストとは出どころが違う: あれは「こういう物を上げたと宣言した」
+	// 記述で、こちらは「いま落ちてくる物はこれ」という観測。だから来歴(attest)の照合はこちらで引く
+	// ——落とさずに、利用者が受け取るバイト列そのものの digest を見られる。
+	// 古い GitHub は digest を返さないので、その場合は空になる。
+	Digests map[string]string
 }
 
 // ChecksumMismatch は落とした資産の sha256 が checksums マニフェストと食い違ったこと。
@@ -84,6 +91,8 @@ func (m ChecksumMismatch) String() string {
 type ghReleaseAsset struct {
 	Name        string `json:"name"`
 	DownloadURL string `json:"browser_download_url"`
+	// Digest は GitHub が資産のバイト列から出した digest("sha256:<hex>")。来歴の照合に使う。
+	Digest string `json:"digest"`
 }
 
 type ghReleaseAssets struct {
@@ -161,10 +170,14 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 	}
 
 	present := map[string]string{} // 資産名 → ダウンロード URL
+	digests := map[string]string{} // 資産名 → GitHub が配るバイト列の sha256
 	for _, a := range rel.Assets {
 		present[a.Name] = a.DownloadURL
+		if h, ok := strings.CutPrefix(a.Digest, "sha256:"); ok {
+			digests[a.Name] = strings.ToLower(h)
+		}
 	}
-	audit := ReleaseAudit{Found: true, URLs: present}
+	audit := ReleaseAudit{Found: true, URLs: present, Digests: digests}
 
 	expected := map[string]bool{}
 	if url, ok := present[ManifestLatestJSON]; ok {
@@ -215,7 +228,7 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 func checksumsAssets(present map[string]string) []string {
 	var names []string
 	for name := range present {
-		if isChecksumsManifest(name) {
+		if IsChecksumsManifest(name) {
 			names = append(names, name)
 		}
 	}

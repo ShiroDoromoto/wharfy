@@ -14,6 +14,7 @@ import (
 var expectedCodes = []string{
 	"attest_failed",
 	"attest_unavailable",
+	"attest_unverified",
 	"auth_failed",
 	"build_failed",
 	"builder_unavailable",

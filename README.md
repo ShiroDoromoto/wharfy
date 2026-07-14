@@ -386,6 +386,16 @@ quietly shipping unattested artifacts, and a provenance step that fails where it
 succeeded fails the release (`attest_failed`) rather than going green — re-running the same tag is
 safe.
 
+Attaching provenance and *having* provenance are different claims, and only the second one matters
+to the person downloading your binary. So `verify` checks it from their side (the `attest` check):
+it takes every build artifact on the release by the digest GitHub serves, pulls the attestation
+stored for that digest, and verifies it the way `gh attestation verify` would — signed by *this*
+repository's workflow, recorded in Rekor, bound to those exact bytes. Provenance that covers only
+some artifacts, or that does not verify, fails (`attest_unverified`); a release carrying none at all
+is partial with a warning, because a release cut without those permissions never claimed any. Put
+`wharfy verify` at the end of the release workflow and a provenance that is broken, partial, or
+signed by something other than your workflow cannot reach users unnoticed.
+
 `apt`/`rpm` need a hosted package repo (a deb/rpm server is more than a git repo: it serves
 index metadata, and `apt`/`rpm` upload and serve from different hosts). Set it in `wharfy.yaml`
 the low-friction way — a managed service via `provider`, where one user namespace yields both
