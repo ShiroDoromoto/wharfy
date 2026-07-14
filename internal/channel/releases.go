@@ -58,14 +58,13 @@ type ReleasesProbe struct {
 // ReleaseAudit は 1 つの Release に対する実在照合の結果。
 type ReleaseAudit struct {
 	Found bool // その tag の Release が在るか
-	// Prerelease は、その Release が prerelease である(資産は在るが GitHub の latest ではない)。
-	// 資産としては何も欠けていないので検証は普通に通る —— しかし利用者はまだこの版を受け取って
-	// いない。verify が「確かめた物」と「配ってある物」を取り違えないための一点。
-	Prerelease bool
-	Manifests  []string // 照合に使えたマニフェストの資産名
-	Version    string   // latest.json が名乗る版(checksums しか無ければ空)
-	Expected   []string // マニフェストが載せる資産名(昇順)
-	Missing    []string // そのうち Release に実在しないもの(昇順)
+	// 「その Release が prerelease か」はここでは語らない —— verify は Release の公開状態を
+	// release store から 1 度だけ引いて全チャネルで使い回す(チャネルごとに問い合わせない)。
+	// 同じ事実を 2 つの出どころから持てば、いずれ食い違う。
+	Manifests []string // 照合に使えたマニフェストの資産名
+	Version   string   // latest.json が名乗る版(checksums しか無ければ空)
+	Expected  []string // マニフェストが載せる資産名(昇順)
+	Missing   []string // そのうち Release に実在しないもの(昇順)
 
 	// HasLatestJSON は latest.json が Release に実在したか。release は github(owner/repo)が
 	// 解決できる限り必ずこれを上げるので、無い Release は壊れている(更新チェックの向き先が 404)。
@@ -105,8 +104,7 @@ type ghReleaseAsset struct {
 }
 
 type ghReleaseAssets struct {
-	Prerelease bool             `json:"prerelease"`
-	Assets     []ghReleaseAsset `json:"assets"`
+	Assets []ghReleaseAsset `json:"assets"`
 }
 
 // latestJSONDoc は latest.json のうち照合に要る部分(契約は schemas/latest.json)。
@@ -187,7 +185,7 @@ func (p *ReleasesProbe) Audit(ctx context.Context, version string) (ReleaseAudit
 			digests[a.Name] = strings.ToLower(h)
 		}
 	}
-	audit := ReleaseAudit{Found: true, Prerelease: rel.Prerelease, URLs: present, Digests: digests}
+	audit := ReleaseAudit{Found: true, URLs: present, Digests: digests}
 
 	expected := map[string]bool{}
 	if url, ok := present[ManifestLatestJSON]; ok {
