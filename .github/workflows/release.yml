@@ -5,12 +5,27 @@ name: release
 # (selfrelease.go の stale_generator は、まさにその穴を検知するために在る)。
 # CI はタグを clean に checkout してその場で go build するので、生成器 = そのタグのコード、で確定する。
 #
+# CI がビルドする以上、配る実物のバイト列は上げるまで手元に無い。だから「上げる」と「配る」を割る:
+#
+#   1. タグ push → prerelease として上げる。資産は公開 URL から落ちるが GitHub の latest では
+#      ないので、利用者は旧版のまま。ここで実物を検証する(実機で入れて、起動して、手元のデータで動かす)。
+#   2. 緑なら手動 dispatch(ref=そのタグ)→ 昇格して各チャネルへ配る。
+#      赤なら昇格しない。壊れた版が利用者に見える時間はゼロ。
+#
+# 昇格は資産を作り直さない(フラグを立てるだけ)。publish もリリースが在れば上げ直さず、その
+# artifacts.json を読んでチャネルだけ書く —— 検証したバイト列が、そのまま配られる。
+#
 # 引き金は意図的に絞る: タグ push と手動 dispatch だけで、main への merge では動かさない。
 # 依存の bump は溜めておいて、配るときに配る。
 on:
   push:
     tags: ['v*']
   workflow_dispatch:   # ref にタグを選んで実行する(ブランチを選ぶと版が取れない)
+    inputs:
+      promote:
+        description: 'この tag の prerelease を latest に昇格し、各チャネルへ配る(検証が緑になってから)'
+        type: boolean
+        default: true
 
 # GitHub Release を書くので read では足りない。
 # id-token / attestations は来歴の証明(attest 段)に要る——登録する秘密は無く、要るのは権限だけ。
@@ -22,14 +37,12 @@ permissions:
   attestations: write
 
 jobs:
-  release:
+  # タグを押したら、実物を上げるところまで。まだ誰にも配らない。
+  prerelease:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      # Actions が既定で渡す GITHUB_TOKEN はこの repo にしか書けない。homebrew tap と scoop bucket は
-      # 別 repo なので、repo scope の PAT が要る(wharfy secrets がこの note を出す)。
       GITHUB_TOKEN: ${{ secrets.WHARFY_GITHUB_TOKEN }}
-      # apt / rpm を fury.io の hosted repo へ push する。
-      PACKAGE_REPO_TOKEN: ${{ secrets.PACKAGE_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,12 +63,68 @@ jobs:
       - name: build wharfy from this tag
         run: go build -o "$RUNNER_TEMP/wharfy" ./cmd/wharfy
 
-      # 何を配ろうとしているかをログに残してから配る(書く前に必ず差分を見せる、は wharfy の作法)。
+      # 何を上げようとしているかをログに残してから上げる(書く前に必ず見せる、は wharfy の作法)。
+      - name: plan
+        run: $RUNNER_TEMP/wharfy release --prerelease
+
+      # 資産・install.sh・latest.json・artifacts.json を上げ、来歴を付ける。latest にはしない。
+      - name: release (prerelease)
+        run: $RUNNER_TEMP/wharfy release --yes --prerelease
+
+      # 上げた実物を消費者の目で確かめる(資産の実在・checksums・来歴)。昇格前のチャネルはその版を
+      # 持っていなくて当たり前なので、verify はそこを赤くしない。
+      - name: verify the artifacts
+        run: $RUNNER_TEMP/wharfy verify --version "${GITHUB_REF_NAME#v}"
+
+      - name: what to do next
+        run: |
+          {
+            echo "### ${GITHUB_REF_NAME} is up as a **prerelease** — users still get the previous version"
+            echo
+            echo "Install the real artifacts and exercise them (a real machine, your own data):"
+            echo '```sh'
+            echo "gh release download ${GITHUB_REF_NAME}"
+            echo '```'
+            echo
+            echo "Green: run this workflow again with **ref = ${GITHUB_REF_NAME}** and \`promote: true\` — that is when users see it."
+            echo "Red: do not promote. Fix it and cut the next tag; nobody ever saw this build."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 検証が緑になってから、人間が引く引き金。ここで初めて利用者に届く。
+  promote:
+    if: github.event_name == 'workflow_dispatch' && inputs.promote
+    runs-on: ubuntu-latest
+    env:
+      # Actions が既定で渡す GITHUB_TOKEN はこの repo にしか書けない。homebrew tap と scoop bucket は
+      # 別 repo なので、repo scope の PAT が要る(wharfy secrets がこの note を出す)。
+      GITHUB_TOKEN: ${{ secrets.WHARFY_GITHUB_TOKEN }}
+      # apt / rpm を fury.io の hosted repo へ push する。
+      PACKAGE_REPO_TOKEN: ${{ secrets.PACKAGE_REPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+
+      - name: build wharfy from this tag
+        run: go build -o "$RUNNER_TEMP/wharfy" ./cmd/wharfy
+
+      # 昇格はフラグを立てるだけ(冪等)。資産も来歴も作り直さない —— 検証したバイト列がそのまま配られる。
+      - name: promote to latest
+        run: $RUNNER_TEMP/wharfy promote --yes
+
       - name: plan
         run: $RUNNER_TEMP/wharfy publish --dry-run
 
-      # release(GitHub Release の作成とアセット)も publish が内包する。同一タグで再実行しても、
-      # release はアセットを貼り替え、publish は完了済みチャネルを飛ばす — 途中で死んだら再実行でよい。
+      # リリースは既に在るので、publish は上げ直さず artifacts.json を読んでチャネルだけ書く。
       - name: publish
         run: $RUNNER_TEMP/wharfy publish --yes
 
