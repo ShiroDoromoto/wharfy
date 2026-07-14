@@ -116,6 +116,10 @@
           "minimum": 0,
           "description": "releases のアセット数等。"
         },
+        "prerelease": {
+          "type": "boolean",
+          "description": "その版が prerelease として上がっている(資産は在るが GitHub の latest ではなく、利用者はまだ旧版を受け取っている)。published=false と対で読む。"
+        },
         "reason": {
           "type": "string",
           "description": "published=false の理由。"

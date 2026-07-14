@@ -176,6 +176,21 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		}
 		return fallback
 	}
+	// 「この版はまだ prerelease か」も 1 度だけ引いて使い回す(チャネルごとに問い合わせない)。
+	prereleased := map[string]bool{}
+	isPrerelease := func(version string) bool {
+		if pre, ok := prereleased[version]; ok {
+			return pre
+		}
+		pre := false
+		if owner, repo, ok := splitOwnerName(cfg.Github); ok {
+			if st, err := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, "v"+version); err == nil {
+				pre = st.Exists && st.Prerelease
+			}
+		}
+		prereleased[version] = pre
+		return pre
+	}
 
 	var outcomes []verifyOutcome
 	var unpublished []string
@@ -185,6 +200,15 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 		if tgt.Version == "" {
 			unpublished = append(unpublished, ch.Name)
 			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" skipped: nothing published on this channel yet"))
+			continue
+		}
+		// 確かめようとしている版がまだ prerelease なら、release が配る物(releases / script / 来歴)
+		// 以外のチャネルはその版を持っていなくて当たり前 —— 持っていないことを赤くしない。
+		// 昇格していないだけで、配布は壊れていない(赤にすれば、検証の窓が使い物にならなくなる)。
+		if isPrerelease(tgt.Version) && !releaseBorneChannel(ch.Name) {
+			used = append(used, tgt)
+			outcomes = append(outcomes, verifyNotRun(ch.Name, ch.Name+" not checked: v"+tgt.Version+
+				" is a prerelease — this channel still serves the previous version until you promote"))
 			continue
 		}
 		used = append(used, tgt)
@@ -218,7 +242,7 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			if err != nil {
 				return internalError(c, err)
 			}
-			outcomes = append(outcomes, oc)
+			outcomes = append(outcomes, prereleaseNotice(oc, audit, tgt.Version))
 			// 来歴は Release の成果物に付く(subject は資産の digest)。資産の実在照合が落ちているなら、
 			// 確かめる対象そのものが揃っていない —— そこは releases の失敗として語れば足りる。
 			if oc.check.Status != verifyStatusFailed {
@@ -1278,6 +1302,31 @@ func verifySkip(name, msg string) verifyOutcome {
 // 全チャネルがこれなら verifyResult が nothing_to_verify として ok=false にする。
 func verifyNotRun(name, msg string) verifyOutcome {
 	return verifyOutcome{check: verifyCheck{Channel: name, Status: verifyStatusSkipped, Message: msg}}
+}
+
+// releaseBorneChannel は、prerelease の窓でも**その版を実際に見に行けるチャネル**。tag を名指しで
+// 引ける releases だけがそれで、来歴もこの Release の資産に付くので一緒に確かめられる。
+//
+// script は入らない —— install.sh は releases/latest/download/ から配るので、昇格するまで利用者に
+// 返るのは旧版の install.sh であり、そこを新版として確かめれば嘘になる。tap / bucket / hosted repo /
+// registry も同じで、書くのは publish(＝昇格の後)。
+func releaseBorneChannel(name string) bool {
+	return name == "releases"
+}
+
+// prereleaseNotice は「確かめた物は、まだ利用者に届いていない」を緑のまま添える。prerelease を
+// 赤にはしない —— 検証はまさにこの窓で回すもので、赤くすれば窓が使い物にならなくなる。
+func prereleaseNotice(oc verifyOutcome, audit channel.ReleaseAudit, version string) verifyOutcome {
+	if !audit.Prerelease || oc.check.Status == verifyStatusFailed || oc.warning != nil {
+		return oc
+	}
+	oc.warning = &output.Warning{
+		Code: output.WarnPrereleaseNotLatest,
+		Message: "v" + version + " is a prerelease: what you just checked is not what users get — " +
+			"releases/latest/download/ and latest.json still serve the previous version. " +
+			"run `wharfy promote --yes` to hand these exact bytes to them",
+	}
+	return oc
 }
 
 func probeFailedOutcome(name string, err error) verifyOutcome {

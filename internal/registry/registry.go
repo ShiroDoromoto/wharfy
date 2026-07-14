@@ -120,7 +120,10 @@ const triggerNote = "wharfy is non-interactive: --yes needs no TTY and every cre
 // ここに含める(「cobra にあるが registry にない」を構造的にゼロにする)。
 var Commands = []Command{
 	{Name: "agent", Summary: "print this capability map (read once, then drive)", Next: []string{"status"}},
-	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}},
+	{Name: "status", Summary: "what is built / signed / published, and where", Next: []string{"build"}, Notes: []string{
+		"a release that is still a prerelease is reported as such (prerelease: true, published: false): its assets are up, " +
+			"but users are still on the previous version — 'uploaded' and 'delivered' are two different facts",
+	}},
 	{Name: "config", Summary: "show the resolved effective config", Next: []string{"build"}},
 	{Name: "auth", Summary: "save a credential (e.g. fury token) to the OS keychain", Args: "<kind>", Next: []string{"publish"}, Notes: []string{
 		"--print writes the stored credential to stdout in the form other tools take (the keychain may hold it wrapped), so the credential wharfy uses locally is the one CI gets: wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN. it refuses --json — a machine-readable secret ends up in an agent's transcript",
@@ -158,6 +161,10 @@ var Commands = []Command{
 		"the container image is attested here rather than in release: an image is named by its manifest digest, and that digest only exists once the registry has accepted the push — so publish attests it right after pushing, and consumers check it with `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>`",
 	}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]", Notes: []string{
+		"verifying a prerelease is the point of one: `wharfy verify --version <v>` checks the assets on that release — the real bytes CI built — " +
+			"and says they are not what users get yet (prerelease_not_latest), without turning red. the channels that only get the version when you " +
+			"publish (tap, bucket, hosted repo, registry, and install.sh, which is served from releases/latest/download/) are not checked against it: " +
+			"they still serve the previous version, and that is correct, not a failure",
 		"it needs no local state: with no .wharfy/ record it takes the version from the channels themselves (the latest github release, else the latest git tag), so a bare clone can ask 'does what we shipped still install?' — name the version explicitly with --version <v>",
 		"the default (probe) run downloads no artifact, but it does not take their contents on trust either: github reports a sha256 digest for every release asset it serves, and verify compares those against the checksums manifest — a truncated upload or an asset swapped out after the fact is caught on every run, not only under --install (which additionally downloads them and installs from the channel)",
 		"a .wharfy/ record that is behind the latest github release loses to the release (it is stale, as it always is when publish ran in CI) and you get a drift_detected warning — the record is never allowed to fail a distribution that is actually fine",

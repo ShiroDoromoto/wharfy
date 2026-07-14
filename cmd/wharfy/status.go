@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
@@ -50,6 +51,10 @@ type statusChannel struct {
 	Drift     *state.Drift `json:"drift,omitempty"`
 	State     string       `json:"state,omitempty"` // gated の申請状態
 	PR        string       `json:"pr,omitempty"`    // gated の PR URL
+	// Prerelease は、その版が **prerelease として上がっている**(資産は在るが GitHub の latest では
+	// なく、利用者はまだ旧版を受け取っている)。published=false と併せて「上げた」と「配った」を
+	// 別の事実として読める。
+	Prerelease bool `json:"prerelease,omitempty"`
 	// Deprecated は畳む宣言(D-3)。宣言が無ければ出ない。
 	Deprecated *config.Deprecation `json:"deprecated,omitempty"`
 }
@@ -143,6 +148,8 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 		return assessScoop(ctx, cs, ch, cfg.Project, scoopToken(cfg, in), recordedVer)
 	case "script":
 		return assessScript(ctx, cs, cfg, recordedVer)
+	case "releases":
+		return assessReleases(ctx, cs, cfg, tag, recordedVer)
 	case "goinstall":
 		return assessGoinstall(ctx, cs, ch.Target, tag)
 	case "aur":
@@ -159,6 +166,39 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 		return assessGatedPR(ctx, cs, st.Publish["homebrew-core"], "homebrew-core")
 	default:
 		return recordedOnly(cs, recordedVer, "not assessed yet (no probe for this channel)"), nil
+	}
+}
+
+// assessReleases は GitHub Release の実体を見て、その版が**利用者に届いているか**を言う。
+// prerelease は資産が在っても latest ではない —— 記録だけを読んでいると「配った」と読めてしまう
+// ので、ここは実体を引く(昇格が別のジョブで走れば、手元の台帳は何も知らない)。
+func assessReleases(ctx context.Context, cs statusChannel, cfg config.Config, tag, recordedVer string) (statusChannel, *output.Warning) {
+	version := firstNonEmptyStr(strings.TrimPrefix(tag, "v"), recordedVer)
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok || version == "" {
+		return recordedOnly(cs, recordedVer, "not released yet"), nil
+	}
+	rs, err := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, "v"+version)
+	if err != nil {
+		return recordedOnly(cs, recordedVer, "not released yet"), probeFailedWarning("releases", err)
+	}
+	if !rs.Exists {
+		return recordedOnly(cs, recordedVer, "not released yet"), nil
+	}
+	cs.Source = state.SourceProbed
+	cs.Version = version
+	if !rs.Prerelease {
+		cs.Published = true
+		return cs, nil
+	}
+	// 上げてはあるが、利用者はまだ旧版のまま。published=true と言えばそれは嘘になる。
+	cs.Published = false
+	cs.Prerelease = true
+	cs.Reason = "prerelease: uploaded but not latest — users still get the previous version"
+	return cs, &output.Warning{
+		Code: output.WarnPrereleaseNotLatest,
+		Message: "v" + version + " is on github as a prerelease: verify it from the consumer side, " +
+			"then `wharfy promote --yes` to hand it to users (publish refuses it until then)",
 	}
 }
 
@@ -393,6 +433,15 @@ func driftMessage(name string, d *state.Drift) string {
 func statusNext(channels []statusChannel) []output.NextDo {
 	next := []output.NextDo{}
 	for _, c := range channels {
+		if !c.Prerelease {
+			continue
+		}
+		next = append(next,
+			output.NextDo{Reason: "check v" + c.Version + " from the consumer side while users are still on the old version", Do: "wharfy verify --version " + c.Version},
+			output.NextDo{Reason: "hand v" + c.Version + " to users (re-uploads nothing)", Do: "wharfy promote --yes"},
+		)
+	}
+	for _, c := range channels {
 		if c.Drift != nil {
 			next = append(next, output.NextDo{
 				Reason: c.Name + " drifted (" + c.Drift.Kind + ")",
@@ -455,6 +504,9 @@ func printStatusHuman(out statusOutput) {
 			line += " published " + c.Version
 		} else if c.Reason != "" {
 			line += " " + c.Reason
+		}
+		if c.Prerelease {
+			line += "  ⚠ prerelease (not latest — users still get the previous version)"
 		}
 		if c.Drift != nil {
 			line += fmt.Sprintf("  ⚠ drift:%s (rec:%s remote:%s)", c.Drift.Kind, c.Drift.Recorded, c.Drift.Remote)
