@@ -179,6 +179,9 @@ func runRelease(ctx context.Context, c registry.Command, _ []string) output.Resu
 		res.Next = append(res.Next, output.NextDo{
 			Reason: "verify the artifacts you will actually ship, while users still get the old version",
 			Do:     "gh release download v" + version + " && wharfy verify --version " + version,
+		}, output.NextDo{
+			Reason: "hand it to users once it is green (this re-uploads nothing: the verified bytes are the shipped bytes)",
+			Do:     "wharfy promote --yes",
 		})
 		return withInitNudge(withStaleGeneratorWarning(root, c, res))
 	}

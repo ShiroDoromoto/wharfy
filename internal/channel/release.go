@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,7 +45,14 @@ type ReleaseStore interface {
 	Upload(ctx context.Context, tag, releaseName string, assets []ReleaseAsset, opt ReleaseOptions) error
 	// Get は tag のリリースの現状を返す。無ければ Exists=false(エラーではない)。
 	Get(ctx context.Context, tag string) (ReleaseState, error)
+	// Promote は prerelease を latest に切り替える。**フラグを立てるだけ**で、資産は 1 バイトも
+	// 触らない —— 検証したバイト列がそのまま配られることの担保。既に latest なら changed=false
+	// で何もしない(冪等)。リリースが無ければ ErrNoRelease。
+	Promote(ctx context.Context, tag string) (changed bool, err error)
 }
+
+// ErrNoRelease は昇格しようとした tag にリリースが無い(まだ上げていない)。
+var ErrNoRelease = errors.New("no release for this tag")
 
 // InMemoryReleaseStore はテスト用。tag ごとのアセット名→パスを記録する。
 type InMemoryReleaseStore struct {
@@ -52,6 +60,7 @@ type InMemoryReleaseStore struct {
 	Pre      map[string]bool              // tag → prerelease か
 	Uploads  int
 	Replaced int
+	Promoted int // 実際に latest へ切り替えた回数(冪等の検証用)
 }
 
 func NewInMemoryReleaseStore() *InMemoryReleaseStore {
@@ -80,6 +89,18 @@ func (s *InMemoryReleaseStore) Get(_ context.Context, tag string) (ReleaseState,
 		return ReleaseState{}, nil
 	}
 	return ReleaseState{Exists: true, Prerelease: s.Pre[tag]}, nil
+}
+
+func (s *InMemoryReleaseStore) Promote(_ context.Context, tag string) (bool, error) {
+	if _, ok := s.Tags[tag]; !ok {
+		return false, ErrNoRelease
+	}
+	if !s.Pre[tag] {
+		return false, nil
+	}
+	s.Pre[tag] = false
+	s.Promoted++
+	return true, nil
 }
 
 // GitHubReleaseStore は GitHub Releases API 経由の実体。
@@ -245,6 +266,45 @@ func (s *GitHubReleaseStore) createRelease(ctx context.Context, tag, name string
 		return nil, err
 	}
 	return &rel, nil
+}
+
+// Promote は tag のリリースを latest に切り替える(prerelease を外す)。資産は触らない。
+// make_latest を明示するのは、prerelease を外しただけでは「最新の作成日時のリリース」が
+// latest になる GitHub の既定に委ねることになるため —— 昇格したこのリリースを latest にしたい。
+func (s *GitHubReleaseStore) Promote(ctx context.Context, tag string) (bool, error) {
+	if s.Token == "" {
+		return false, fmt.Errorf("GITHUB_TOKEN required to promote the release on %s/%s", s.Owner, s.Repo)
+	}
+	rel, found, err := s.getRelease(ctx, tag)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, ErrNoRelease
+	}
+	if !rel.Prerelease {
+		return false, nil // 既に latest —— 何もしないで緑(冪等)
+	}
+	payload := map[string]any{"prerelease": false, "make_latest": "true"}
+	b, _ := json.Marshal(payload)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/%d", s.api(), s.Owner, s.Repo, rel.ID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(b))
+	if err != nil {
+		return false, err
+	}
+	s.auth(req)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("github promote release %s: %s: %s", tag, resp.Status, snippet(body))
+	}
+	return true, nil
 }
 
 func (s *GitHubReleaseStore) deleteAsset(ctx context.Context, id int64) error {

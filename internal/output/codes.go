@@ -95,7 +95,10 @@ const (
 	// 公開されている。上げ直せば**利用者が今まさに落としている資産を差し替える**ことになるので、
 	// 「検証の窓を開ける」つもりの操作が逆に本番を触る。窓は後から開けられない —— だから拒む。
 	ErrReleaseAlreadyPublic = "release_already_public"
-	ErrInternal             = "internal" // 想定外(バグ)
+	// ErrNoRelease: 昇格しようとした版のリリースが無い。昇格は既に在るリリースのフラグを立てるだけの
+	// 操作で、資産を作ることはしない —— 無い物は latest にできない(先に release で上げる)。
+	ErrNoRelease = "no_release"
+	ErrInternal  = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -157,6 +160,7 @@ var Catalog = []CatalogEntry{
 	{ErrAttestFailed, KindError, "来歴の証明の生成/登録に失敗(証明の無いリリースを緑で返さない)"},
 	{ErrAttestUnverified, KindError, "配ってある物の来歴が消費者の目で検算できない(一部にしか付いていない/引けない)"},
 	{ErrReleaseAlreadyPublic, KindError, "--prerelease を求められたが、そのタグのリリースは既に latest として公開済み"},
+	{ErrNoRelease, KindError, "昇格しようとした版のリリースが無い(先に release で上げる)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

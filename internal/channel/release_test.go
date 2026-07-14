@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ type fakeGitHub struct {
 	createdPre    bool // create 時に prerelease: true を送ったか
 	deleted       []int64
 	uploaded      []string
+	patched       []map[string]any // PATCH で送った本文(昇格の中身を見る)
 }
 
 func (g *fakeGitHub) handler(t *testing.T) http.Handler {
@@ -43,6 +45,20 @@ func (g *fakeGitHub) handler(t *testing.T) http.Handler {
 		g.prerelease = pre
 		w.WriteHeader(http.StatusCreated)
 		writeRelease(w, 100, nil, pre)
+	})
+	// PATCH /repos/o/r/releases/{id}
+	mux.HandleFunc("/repos/o/r/releases/100", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		g.patched = append(g.patched, payload)
+		if pre, ok := payload["prerelease"].(bool); ok {
+			g.prerelease = pre
+		}
+		writeRelease(w, 100, g.assets, g.prerelease)
 	})
 	// DELETE /repos/o/r/releases/assets/{id}
 	mux.HandleFunc("/repos/o/r/releases/assets/", func(w http.ResponseWriter, r *http.Request) {
@@ -204,5 +220,55 @@ func TestReleaseGet(t *testing.T) {
 	}
 	if !st.Exists || !st.Prerelease {
 		t.Errorf("Get = %+v, want exists+prerelease", st)
+	}
+}
+
+// TestReleasePromote: prerelease を latest に切り替える。資産は触らず、フラグだけを送る。
+func TestReleasePromote(t *testing.T) {
+	g := &fakeGitHub{releaseExists: true, prerelease: true}
+	s, srv := newStore(t, g)
+	defer srv.Close()
+
+	changed, err := s.Promote(context.Background(), "v0.1.0")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if !changed {
+		t.Error("changed = false, want true (it was a prerelease)")
+	}
+	if len(g.patched) != 1 {
+		t.Fatalf("patched = %v, want exactly one edit", g.patched)
+	}
+	if g.patched[0]["prerelease"] != false || g.patched[0]["make_latest"] != "true" {
+		t.Errorf("patch body = %v, want prerelease:false + make_latest:true", g.patched[0])
+	}
+	if len(g.uploaded) != 0 || len(g.deleted) != 0 {
+		t.Error("promotion must not touch a single asset (the verified bytes are the shipped bytes)")
+	}
+}
+
+// TestReleasePromoteIdempotent: 既に latest なら API を叩かないで緑。
+func TestReleasePromoteIdempotent(t *testing.T) {
+	g := &fakeGitHub{releaseExists: true, prerelease: false}
+	s, srv := newStore(t, g)
+	defer srv.Close()
+
+	changed, err := s.Promote(context.Background(), "v0.1.0")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if changed || len(g.patched) != 0 {
+		t.Errorf("already latest: changed=%v patched=%v, want no-op", changed, g.patched)
+	}
+}
+
+// TestReleasePromoteNoRelease: 上がっていない版は昇格できない(ErrNoRelease)。
+func TestReleasePromoteNoRelease(t *testing.T) {
+	g := &fakeGitHub{releaseExists: false}
+	s, srv := newStore(t, g)
+	defer srv.Close()
+
+	if _, err := s.Promote(context.Background(), "v0.1.0"); !errors.Is(err, ErrNoRelease) {
+		t.Errorf("err = %v, want ErrNoRelease", err)
 	}
 }

@@ -21,6 +21,7 @@ var handlers = map[string]handler{
 	"init":    runInit,
 	"build":   runBuild,
 	"release": runRelease,
+	"promote": runPromote,
 	"publish": runPublish,
 	"sign":    runSign,
 	"verify":  runVerify,

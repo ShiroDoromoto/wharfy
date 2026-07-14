@@ -99,7 +99,7 @@ func newCommand(c registry.Command) *cobra.Command {
 		cmd.Flags().BoolVar(&flagAuthPrint, "print", false, "print the stored credential to stdout in usable form (e.g. wharfy auth fury --print | gh secret set PACKAGE_REPO_TOKEN)")
 	}
 	if c.Name == "release" {
-		cmd.Flags().BoolVar(&flagPrerelease, "prerelease", false, "upload the release but do not make it latest: the assets are downloadable, users still get the old version — verify the real artifacts, then make it latest")
+		cmd.Flags().BoolVar(&flagPrerelease, "prerelease", false, "upload the release but do not make it latest: the assets are downloadable, users still get the old version — verify the real artifacts, then `wharfy promote` makes it latest")
 	}
 	if c.Name == "verify" {
 		cmd.Flags().StringVar(&flagVerifyVersion, "version", "", "the version to check on each channel (default: the version wharfy works out — record, latest release, or latest tag)")

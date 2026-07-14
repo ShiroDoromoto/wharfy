@@ -97,8 +97,8 @@ const attestNote = "build provenance is attached only in GitHub Actions (it is s
 // draft ではこの窓は開かない(認証なしに落とせず、実物検証に使えない)。
 const prereleaseNote = "--prerelease uploads the release but does not make it github's latest: the assets download from their " +
 	"public URLs (so you can install and run the real bytes, on a real machine, with your own data), while " +
-	"releases/latest/download/ and latest.json keep serving the previous version — users are untouched until you make it latest, " +
-	"which is a separate and explicit step. this is the only way to verify what you actually ship when CI builds it: a laptop build " +
+	"releases/latest/download/ and latest.json keep serving the previous version — users are untouched until `wharfy promote` " +
+	"makes it latest, which is a separate and explicit step. this is the only way to verify what you actually ship when CI builds it: a laptop build " +
 	"is not those bytes. a draft release cannot do it (its assets need authentication to download)"
 
 // triggerNote は release / publish の注記。「どこで走らせるか」と「いつ引き金を引くか」は別の話で、
@@ -143,6 +143,12 @@ var Commands = []Command{
 		"latest.json carries `latest_json.extra:` from wharfy.yaml verbatim (any JSON value): declare there what is not 'which version is newest' — your app's on-disk data format version, the minimum app version that can read it — and wharfy neither interprets nor validates it; the contract is the reading product's",
 		triggerNote,
 		selfGeneratorNote,
+	}},
+	{Name: "promote", Summary: "make a prerelease the latest release, once you have verified it", Next: []string{"publish"}, Notes: []string{
+		"it flips one flag on the release github already holds: no asset is re-uploaded and no attestation is re-signed, " +
+			"so the bytes you verified are exactly the bytes users get. that is why build provenance is attached at release time, not here",
+		"it is idempotent: promoting a release that is already the latest one changes nothing and reports ok — a workflow can run it twice",
+		"the moment it lands, releases/latest/download/ and latest.json serve this version; publish then writes the channels (tap, bucket, …) against it",
 	}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{
 		triggerNote, selfGeneratorNote, attestNote,

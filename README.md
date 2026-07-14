@@ -98,8 +98,19 @@ verifying them means releasing first, and a release is `latest` the moment it la
 --yes --prerelease` breaks that loop: the assets are uploaded and downloadable from their public
 URLs, but the release is **not** GitHub's `latest`, so `releases/latest/download/` and `latest.json`
 keep serving the previous version. Users are untouched while you install the real thing on a real
-machine, against data only you have. Making it `latest` is a separate, explicit step, so a version
-you never verified cannot reach anyone by accident.
+machine, against data only you have.
+
+```sh
+wharfy release --yes --prerelease   # upload the real artifacts; users still get the old version
+wharfy verify --version 1.2.0       # check them from the consumer side, then install and run them
+wharfy promote --yes                # make it latest — this is when users see it
+wharfy publish --yes                # write the channels against the release you just promoted
+```
+
+`promote` flips one flag on the release GitHub already holds: nothing is re-uploaded and no
+attestation is re-signed, so **the bytes you verified are the bytes users get**. It is idempotent —
+promoting a release that is already latest changes nothing and reports ok. If verification goes red,
+you simply don't promote: the broken build was never visible to a single user.
 
 A draft release cannot do this — its assets need authentication to download, so you cannot exercise
 them the way a user would.

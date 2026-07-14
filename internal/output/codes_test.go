@@ -38,6 +38,7 @@ var expectedCodes = []string{
 	"keychain_failed",
 	"main_ambiguous",
 	"network_error",
+	"no_release",
 	"nothing_to_verify",
 	"pkg_not_indexed",
 	"prerelease_not_latest",
