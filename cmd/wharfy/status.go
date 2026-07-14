@@ -116,6 +116,9 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 			out.Warnings = append(out.Warnings, *warn)
 		}
 	}
+	if warn := prereleaseWarning(out.Channels); warn != nil {
+		out.Warnings = append(out.Warnings, *warn)
+	}
 	out.Warnings = append(out.Warnings, deprecationWarnings(cfg)...)
 	out.Next = statusNext(out.Channels)
 	out.Message = statusMessage(out.Channels)
@@ -133,10 +136,19 @@ func buildStatus(ctx context.Context, probe bool) (statusOutput, error) {
 // 各チャネルの実体を probe し、未実装は記録のみで見せる(③ 黙って合わせず source/drift で見せる)。
 func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Config, in config.File, st *state.State, probe bool, tag string) (statusChannel, *output.Warning) {
 	cs := statusChannel{Name: ch.Name, Kind: ch.Kind, Target: ch.Target}
-	recordedVer := st.Publish[ch.Name].Version
+	rec := st.Publish[ch.Name]
+	recordedVer := rec.Version
 
 	if !probe {
 		return recordedOnly(cs, recordedVer, "not published yet"), nil
+	}
+	// prerelease として上げただけの版は、まだ利用者に届いていない —— 実体(利用者が引く URL)が
+	// 旧版を返すのは正常で、drift ではない。ここを照合に流すと「記録が実体より進んでいる」と
+	// 読んで publish を勧めてしまう(publish は昇格前を拒むので、言うことが食い違う)。
+	// script の実体(install.sh)は release が Release に同梱するが、配るのは
+	// releases/latest/download/ なので、昇格するまで返るのは旧版のまま。
+	if rec.Prerelease && recordedVer != "" {
+		return prereleaseChannel(cs, recordedVer), nil
 	}
 
 	switch ch.Name {
@@ -169,6 +181,17 @@ func assessChannel(ctx context.Context, ch config.ResolvedChannel, cfg config.Co
 	}
 }
 
+// prereleaseChannel は「上げてあるが、まだ配っていない」チャネルの見せ方(releases / script 共通)。
+// published=false + prerelease=true の対で、「上げた」と「届いた」を別の事実として読ませる。
+func prereleaseChannel(cs statusChannel, version string) statusChannel {
+	cs.Source = state.SourceProbed
+	cs.Version = version
+	cs.Published = false
+	cs.Prerelease = true
+	cs.Reason = "prerelease: uploaded but not latest — users still get the previous version"
+	return cs
+}
+
 // assessReleases は GitHub Release の実体を見て、その版が**利用者に届いているか**を言う。
 // prerelease は資産が在っても latest ではない —— 記録だけを読んでいると「配った」と読めてしまう
 // ので、ここは実体を引く(昇格が別のジョブで走れば、手元の台帳は何も知らない)。
@@ -192,14 +215,7 @@ func assessReleases(ctx context.Context, cs statusChannel, cfg config.Config, ta
 		return cs, nil
 	}
 	// 上げてはあるが、利用者はまだ旧版のまま。published=true と言えばそれは嘘になる。
-	cs.Published = false
-	cs.Prerelease = true
-	cs.Reason = "prerelease: uploaded but not latest — users still get the previous version"
-	return cs, &output.Warning{
-		Code: output.WarnPrereleaseNotLatest,
-		Message: "v" + version + " is on github as a prerelease: verify it from the consumer side, " +
-			"then `wharfy promote --yes` to hand it to users (publish refuses it until then)",
-	}
+	return prereleaseChannel(cs, version), nil
 }
 
 // assessGatedPR は gated チャネル(winget / *-core)の申請状態を見せる(none/pr_open/merged/...)。
@@ -430,12 +446,32 @@ func driftMessage(name string, d *state.Drift) string {
 }
 
 // statusNext は drift・未発行から次の一手を組み立てる(②)。
+// firstPrerelease は「上げただけ」のチャネルの 1 つ目(版は同じなので、語るのは 1 度でよい)。
+func firstPrerelease(channels []statusChannel) *statusChannel {
+	for i := range channels {
+		if channels[i].Prerelease {
+			return &channels[i]
+		}
+	}
+	return nil
+}
+
+// prereleaseWarning は「この版はまだ利用者に届いていない」を 1 度だけ言う(チャネルの数だけ言わない)。
+func prereleaseWarning(channels []statusChannel) *output.Warning {
+	c := firstPrerelease(channels)
+	if c == nil {
+		return nil
+	}
+	return &output.Warning{
+		Code: output.WarnPrereleaseNotLatest,
+		Message: "v" + c.Version + " is on github as a prerelease: verify it from the consumer side, " +
+			"then `wharfy promote --yes` to hand it to users (publish refuses it until then)",
+	}
+}
+
 func statusNext(channels []statusChannel) []output.NextDo {
 	next := []output.NextDo{}
-	for _, c := range channels {
-		if !c.Prerelease {
-			continue
-		}
+	if c := firstPrerelease(channels); c != nil {
 		next = append(next,
 			output.NextDo{Reason: "check v" + c.Version + " from the consumer side while users are still on the old version", Do: "wharfy verify --version " + c.Version},
 			output.NextDo{Reason: "hand v" + c.Version + " to users (re-uploads nothing)", Do: "wharfy promote --yes"},
@@ -456,6 +492,11 @@ func statusNext(channels []statusChannel) []output.NextDo {
 	//   - 凍結(ship:false): 最後に配った版で据え置くと決めたチャネル
 	for _, c := range channels {
 		if c.Published || c.Drift != nil || c.Kind != channel.KindOwned {
+			continue
+		}
+		// prerelease は「まだ発行していない」のではなく「昇格を待っている」。publish は昇格前を
+		// 拒むので、ここで勧めれば status の言うとおりに叩いた利用者が弾かれる(次の一手は promote)。
+		if c.Prerelease {
 			continue
 		}
 		if c.Name == "goinstall" || c.Name == "releases" {
