@@ -246,7 +246,7 @@ func parseArtifacts(root, artifactsPath string, types ...string) ([]Artifact, er
 		if !filepath.IsAbs(full) {
 			full = filepath.Join(root, a.Path)
 		}
-		sum, err := sha256File(full)
+		sum, err := SHA256File(full)
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("checksum %s: %w", a.Path, err)}
 		}
@@ -255,7 +255,9 @@ func parseArtifacts(root, artifactsPath string, types ...string) ([]Artifact, er
 	return out, nil
 }
 
-func sha256File(path string) (string, error) {
+// SHA256File はファイルの実 sha256(16 進)。宣言値ではなく**そのバイト列**を数えるのが要点で、
+// 成果物の記録も来歴の subject も、ここが出した値だけを載せる。
+func SHA256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

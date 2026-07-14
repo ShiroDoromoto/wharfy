@@ -112,7 +112,7 @@ func PackagePrebuilt(root, distDir string, spec PackageSpec, bins []PrebuiltBina
 		if err := f.Close(); err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("close %s: %w", name, err)}
 		}
-		sum, err := sha256File(target)
+		sum, err := SHA256File(target)
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("checksum %s: %w", name, err)}
 		}

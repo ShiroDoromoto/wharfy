@@ -43,7 +43,7 @@ func (b *PrebuiltBuilder) Build(_ context.Context, root, _ string) ([]Artifact, 
 		if !filepath.IsAbs(full) {
 			full = filepath.Join(root, bin.Path)
 		}
-		sum, err := sha256File(full)
+		sum, err := SHA256File(full)
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("prebuilt binary %s: %w", bin.Path, err)}
 		}
@@ -95,7 +95,7 @@ func ArchivePrebuilt(root, distDir, project, version, binaryName string, bins []
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("archive %s: %w", archiveName, err)}
 		}
-		sum, err := sha256File(archivePath)
+		sum, err := SHA256File(archivePath)
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("checksum %s: %w", archiveName, err)}
 		}

@@ -51,7 +51,7 @@ func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 		// digest が引けない(古い GitHub が digest を返さない)か、成果物が 1 つも無い。どちらも
 		// 「来歴を確かめられなかった」——確かめていないことを緑で返さない。
 		return verifyNotRun(attestCheckName,
-			attestCheckName+" skipped: the release carries no build artifact whose digest github reports, so there is nothing to look provenance up by")
+			attestCheckName+" skipped: the release carries no asset whose digest github reports, so there is nothing to look provenance up by")
 	}
 
 	owner, name, ok := splitOwnerName(repo)
@@ -69,12 +69,12 @@ func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 	switch {
 	case len(broken) > 0:
 		return attestFailure(
-			attestCheckName+": "+strconv.Itoa(len(broken))+" of "+total+" build artifacts carry provenance that does not verify",
+			attestCheckName+": "+strconv.Itoa(len(broken))+" of "+total+" release assets carry provenance that does not verify",
 			"the build provenance stored for these artifacts cannot be verified by a consumer",
 			"`gh attestation verify <file> --repo "+repo+"` fails for anyone checking them — re-run release on this tag to attest them again",
 			attestDetail(broken))
 	case len(missing) == len(subjects):
-		msg := attestCheckName + ": none of the " + total + " build artifacts on v" + tgt.Version +
+		msg := attestCheckName + ": none of the " + total + " release assets on v" + tgt.Version +
 			" carry build provenance — nothing proves they came from this repository's workflow"
 		return verifyOutcome{
 			check: verifyCheck{Channel: attestCheckName, Status: verifyStatusPartial, Message: msg},
@@ -86,13 +86,13 @@ func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 		}
 	case len(missing) > 0:
 		return attestFailure(
-			attestCheckName+": "+strconv.Itoa(len(missing))+" of "+total+" build artifacts carry no build provenance",
+			attestCheckName+": "+strconv.Itoa(len(missing))+" of "+total+" release assets carry no build provenance",
 			"the release is only partly attested, so whether a user can prove where their download came from depends on which asset they took",
 			"release attests every artifact it uploads, so a gap means these never reached the attest step — re-run release on this tag",
 			attestDetail(missing))
 	}
 	return verifySuccess(attestCheckName,
-		attestCheckName+": all "+total+" build artifacts on v"+tgt.Version+
+		attestCheckName+": all "+total+" release assets on v"+tgt.Version+
 			" carry verifiable provenance from this repository's workflow (signed, logged in rekor, and bound to the bytes github serves)")
 }
 
@@ -108,14 +108,14 @@ func attestFailure(msg, problem, hint, detail string) verifyOutcome {
 	}
 }
 
-// attestSubjectsOnRelease は Release 資産のうち、release が来歴を付けた対象(ビルド成果物)を返す。
+// attestSubjectsOnRelease は Release 資産のうち、release が来歴を付けた対象を返す。
 //
 // 期待集合を verify の側で組み直すのが要点: release が「上げた物」ではなく Release に「在る物」から
 // 数えるので、attest 段が subject を取りこぼしていれば、その資産が missing として現れる。
 func attestSubjectsOnRelease(audit channel.ReleaseAudit) []attest.Subject {
 	var subs []attest.Subject
 	for _, name := range sortedKeys(audit.Digests) {
-		if !isBuildOutputAsset(name) {
+		if !isAttestedAsset(name) {
 			continue
 		}
 		subs = append(subs, attest.Subject{Name: name, SHA256: audit.Digests[name]})
@@ -123,16 +123,12 @@ func attestSubjectsOnRelease(audit channel.ReleaseAudit) []attest.Subject {
 	return subs
 }
 
-// isBuildOutputAsset は Release 資産が**ビルド成果物**か(＝ attest 段が subject にする物か)。
+// isAttestedAsset は Release 資産に来歴が付いているはずか(＝ attest 段が subject にする物か)。
 //
-// attest が証明するのはビルドが作った物に限る。install.sh / install.ps1 / latest.json は wharfy が
-// 書いて上げる資産で、checksums は資産の記述——どれもビルド出力ではないので subject に入っていない
-// (attest の uncovered がそう言っている)。ここを広げるときは attest 段と同時に広げる。
-func isBuildOutputAsset(name string) bool {
-	switch name {
-	case config.InstallScriptName, config.InstallPS1Name, channel.ManifestLatestJSON:
-		return false
-	}
+// release は**上げた物**を等しく証明する ——アーカイブもパッケージもバンドルも、install.sh /
+// install.ps1 / latest.json も。唯一の例外が checksums マニフェストで、あれは資産ではなく資産の
+// 記述(goreleaser が作り、goreleaser が上げる)。そこに載っている資産は 1 つずつ証明されている。
+func isAttestedAsset(name string) bool {
 	return !channel.IsChecksumsManifest(name)
 }
 

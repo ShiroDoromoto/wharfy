@@ -80,12 +80,55 @@ func attestSubjects(archs []build.Artifact) []attest.Subject {
 	return subs
 }
 
-// attestRelease は release の成果物に来歴を付ける。
+// extraSubjects は release が上げた「ビルド出力ではない資産」を subject にする。
+//
+// install.sh は利用者が `curl | sh` で**実行する**もので、供給網としてはアーカイブより重い。
+// ビルドが作った物ではないという理由でここを証明の外に置くと、一番踏まれる経路が一番無防備になる。
+// latest.json も同じで、更新チェックの向き先を書き換えられたら利用者はそちらへ流れる。
+//
+// 読むのは上げたファイルそのもの(.wharfy 配下)。sha256 はここで数える——宣言値は使わない。
+func extraSubjects(paths []string) ([]attest.Subject, error) {
+	subs := make([]attest.Subject, 0, len(paths))
+	for _, p := range paths {
+		sum, err := build.SHA256File(p)
+		if err != nil {
+			return nil, err
+		}
+		subs = append(subs, attest.Subject{Name: filepath.Base(p), SHA256: sum})
+	}
+	return subs, nil
+}
+
+// releaseExtras は release がこのタグへ上げた「ビルド出力ではない資産」のパスを返す。
+//
+// 経路(Go/BYO)で上げ方は違う——Go は goreleaser の extra_files、BYO は wharfy 自身のアップロード
+// ——が、書く先は同じ .wharfy 配下で、上げたか否かの条件も同じ(script チャネルが配る版を持つか)。
+// その 1 点に寄せることで、経路によって証明の有無が変わる状態を作らない。
+//
+// latestPath は uploadLatestJSON が実際に上げた latest.json(上げていなければ空)。上げていない物を
+// subject にすると、Release に存在しない digest の証明を作ることになる。
+func releaseExtras(root string, cfg config.Config, version, latestPath string) []string {
+	var paths []string
+	if latestPath != "" {
+		paths = append(paths, latestPath)
+	}
+	if _, ship := installScriptTarget(root, cfg, version); config.HasChannel(cfg, "script") && ship {
+		paths = append(paths,
+			filepath.Join(root, config.InstallScriptRelPath),
+			filepath.Join(root, config.InstallPS1RelPath))
+	}
+	return paths
+}
+
+// attestRelease は release が上げた物(成果物＋ extras)に来歴を付ける。
+//
+// extras は install.sh / install.ps1 / latest.json のような「ビルド出力ではないが release が配る物」
+// のパス。証明は**配ったバイト列**に付くので、上げた物は等しく subject にする。
 //
 // 返り値の warning は「CI なのに証明できなかった」= 配布者が気づくべき欠落。error は
 // 「証明できる環境で失敗した」= release ごと赤くする(ErrAttestFailed)。
 // 手元(OIDC 無し)では何も返さない——それは異常ではなく前提。
-func attestRelease(ctx context.Context, cfg config.Config, archs []build.Artifact) (*attest.Result, *output.Warning, error) {
+func attestRelease(ctx context.Context, cfg config.Config, archs []build.Artifact, extras []string) (*attest.Result, *output.Warning, error) {
 	opts := resolveAttestOptions(cfg)
 	if !opts.Enabled() {
 		if os.Getenv(envGitHubActions) != "true" {
@@ -97,6 +140,11 @@ func attestRelease(ctx context.Context, cfg config.Config, archs []build.Artifac
 		}, nil
 	}
 	subjects := attestSubjects(archs)
+	extraSubs, err := extraSubjects(extras)
+	if err != nil {
+		return nil, nil, &attest.Error{Err: err}
+	}
+	subjects = append(subjects, extraSubs...)
 	if len(subjects) == 0 {
 		return nil, nil, nil
 	}

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ShiroDoromoto/wharfy/internal/attest"
+	"github.com/ShiroDoromoto/wharfy/internal/build"
 	"github.com/ShiroDoromoto/wharfy/internal/channel"
+	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 )
 
@@ -95,6 +98,43 @@ func TestReleaseAttestsInActions(t *testing.T) {
 	}
 	if !strings.Contains(res.Message, "provenance") {
 		t.Errorf("a release that attested should say so: %q", res.Message)
+	}
+}
+
+// TestReleaseAttestsTheInstallersAndLatestJSON: release が上げるのはビルド成果物だけではない。
+// install.sh は利用者が `curl | sh` で実行する物、latest.json は更新チェックの向き先 —— 供給網として
+// はアーカイブより重いのに、ビルド出力ではないという理由で証明の外に置かれていた。
+func TestReleaseAttestsTheInstallersAndLatestJSON(t *testing.T) {
+	root := scratchPrebuilt(t)
+	tagScratch(t, root, "v0.1.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	actionsEnv(t)
+
+	defer swapReleaseStore(channel.NewInMemoryReleaseStore())()
+	signer := &recordingAttestSigner{}
+	defer swapAttest(signer, &fakeAttestStore{})()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runRelease(context.Background(), mustLookup(t, "release"), nil)
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	if len(signer.statements) != 1 {
+		t.Fatalf("want one signed statement, got %d", len(signer.statements))
+	}
+	stmt := string(signer.statements[0])
+	// 名前だけでなく digest まで見る: 証言が指すのは「上げたファイルのバイト列」でなければ、
+	// 受け取る側は自分の手元のファイルで検算できない。
+	for _, rel := range []string{config.InstallScriptRelPath, config.InstallPS1RelPath, config.LatestJSONRelPath} {
+		sum, err := build.SHA256File(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("release should have written %s: %v", rel, err)
+		}
+		if !strings.Contains(stmt, sum) {
+			t.Errorf("%s is uploaded to the release, so its digest belongs in the provenance statement", rel)
+		}
 	}
 }
 

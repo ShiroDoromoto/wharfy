@@ -33,7 +33,7 @@ func ValidateBundles(root string, bundles []Bundle) ([]Artifact, error) {
 		if !filepath.IsAbs(full) {
 			full = filepath.Join(root, bd.Path)
 		}
-		sum, err := sha256File(full)
+		sum, err := SHA256File(full)
 		if err != nil {
 			return nil, &FailedError{Err: fmt.Errorf("bundle %s: %w", bd.Path, err)}
 		}

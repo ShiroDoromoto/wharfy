@@ -366,15 +366,20 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	}
 	// release をここで内包したなら latest.json も同じ Release へ出す(runRelease と同じ合流点)。
 	// 出さないと、release を独立に叩かず publish だけで配ったリリースから latest.json が落ちる。
+	var extras []string
 	if released {
-		if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+		latestPath, err := uploadLatestJSON(ctx, root, cfg, version, archs)
+		if err != nil {
 			return internalError(c, err)
 		}
+		// この run が上げた物だけを来歴の subject にする。上げていないなら、それを上げた前段
+		// (release / 単発 publish)が既に証明を付けている。
+		extras = releaseExtras(root, cfg, version, latestPath)
 	}
 	// attest 段: release を内包した経路にも来歴を付ける。CI が叩くのは `publish --yes` なので、
 	// ここを落とすと証明が付くのは release を単独で叩いた人だけになる(＝ほぼ誰にも付かない)。
 	// released を条件にしない: 前回の run が release まで済ませて途中で落ちた再開でも、来歴は要る。
-	att, attWarn, attErr := attestRelease(ctx, cfg, archs)
+	att, attWarn, attErr := attestRelease(ctx, cfg, archs, extras)
 	if attErr != nil {
 		return buildErrorResult(c, attErr)
 	}
@@ -1714,13 +1719,14 @@ func releaseArtifacts(ctx context.Context, root, configPath string, cfg config.C
 	// release を内包した経路も latest.json を出す。runRelease だけが出していたため、release を
 	// 独立に叩かず publish だけで配ると Release から latest.json が落ち、更新チェックが 404 を
 	// 引いていた(v0.20.0)。実 release を走らせたここが、その経路の合流点になる。
-	if err := uploadLatestJSON(ctx, root, cfg, version, archs); err != nil {
+	latestPath, err := uploadLatestJSON(ctx, root, cfg, version, archs)
+	if err != nil {
 		return nil, false, err
 	}
 	// 単発 publish <ch> が release を内包した経路にも来歴を付ける(この経路だけ証明が落ちる、を作らない)。
 	// 警告(CI なのに証明できない)を載せる欄がこの経路には無いので、ここで出るのは失敗だけ
 	// —— 欠落の告知は release / 一括 publish が担う。
-	if _, _, err := attestRelease(ctx, cfg, archs); err != nil {
+	if _, _, err := attestRelease(ctx, cfg, archs, releaseExtras(root, cfg, version, latestPath)); err != nil {
 		return nil, false, err
 	}
 	return archs, false, nil

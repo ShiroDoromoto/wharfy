@@ -56,7 +56,7 @@ type State struct {
 // 「バイト列が同じか」で当たる。tap も bucket も AUR も fury も、Release のアセットと同じファイルを
 // 配っている限り、その利用者は同じ証明を検算できる。
 var coveredLines = []string{
-	"the build artifacts uploaded to the github release (archives, packages, bundles), by sha256 digest",
+	"everything the release uploads to github: the build artifacts (archives, packages, bundles) and the files wharfy writes alongside them (install.sh, install.ps1, latest.json), each by sha256 digest",
 	"attestations are looked up by digest, not by host: a channel that serves those exact files (tap, bucket, scoop, aur, your apt/rpm repo) carries the same provenance — `gh attestation verify <file> --repo <owner>/<repo>` proves it wherever the file came from",
 }
 
@@ -64,7 +64,7 @@ var coveredLines = []string{
 var uncoveredLines = []string{
 	"the container image: its digest is a separate subject and is not attested yet",
 	"homebrew-core: it rebuilds from source and bottles the result, so what users install is not the bytes wharfy signed",
-	"install.sh / install.ps1 / latest.json: they are release assets but not build outputs, and are not attested yet",
+	"the checksums manifest itself: it describes the artifacts rather than being one, and every artifact it lists is attested on its own",
 }
 
 // Status は attest の現状を述べる。実行できないなら「なぜできないか」を必ず持たせる——

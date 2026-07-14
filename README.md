@@ -356,10 +356,13 @@ tool reads it before it drives).
 #### Build provenance
 
 Building in public CI only helps if someone can check that what you shipped really came out of that
-workflow, from that commit. So `release` (and the `release` that `publish` embeds) attests it: the
-artifacts' sha256 digests go into a SLSA provenance statement, signed keyless with the OIDC identity
-Actions hands the workflow, and stored on your repository. There is **no secret to register** — two
-permissions are the whole setup:
+workflow, from that commit. So `release` (and the `release` that `publish` embeds) attests it:
+everything it uploads — the archives, packages and bundles, *and* the `install.sh` / `install.ps1` /
+`latest.json` it writes alongside them — goes into a SLSA provenance statement by sha256 digest,
+signed keyless with the OIDC identity Actions hands the workflow, and stored on your repository.
+(The installer script is the file users pipe into a shell; leaving it out because it is not a build
+output would leave the most-trodden path the least protected.) There is **no secret to register** —
+two permissions are the whole setup:
 
 ```yaml
 permissions:
@@ -377,8 +380,8 @@ gh attestation verify wharfy_0.21.0_darwin_arm64.tar.gz --repo ShiroDoromoto/wha
 Attestations are looked up by **digest**, not by host — so a channel that serves those exact bytes
 (your tap, bucket, AUR, apt/rpm repo) carries the same provenance. What it does *not* cover, wharfy
 says out loud rather than letting you assume otherwise (`wharfy status`, under `attest`): the
-container image (its digest is a separate subject), `homebrew-core` (it rebuilds from source, so the
-bytes users install are not the bytes wharfy signed), and `install.sh` / `install.ps1` / `latest.json`.
+container image (its digest is a separate subject) and `homebrew-core` (it rebuilds from source, so
+the bytes users install are not the bytes wharfy signed).
 
 Releasing from a laptop attaches nothing (there is no OIDC identity to sign with) and says so. A
 release that runs *in* Actions without those permissions warns (`attest_unavailable`) instead of
@@ -388,7 +391,7 @@ safe.
 
 Attaching provenance and *having* provenance are different claims, and only the second one matters
 to the person downloading your binary. So `verify` checks it from their side (the `attest` check):
-it takes every build artifact on the release by the digest GitHub serves, pulls the attestation
+it takes every asset on the release by the digest GitHub serves, pulls the attestation
 stored for that digest, and verifies it the way `gh attestation verify` would — signed by *this*
 repository's workflow, recorded in Rekor, bound to those exact bytes. Provenance that covers only
 some artifacts, or that does not verify, fails (`attest_unverified`); a release carrying none at all

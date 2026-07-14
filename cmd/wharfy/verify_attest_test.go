@@ -65,7 +65,11 @@ func releaseAssets() map[string]string {
 }
 
 // 付いていて、検算も通る —— verify は緑で、来歴を確かめたと言い切る。
-func TestVerifyAttestVerifiesEveryBuildArtifact(t *testing.T) {
+//
+// 数えるのは release が上げた物すべて。install.sh は利用者が `curl | sh` で実行する物で、
+// latest.json は更新チェックの向き先 —— ビルド出力ではないからと数から外すと、一番踏まれる経路の
+// 来歴を誰も確かめないまま緑になる。
+func TestVerifyAttestVerifiesEveryReleaseAsset(t *testing.T) {
 	assets := releaseAssets()
 	srv := ghReleaseServer(t, "v1.2.0", assets)
 	chdir(t, scratchReleases(t, "1.2.0"))
@@ -81,20 +85,18 @@ func TestVerifyAttestVerifiesEveryBuildArtifact(t *testing.T) {
 	if ck.Status != verifyStatusOK {
 		t.Fatalf("provenance that verifies should be verified, not %s: %+v", ck.Status, ck)
 	}
-	if !strings.Contains(ck.Message, "all 2 build artifacts") {
-		t.Errorf("the check should say how many artifacts it proved: %q", ck.Message)
+	if !strings.Contains(ck.Message, "all 4 release assets") {
+		t.Errorf("the check should say how many assets it proved: %q", ck.Message)
 	}
-	// 引くのはビルド成果物だけ。install.sh / latest.json / checksums は attest の subject ではないので、
-	// ここを引きにいくと「付いていない」を無いはずの欠落として数えることになる。
-	for _, name := range []string{"demo_linux.tar.gz", "demo_darwin.tar.gz"} {
+	for _, name := range []string{"demo_linux.tar.gz", "demo_darwin.tar.gz", "install.sh", "latest.json"} {
 		if !asked[sha256Hex(assets[name])] {
-			t.Errorf("%s is a build artifact: its provenance must be looked up", name)
+			t.Errorf("release uploads %s, so its provenance must be looked up", name)
 		}
 	}
-	for _, name := range []string{"install.sh", "latest.json", "demo_1.2.0_checksums.txt"} {
-		if asked[sha256Hex(assets[name])] {
-			t.Errorf("%s is not a build output, so it is not attested — verify must not demand provenance for it", name)
-		}
+	// checksums マニフェストは資産ではなく資産の記述。release はこれを subject にしないので、
+	// 来歴を要求すると「付いていない」を無いはずの欠落として数えることになる。
+	if asked[sha256Hex(assets["demo_1.2.0_checksums.txt"])] {
+		t.Error("the checksums manifest describes the artifacts rather than being one — verify must not demand provenance for it")
 	}
 	validateAgainst(t, resultSchemaID, res)
 }
@@ -155,10 +157,11 @@ func TestVerifyAttestIsPartialWhenNothingIsAttested(t *testing.T) {
 	srv := ghReleaseServer(t, "v1.2.0", assets)
 	chdir(t, scratchReleases(t, "1.2.0"))
 	swapReleasesProbe(t, srv.URL)
-	swapAttestVerify(t, attestedRelease{missing: map[string]bool{
-		sha256Hex(assets["demo_linux.tar.gz"]):  true,
-		sha256Hex(assets["demo_darwin.tar.gz"]): true,
-	}})
+	missing := map[string]bool{}
+	for _, name := range []string{"demo_linux.tar.gz", "demo_darwin.tar.gz", "install.sh", "latest.json"} {
+		missing[sha256Hex(assets[name])] = true
+	}
+	swapAttestVerify(t, attestedRelease{missing: missing})
 
 	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
 	if !res.OK {
