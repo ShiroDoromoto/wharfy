@@ -1,10 +1,15 @@
 package main
 
-// attest_stage.go — attest 段の CLI 側オーケストレーション。env から設定を解決し、release が
-// 上げ切った成果物の digest に来歴を付ける。
+// attest_stage.go — attest 段の CLI 側オーケストレーション。env から設定を解決し、配った物の
+// digest に来歴を付ける。
 //
-// 段の位置が要点: 証言は**配ったバイト列**の digest で作るので、署名(sign)もアーカイブも終わり、
-// 実 sha256 が確定した後——release の最後——に呼ぶ。sign 段が「archive の前」なのと対になる。
+// 段の位置が要点: 証言は**配ったバイト列**の digest で作るので、実 digest が確定した後にしか作れない。
+// 証明する物は 2 つあり、digest が決まる時点が違うので、段も 2 つに分かれる:
+//
+//	Release のアセット —— 手元のファイルを数えれば digest が出る。sign もアーカイブも終わった後、
+//	                      release の最後で付ける(sign 段が「archive の前」なのと対になる)。
+//	container の image —— 同一性(manifest digest)を決めるのは push を受けたレジストリの方。
+//	                      だから release では作れず、image を配った直後(publish container)に付ける。
 //
 // 働くのは GitHub Actions の中だけ(OIDC を配るのはそこだけ)。手元では素通しし、CI で証明を作れない
 // ときだけ警告する——「証明は無くても配れてしまう」ので、黙ると付いているつもりのまま配り続ける。
@@ -13,9 +18,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ShiroDoromoto/wharfy/internal/attest"
 	"github.com/ShiroDoromoto/wharfy/internal/build"
+	"github.com/ShiroDoromoto/wharfy/internal/channel"
 	"github.com/ShiroDoromoto/wharfy/internal/config"
 	"github.com/ShiroDoromoto/wharfy/internal/output"
 )
@@ -145,17 +152,84 @@ func attestRelease(ctx context.Context, cfg config.Config, archs []build.Artifac
 		return nil, nil, &attest.Error{Err: err}
 	}
 	subjects = append(subjects, extraSubs...)
-	if len(subjects) == 0 {
+	res, err := attestSubjectsWith(ctx, opts, subjects)
+	return res, nil, err
+}
+
+// attestContainerImage は push 済みの image:version の manifest digest に来歴を付ける。
+//
+// release で付けられないのは、image の同一性を決めるのが wharfy ではなくレジストリだから: tag は
+// 動かせるので image を名指せるのは digest だけで、その digest は push を受けたレジストリが返して
+// 初めて分かる。だから証明は container を配った直後——ここ——でしか作れない。
+//
+// 引くときはアセットと同じ(digest で引く): 利用者は
+// `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>` で検算できる。
+//
+// image がレジストリに無いなら何もしない——配っていない物の来歴は無くて当然で、image の不在は
+// container の行が言うことだから(attest が二重に言わない)。
+func attestContainerImage(ctx context.Context, cfg config.Config, image, version string) (*attest.Result, *output.Warning, error) {
+	if image == "" || version == "" {
 		return nil, nil, nil
+	}
+	opts := resolveAttestOptions(cfg)
+	if !opts.Enabled() {
+		if os.Getenv(envGitHubActions) != "true" {
+			return nil, nil, nil // 手元: 証明できないのが前提(status がそう言っている)
+		}
+		return nil, &output.Warning{
+			Code:    output.WarnAttestUnavailable,
+			Message: "no build provenance was attached to the container image: " + attest.Status(opts).Reason,
+		}, nil
+	}
+	sub, found, err := imageSubject(ctx, image, version)
+	if err != nil {
+		return nil, nil, &attest.Error{Err: err}
+	}
+	if !found {
+		return nil, nil, nil
+	}
+	if sub.SHA256 == "" {
+		// tag は在るのに digest を返さないレジストリ。証明の subject を推測で作らない
+		// (指す先の違う証明は、無いより悪い)。付かなかったことは言う。
+		return nil, &output.Warning{
+			Code: output.WarnAttestUnavailable,
+			Message: "no build provenance was attached to " + image + ":" + version +
+				": the registry served no sha256 digest for the image, and provenance is bound to a digest",
+		}, nil
+	}
+	res, err := attestSubjectsWith(ctx, opts, []attest.Subject{sub})
+	return res, nil, err
+}
+
+// imageSubject はレジストリが返す image:version の manifest digest を subject にする。
+// found は tag の実在、SHA256 が空なら digest を得られなかった(取り違えないよう分けて返す)。
+func imageSubject(ctx context.Context, image, version string) (attest.Subject, bool, error) {
+	probe := &channel.OCIProbe{Image: image, Token: os.Getenv("GITHUB_TOKEN"), Base: ociProbeBase}
+	digest, found, err := probe.Digest(ctx, version)
+	if err != nil || !found {
+		return attest.Subject{}, false, err
+	}
+	hex, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok {
+		return attest.Subject{Name: image}, true, nil
+	}
+	return attest.Subject{Name: image, SHA256: hex}, true, nil
+}
+
+// attestSubjectsWith は subjects に来歴を付けて預ける(証明できる環境であることは呼び手が確かめた後)。
+// subject が無い・預け先を組めないなら何もしない——証明する物も、預ける先も無い。
+func attestSubjectsWith(ctx context.Context, opts attest.Options, subjects []attest.Subject) (*attest.Result, error) {
+	if len(subjects) == 0 {
+		return nil, nil
 	}
 	owner, name, ok := splitOwnerName(opts.Repo)
 	if !ok {
-		return nil, nil, nil
+		return nil, nil
 	}
 	res, err := attest.Attest(ctx, opts, subjects,
 		newAttestTokens(opts.OIDC), newAttestSigner(), newAttestStore(owner, name, opts.Token))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &res, nil, nil
+	return &res, nil
 }

@@ -221,7 +221,7 @@ func runVerify(ctx context.Context, c registry.Command, args []string) output.Re
 			// 来歴は Release の成果物に付く(subject は資産の digest)。資産の実在照合が落ちているなら、
 			// 確かめる対象そのものが揃っていない —— そこは releases の失敗として語れば足りる。
 			if oc.check.Status != verifyStatusFailed {
-				outcomes = append(outcomes, verifyAttest(ctx, ch, tgt, audit))
+				outcomes = append(outcomes, verifyAttest(ctx, cfg, ch, tgt, audit))
 			}
 		case "script":
 			outcomes = append(outcomes, verifyScript(ctx, cfg, in, tgt))

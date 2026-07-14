@@ -377,11 +377,19 @@ Consumers check it with one command, wherever they got the file from:
 gh attestation verify wharfy_0.21.0_darwin_arm64.tar.gz --repo ShiroDoromoto/wharfy
 ```
 
+The container image gets the same treatment, one step later: an image is named by its manifest
+digest, and that digest only exists once the registry has accepted the push — so `publish` attests
+it right after pushing, and users check it the same way.
+
+```sh
+gh attestation verify oci://ghcr.io/shirodoromoto/wharfy:0.21.0 --repo ShiroDoromoto/wharfy
+```
+
 Attestations are looked up by **digest**, not by host — so a channel that serves those exact bytes
 (your tap, bucket, AUR, apt/rpm repo) carries the same provenance. What it does *not* cover, wharfy
-says out loud rather than letting you assume otherwise (`wharfy status`, under `attest`): the
-container image (its digest is a separate subject) and `homebrew-core` (it rebuilds from source, so
-the bytes users install are not the bytes wharfy signed).
+says out loud rather than letting you assume otherwise (`wharfy status`, under `attest`):
+`homebrew-core` rebuilds from source and bottles the result, so the bytes users install there are
+not the bytes wharfy signed.
 
 Releasing from a laptop attaches nothing (there is no OIDC identity to sign with) and says so. A
 release that runs *in* Actions without those permissions warns (`attest_unavailable`) instead of
@@ -391,10 +399,11 @@ safe.
 
 Attaching provenance and *having* provenance are different claims, and only the second one matters
 to the person downloading your binary. So `verify` checks it from their side (the `attest` check):
-it takes every asset on the release by the digest GitHub serves, pulls the attestation
-stored for that digest, and verifies it the way `gh attestation verify` would — signed by *this*
-repository's workflow, recorded in Rekor, bound to those exact bytes. Provenance that covers only
-some artifacts, or that does not verify, fails (`attest_unverified`); a release carrying none at all
+it takes every asset on the release by the digest GitHub serves — and the container image by the
+manifest digest the registry serves — pulls the attestation stored for that digest, and verifies it
+the way `gh attestation verify` would — signed by *this* repository's workflow, recorded in Rekor,
+bound to those exact bytes. Provenance that covers only some artifacts, or that does not verify,
+fails (`attest_unverified`); a release carrying none at all
 is partial with a warning, because a release cut without those permissions never claimed any. Put
 `wharfy verify` at the end of the release workflow and a provenance that is broken, partial, or
 signed by something other than your workflow cannot reach users unnoticed.

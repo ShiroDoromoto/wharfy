@@ -8,7 +8,8 @@ package main
 //
 // 引き当てる digest は GitHub が資産のバイト列から出したもの(ReleaseAudit.Digests)。配布者が書いた
 // checksums マニフェストではなく**いま落ちてくる物**の digest なので、資産を落とさずに(D-4)、利用者が
-// 受け取るバイト列そのものの来歴を引ける。
+// 受け取るバイト列そのものの来歴を引ける。container の image も同じ作法で、レジストリがいま返す
+// manifest digest で引く(publish が push 後に付けた証明が、そこに在るはず)。
 //
 // 来歴は digest で引くので、tap も bucket も apt/rpm も、同じバイト列を配っている限りこの証明が
 // そのまま当たる——チャネルごとに行を立てないのはそのため(status の attest.covered が同じことを言う)。
@@ -38,15 +39,18 @@ var (
 	newAttestVerifier = func() attest.BundleVerifier { return attest.NewVerifier() }
 )
 
-// verifyAttest は Release の成果物に付いた来歴を検算する。
+// verifyAttest は配ってある物(Release の資産と container の image)に付いた来歴を検算する。
 //
 // 段階は 3 つ。どれも「証明が無い」と「証明が壊れている」を混ぜない:
 //   - 1 つも付いていない → partial(まだ付けていない配布。CI の permissions を足せば付く)
 //   - 一部にしか付いていない → failed(付けたつもりの取りこぼし——これを捕まえるのがこの行の主目的)
 //   - 付いているのに検算できない → failed(誰も検算できない証明は、無いのと同じか、それ以下)
-func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarget, audit channel.ReleaseAudit) verifyOutcome {
+func verifyAttest(ctx context.Context, cfg config.Config, ch config.ResolvedChannel, tgt verifyTarget, audit channel.ReleaseAudit) verifyOutcome {
 	repo := firstNonEmptyStr(ch.Target, tgt.Target)
 	subjects := attestSubjectsOnRelease(audit)
+	if img, ok := attestSubjectOnImage(ctx, cfg, tgt.Version); ok {
+		subjects = append(subjects, img)
+	}
 	if len(subjects) == 0 {
 		// digest が引けない(古い GitHub が digest を返さない)か、成果物が 1 つも無い。どちらも
 		// 「来歴を確かめられなかった」——確かめていないことを緑で返さない。
@@ -69,12 +73,12 @@ func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 	switch {
 	case len(broken) > 0:
 		return attestFailure(
-			attestCheckName+": "+strconv.Itoa(len(broken))+" of "+total+" release assets carry provenance that does not verify",
+			attestCheckName+": "+strconv.Itoa(len(broken))+" of "+total+" shipped artifacts carry provenance that does not verify",
 			"the build provenance stored for these artifacts cannot be verified by a consumer",
 			"`gh attestation verify <file> --repo "+repo+"` fails for anyone checking them — re-run release on this tag to attest them again",
 			attestDetail(broken))
 	case len(missing) == len(subjects):
-		msg := attestCheckName + ": none of the " + total + " release assets on v" + tgt.Version +
+		msg := attestCheckName + ": none of the " + total + " shipped artifacts on v" + tgt.Version +
 			" carry build provenance — nothing proves they came from this repository's workflow"
 		return verifyOutcome{
 			check: verifyCheck{Channel: attestCheckName, Status: verifyStatusPartial, Message: msg},
@@ -86,14 +90,14 @@ func verifyAttest(ctx context.Context, ch config.ResolvedChannel, tgt verifyTarg
 		}
 	case len(missing) > 0:
 		return attestFailure(
-			attestCheckName+": "+strconv.Itoa(len(missing))+" of "+total+" release assets carry no build provenance",
-			"the release is only partly attested, so whether a user can prove where their download came from depends on which asset they took",
-			"release attests every artifact it uploads, so a gap means these never reached the attest step — re-run release on this tag",
+			attestCheckName+": "+strconv.Itoa(len(missing))+" of "+total+" shipped artifacts carry no build provenance",
+			"the release is only partly attested, so whether a user can prove where their download came from depends on which artifact they took",
+			"release attests everything it uploads and publish attests the image it pushes, so a gap means these never reached the attest step — re-run release/publish on this tag",
 			attestDetail(missing))
 	}
 	return verifySuccess(attestCheckName,
-		attestCheckName+": all "+total+" release assets on v"+tgt.Version+
-			" carry verifiable provenance from this repository's workflow (signed, logged in rekor, and bound to the bytes github serves)")
+		attestCheckName+": all "+total+" shipped artifacts on v"+tgt.Version+
+			" carry verifiable provenance from this repository's workflow (signed, logged in rekor, and bound to the bytes users receive)")
 }
 
 // attestFailure は来歴が検算できないことを failed として組む。
@@ -121,6 +125,29 @@ func attestSubjectsOnRelease(audit channel.ReleaseAudit) []attest.Subject {
 		subs = append(subs, attest.Subject{Name: name, SHA256: audit.Digests[name]})
 	}
 	return subs
+}
+
+// attestSubjectOnImage は container が配っている image の manifest digest を subject にする。
+//
+// ここも「在る物」から数える: レジストリがいま返す digest で引くので、publish が push だけして証明を
+// 付け損ねていれば、その image が missing として現れる(image に来歴が付いた今、それを見ないと
+// 「付けたつもり」がまた 1 つ増える)。
+//
+// 引けないなら subject にしない —— container を配っていない・tag がまだ無い・digest を返さない
+// レジストリ。image の不在は container の行が言うことで、attest の行が二重に言うことではない。
+func attestSubjectOnImage(ctx context.Context, cfg config.Config, version string) (attest.Subject, bool) {
+	if !config.HasChannel(cfg, "container") {
+		return attest.Subject{}, false
+	}
+	image := channelTargetByName(cfg, "container")
+	if image == "" {
+		return attest.Subject{}, false
+	}
+	sub, found, err := imageSubject(ctx, image, version)
+	if err != nil || !found || sub.SHA256 == "" {
+		return attest.Subject{}, false
+	}
+	return sub, true
 }
 
 // isAttestedAsset は Release 資産に来歴が付いているはずか(＝ attest 段が subject にする物か)。

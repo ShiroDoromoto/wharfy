@@ -28,6 +28,10 @@
         "attest": {
           "description": "release を内包した publish が付けた来歴。CI で証明できたときだけ出る(不在 = 証明していない)。",
           "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/attestResult"
+        },
+        "attest_image": {
+          "description": "container の image digest に付けた来歴。別の証言になるのは、image の digest が push を受けたレジストリの返答で初めて決まるため(release の時点では存在しない)。",
+          "$ref": "https://wharfy.io/schemas/v1/common.json#/$defs/attestResult"
         }
       },
       "required": ["plan"],

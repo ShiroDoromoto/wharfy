@@ -57,12 +57,12 @@ type State struct {
 // 配っている限り、その利用者は同じ証明を検算できる。
 var coveredLines = []string{
 	"everything the release uploads to github: the build artifacts (archives, packages, bundles) and the files wharfy writes alongside them (install.sh, install.ps1, latest.json), each by sha256 digest",
+	"the container image: publish attests its manifest digest right after the push (the digest only exists once the registry has accepted the image) — `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>` proves it",
 	"attestations are looked up by digest, not by host: a channel that serves those exact files (tap, bucket, scoop, aur, your apt/rpm repo) carries the same provenance — `gh attestation verify <file> --repo <owner>/<repo>` proves it wherever the file came from",
 }
 
 // 証明が及ばない範囲。ここを黙ると「全部に来歴が付く」と読まれる。
 var uncoveredLines = []string{
-	"the container image: its digest is a separate subject and is not attested yet",
 	"homebrew-core: it rebuilds from source and bottles the result, so what users install is not the bytes wharfy signed",
 	"the checksums manifest itself: it describes the artifacts rather than being one, and every artifact it lists is attested on its own",
 }

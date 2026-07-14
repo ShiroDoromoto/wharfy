@@ -68,6 +68,9 @@ type publishData struct {
 	Requires []requirement      `json:"requires,omitempty"`
 	// Attest は release を内包した publish が付けた来歴(CI で証明できたときだけ出る)。
 	Attest *attest.Result `json:"attest,omitempty"`
+	// AttestImage は container の image digest に付けた来歴。別の証言になるのは、image の digest が
+	// push を受けたレジストリの返答で初めて決まるから——release の時点ではまだ存在しない。
+	AttestImage *attest.Result `json:"attest_image,omitempty"`
 }
 
 // requirement は実 apply(--yes)の前提条件と充足状況(publish.json requirement)。
@@ -395,6 +398,7 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	now := nowUTC().Format(time.RFC3339)
 
 	var items []channel.PlanItem
+	imageTag := "" // この run が配る image の版(container を降ろしたなら空 = 証明する image は無い)
 	for _, ch := range chans {
 		// 凍結(ship:false)なら配るのは新版ではなく最後に配った版。生成器へ渡す版と成果物を差し替える。
 		chVersion, chArchs := version, archs
@@ -411,6 +415,9 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 				// release は新版で走った。install.sh が入れる版(writeGeneratedConfig で凍結済み)を記録する。
 				chVersion = fz.Version
 			}
+		}
+		if ch == "container" {
+			imageTag = chVersion
 		}
 		// state 認識の再開(b): その version で発行済みのチャネルは飛ばす。途中失敗後の再実行で
 		// 完了済みを再処理しない(残った失敗チャネルだけ進む)。凍結中のマニフェストは告知を載せ直す
@@ -436,12 +443,28 @@ func publishAll(ctx context.Context, c registry.Command, root string, cfg config
 	}
 	_ = state.Save(root, st)
 
+	// image の来歴は push の後にしか作れない(digest を決めるのはレジストリ)。チャネルを回し切った
+	// ここが、その「後」に当たる唯一の合流点 —— Go 経路(release の docker pipe が push)でも
+	// BYO 経路(container の case が push)でも、image はもうレジストリに在る。
+	// 発行済みで noop になった再開でも呼ぶ: 前回 push まで済んで証明の手前で落ちていたら、来歴は要る
+	// (同じ digest への二重の証言は無害——検算は 1 つでも通れば通る)。
+	imgAtt, imgWarn, imgErr := attestContainerImage(ctx, cfg, channelTargetByName(cfg, "container"), imageTag)
+	if imgErr != nil {
+		return buildErrorResult(c, imgErr)
+	}
+	if imgWarn != nil {
+		warns = append(warns, *imgWarn)
+	}
+
 	msg := fmt.Sprintf("published %d channel(s) at %s", len(items), version)
 	if att != nil {
 		msg += fmt.Sprintf(" (build provenance attested for %d artifact(s))", len(att.Subjects))
 	}
+	if imgAtt != nil {
+		msg += " (the container image digest is attested too)"
+	}
 	res := publishResult(c, msg, true, items)
-	res.Data = publishData{Applied: true, Plan: items, Attest: att}
+	res.Data = publishData{Applied: true, Plan: items, Attest: att, AttestImage: imgAtt}
 	res.Warnings = append(warns, deprecationWarnings(cfg)...)
 	res.Next = []output.NextDo{{Reason: "verify installs work", Do: "wharfy verify"}}
 	if attWarn != nil {
@@ -1310,9 +1333,23 @@ func publishContainer(ctx context.Context, c registry.Command, root string, cfg 
 		st.Publish["container"] = state.PublishRecord{Version: version, Target: image, At: nowUTC().Format(time.RFC3339)}
 		_ = state.Save(root, st)
 	}
+	// attest 段: push が済んで digest が確定した後に、image の来歴を付ける(release の subject と
+	// 同じ扱い——利用者が受け取る物のうち、image だけが証明の外に残っていた)。
+	// 記録の後に置くのは、push は現に済んでいるから: 証明に失敗しても「配っていない」ことにはしない。
+	imgAtt, imgWarn, imgErr := attestContainerImage(ctx, cfg, image, version)
+	if imgErr != nil {
+		return buildErrorResult(c, imgErr)
+	}
 	item.Action = channel.ActionUpdate
-	res := publishResult(c, "published "+image+":"+version+" (multi-arch)", true, []channel.PlanItem{item})
-	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}}
+	msg := "published " + image + ":" + version + " (multi-arch)"
+	if imgAtt != nil {
+		msg += " (build provenance attested for the image digest)"
+	}
+	res := publishResult(c, msg, true, []channel.PlanItem{item})
+	res.Data = publishData{Applied: true, Plan: []channel.PlanItem{item}, AttestImage: imgAtt}
+	if imgWarn != nil {
+		res.Warnings = append(res.Warnings, *imgWarn)
+	}
 	res.Next = []output.NextDo{
 		{Reason: "users pull with", Do: "docker pull " + image + ":" + version},
 		{Reason: "verify install works", Do: "wharfy verify"},

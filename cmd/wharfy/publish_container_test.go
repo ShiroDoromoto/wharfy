@@ -121,6 +121,78 @@ func TestPublishContainerApply(t *testing.T) {
 	}
 }
 
+// CI で container を配ると、push した image の manifest digest にも来歴が付く。
+//
+// この証言は release では作れない: image を名指せるのは digest だけで、その digest は push を受けた
+// レジストリが返して初めて決まる。ここで付けないと、Release のアセットは全部証明されているのに
+// image だけが「どこから来たか誰も証明できない配布物」として残る。
+func TestPublishContainerAttestsTheImageDigest(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [container]\n")
+	tagScratch(t, root, "v0.5.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	actionsEnv(t)
+	ociRegistry(t, map[string]string{"0.5.0": "sha256:imagedigest", "latest": "sha256:imagedigest"})
+	defer swapDockerAvailable(true)()
+	defer swapContainerizer(&fakeContainerizer{})()
+	defer swapRegistryLogin(&loginRec{}, nil)()
+	signer := &recordingAttestSigner{}
+	store := &fakeAttestStore{}
+	defer swapAttest(signer, store)()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"container"})
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	if len(store.bundles) != 1 || len(signer.statements) != 1 {
+		t.Fatalf("the pushed image must be attested exactly once: %d bundle(s), %d statement(s)",
+			len(store.bundles), len(signer.statements))
+	}
+	// 証言が指すのはレジストリが返した digest。tag ではない —— tag は後から動かせる。
+	stmt := string(signer.statements[0])
+	if !strings.Contains(stmt, "imagedigest") || !strings.Contains(stmt, "ghcr.io/acme/demo") {
+		t.Errorf("the statement must name the image and the digest the registry served: %s", stmt)
+	}
+	pd := res.Data.(publishData)
+	if pd.AttestImage == nil || len(pd.AttestImage.Subjects) != 1 {
+		t.Fatalf("publish must report the provenance it attached to the image: %+v", res.Data)
+	}
+	if !strings.Contains(res.Message, "provenance") {
+		t.Errorf("a publish that attested the image should say so: %q", res.Message)
+	}
+	validateAgainst(t, publishSchemaID, res)
+}
+
+// 手元(OIDC 無し)では image に来歴は付かない —— それは異常ではなく前提なので、警告もしない。
+func TestPublishContainerOutsideActionsAttestsNothingQuietly(t *testing.T) {
+	root := scratchModule(t)
+	writeChannels(t, root, "project: demo\nchannels: [container]\n")
+	tagScratch(t, root, "v0.5.0")
+	chdir(t, root)
+	t.Setenv("GITHUB_TOKEN", "tok")
+	defer swapDockerAvailable(true)()
+	defer swapContainerizer(&fakeContainerizer{})()
+	defer swapRegistryLogin(&loginRec{}, nil)()
+	store := &fakeAttestStore{}
+	defer swapAttest(&recordingAttestSigner{}, store)()
+	defer func() { flagYes = false }()
+	flagYes = true
+
+	res := runPublish(context.Background(), mustLookup(t, "publish"), []string{"container"})
+	if !res.OK {
+		t.Fatalf("expected ok: %+v", res)
+	}
+	if len(store.bundles) != 0 {
+		t.Fatal("a laptop has no OIDC identity: nothing may be attested")
+	}
+	if hasWarning(res, output.WarnAttestUnavailable) {
+		t.Error("not being in CI is the premise, not a warning")
+	}
+}
+
 // ログインに失敗したら、イメージは作らずそこで止まる(401 を build の後まで持ち越さない)。
 func TestPublishContainerLoginFailure(t *testing.T) {
 	root := scratchModule(t)

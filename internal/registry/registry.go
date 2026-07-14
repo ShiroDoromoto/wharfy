@@ -133,12 +133,15 @@ var Commands = []Command{
 		triggerNote,
 		selfGeneratorNote,
 	}},
-	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{triggerNote, selfGeneratorNote, attestNote}},
+	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{
+		triggerNote, selfGeneratorNote, attestNote,
+		"the container image is attested here rather than in release: an image is named by its manifest digest, and that digest only exists once the registry has accepted the push — so publish attests it right after pushing, and consumers check it with `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>`",
+	}},
 	{Name: "verify", Summary: "check each channel from the consumer side (--install: install from it and run it)", Args: "[channel]", Notes: []string{
 		"it needs no local state: with no .wharfy/ record it takes the version from the channels themselves (the latest github release, else the latest git tag), so a bare clone can ask 'does what we shipped still install?' — name the version explicitly with --version <v>",
 		"a .wharfy/ record that is behind the latest github release loses to the release (it is stale, as it always is when publish ran in CI) and you get a drift_detected warning — the record is never allowed to fail a distribution that is actually fine",
 		"gated channels (winget, homebrew-core) are checked against what the upstream actually serves — the manifest/formula the reviewer merges — not against your submission: until it is merged the version has not reached users, so the channel is partial with a warning, never failed (waiting is the only move you have)",
-		"it also checks the build provenance from the consumer side (the `attest` check): every asset on the release (archives, packages, bundles, install.sh, install.ps1, latest.json) is looked up by the digest github serves, and its attestation is verified the way `gh attestation verify` would — signed by this repository's workflow, logged in rekor, bound to those bytes. provenance that is only on some artifacts, or that does not verify, is failed (attest_unverified); a release with none at all is partial with a warning, since a release cut without the workflow permissions never claimed any",
+		"it also checks the build provenance from the consumer side (the `attest` check): every asset on the release (archives, packages, bundles, install.sh, install.ps1, latest.json) is looked up by the digest github serves, and the container image by the manifest digest the registry serves, and each attestation is verified the way `gh attestation verify` would — signed by this repository's workflow, logged in rekor, bound to those bytes. provenance that is only on some artifacts, or that does not verify, is failed (attest_unverified); a release with none at all is partial with a warning, since a release cut without the workflow permissions never claimed any",
 	}},
 	{Name: "version", Summary: "print wharfy's own version (not your project's)", Next: []string{"agent"}},
 }

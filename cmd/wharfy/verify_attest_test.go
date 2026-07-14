@@ -85,8 +85,8 @@ func TestVerifyAttestVerifiesEveryReleaseAsset(t *testing.T) {
 	if ck.Status != verifyStatusOK {
 		t.Fatalf("provenance that verifies should be verified, not %s: %+v", ck.Status, ck)
 	}
-	if !strings.Contains(ck.Message, "all 4 release assets") {
-		t.Errorf("the check should say how many assets it proved: %q", ck.Message)
+	if !strings.Contains(ck.Message, "all 4 shipped artifacts") {
+		t.Errorf("the check should say how many artifacts it proved: %q", ck.Message)
 	}
 	for _, name := range []string{"demo_linux.tar.gz", "demo_darwin.tar.gz", "install.sh", "latest.json"} {
 		if !asked[sha256Hex(assets[name])] {
@@ -181,6 +181,65 @@ func TestVerifyAttestIsPartialWhenNothingIsAttested(t *testing.T) {
 	}
 	if !warned {
 		t.Fatalf("a release with no provenance must warn: %+v", res.Warnings)
+	}
+	validateAgainst(t, resultSchemaID, res)
+}
+
+// releasesAndContainer は Release と ghcr の image を両方配るプロジェクトを立て、両方を実体として
+// 見せる(来歴の subject は Release アセットと image digest の両方に及ぶ)。
+func releasesAndContainer(t *testing.T, version, imageDigest string) map[string]string {
+	t.Helper()
+	assets := releaseAssets()
+	srv := ghReleaseServer(t, "v"+version, assets)
+	root := scratchModule(t)
+	writeConfig(t, root, "project: demo\nchannels: [releases, container]\ngithub: acme/demo\n")
+	recordPublishFor(t, root, "releases", version, "acme/demo")
+	recordPublishFor(t, root, "container", version, "ghcr.io/acme/demo")
+	chdir(t, root)
+	swapReleasesProbe(t, srv.URL)
+	ociRegistry(t, map[string]string{version: imageDigest, "latest": imageDigest})
+	return assets
+}
+
+// image に来歴が付いていない —— アセットには全部付いているので、release だけを見ていれば緑になる。
+// container を配っているなら image も配布物で、そこだけ証明が無いのは「付けたつもり」の取りこぼし。
+func TestVerifyAttestFailsWhenTheContainerImageIsNotAttested(t *testing.T) {
+	releasesAndContainer(t, "1.2.0", "sha256:imagedigest")
+	swapAttestVerify(t, attestedRelease{missing: map[string]bool{"imagedigest": true}})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK {
+		t.Fatalf("an image without provenance must not be green: %+v", res)
+	}
+	if ck := checkFor(t, res, attestCheckName); ck.Status != verifyStatusFailed {
+		t.Fatalf("a gap in provenance is a failure, not a partial: %+v", ck)
+	}
+	if len(res.Errors) == 0 || res.Errors[0].Code != output.ErrAttestUnverified {
+		t.Fatalf("the problem should be attest_unverified: %+v", res.Errors)
+	}
+	if !strings.Contains(res.Errors[0].Detail, "ghcr.io/acme/demo") {
+		t.Errorf("the artifact without provenance must be named: %+v", res.Errors[0])
+	}
+}
+
+// Release アセットにも image にも付いている —— 数は 5(アセット 4 + image 1)。image を数に入れないと、
+// 証明を引いてすらいない配布物が「全部確かめた」の中に隠れる。
+func TestVerifyAttestVerifiesTheContainerImageToo(t *testing.T) {
+	releasesAndContainer(t, "1.2.0", "sha256:imagedigest")
+	asked := map[string]bool{}
+	swapAttestVerify(t, attestedRelease{asked: asked})
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("a fully attested distribution should verify ok: %+v", res)
+	}
+	ck := checkFor(t, res, attestCheckName)
+	if ck.Status != verifyStatusOK || !strings.Contains(ck.Message, "all 5 shipped artifacts") {
+		t.Fatalf("the image belongs in the count of what was proved: %+v", ck)
+	}
+	// image は digest で引く: tag は動かせるので、tag が在ることは来歴の証明にならない。
+	if !asked["imagedigest"] {
+		t.Error("the image manifest digest the registry serves must be looked up")
 	}
 	validateAgainst(t, resultSchemaID, res)
 }
