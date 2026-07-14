@@ -931,7 +931,7 @@ func aurSources(archs []build.Artifact, ghOwner, ghRepo, project, version string
 			continue // deb/rpm/appimage は AUR の source archive ではない(formula と同じ sha 汚染を避ける)
 		}
 		name := fmt.Sprintf("%s_%s_linux_%s.tar.gz", project, version, a.Arch)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.AurSource{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
@@ -1109,7 +1109,7 @@ func wingetInstallers(archs []build.Artifact, ghOwner, ghRepo, project, version 
 			continue
 		}
 		name := fmt.Sprintf("%s_%s_windows_%s.zip", project, version, a.Arch)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.WingetInstaller{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
@@ -1125,7 +1125,7 @@ func wingetBundleInstallers(archs []build.Artifact, ghOwner, ghRepo, version str
 			continue
 		}
 		name := filepath.Base(a.Path)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.WingetInstaller{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
@@ -2146,7 +2146,7 @@ func scoopBundleArchives(archs []build.Artifact, ghOwner, ghRepo, version string
 			continue
 		}
 		name := filepath.Base(a.Path)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.ScoopArch{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
@@ -2192,7 +2192,7 @@ func caskArtifacts(archs []build.Artifact, ghOwner, ghRepo, version string) []ch
 			continue
 		}
 		name := filepath.Base(a.Path)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.CaskArtifact{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	channel.SortCaskArtifacts(out)
@@ -2485,7 +2485,7 @@ func scoopArchives(archs []build.Artifact, ghOwner, ghRepo, project, version str
 			continue
 		}
 		name := fmt.Sprintf("%s_%s_windows_%s.zip", project, version, a.Arch)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.ScoopArch{Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	return out
@@ -2551,7 +2551,7 @@ func formulaArchives(archs []build.Artifact, ghOwner, ghRepo, project, version s
 			continue // deb/rpm/dmg/appimage 等は formula の archive ではない — cask/linuxrepo が扱う
 		}
 		name := fmt.Sprintf("%s_%s_%s_%s.tar.gz", project, version, a.OS, a.Arch)
-		url := fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", ghOwner, ghRepo, version, name)
+		url := config.ReleaseAssetURL(ghOwner, ghRepo, version, name)
 		out = append(out, channel.ArchiveRef{OS: a.OS, Arch: a.Arch, URL: url, SHA256: a.SHA256})
 	}
 	channel.SortArchives(out)

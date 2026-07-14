@@ -391,12 +391,14 @@ func InstallURL(cfg Config) string {
 }
 
 // ReleaseAssetURL は「そのタグの Release に上がっている資産」の URL(tag 直リンク)。
-// latest 経由(InstallURL)と違い、昇格していない版の資産もそのまま引ける —— 昇格前に
-// 「これから配る実物」を確かめられるのはこの URL だけ(D-263: 検証の窓は prerelease で開く)。
-// github が解決できなければ空。
-func ReleaseAssetURL(cfg Config, version, name string) string {
-	owner, repo, ok := splitOwnerRepo(cfg.Github)
-	if !ok {
+//
+// 各チャネル(formula / cask / bucket / winget / AUR)が利用者に踏ませる URL であり、昇格前に
+// 「これから配る実物」を確かめられる唯一の URL でもある —— latest 経由(InstallURL)は昇格まで
+// 旧版を返す(D-263: 検証の窓は prerelease で開く)。
+//
+// 形を決めるのはここ 1 箇所 —— 綴りが割れれば、どれが正なのか誰にも言えなくなる。
+func ReleaseAssetURL(owner, repo, version, name string) string {
+	if owner == "" || repo == "" {
 		return ""
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/%s", owner, repo, strings.TrimPrefix(version, "v"), name)

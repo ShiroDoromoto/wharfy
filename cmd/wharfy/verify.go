@@ -985,7 +985,8 @@ func scriptVerifyURL(cfg config.Config, version string, pre bool) string {
 		return scriptProbeURL
 	}
 	if pre {
-		if u := config.ReleaseAssetURL(cfg, version, config.InstallScriptName); u != "" {
+		owner, repo, _ := splitOwnerName(cfg.Github)
+		if u := config.ReleaseAssetURL(owner, repo, version, config.InstallScriptName); u != "" {
 			return u
 		}
 	}
