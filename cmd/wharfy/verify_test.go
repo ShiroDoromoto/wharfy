@@ -625,6 +625,13 @@ func TestVerifyRejectsUnsafeContainerInputs(t *testing.T) {
 // 資産には digest を載せる —— 実 GitHub がそう返すからで、来歴(attest)はその digest で引く。
 func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httptest.Server {
 	t.Helper()
+	return ghReleaseServerCounting(t, tag, assets, nil)
+}
+
+// ghReleaseServerCounting は ghReleaseServer に「どの資産が実際に落とされたか」の記録を足したもの。
+// 落とさずに確かめる、が本当に落としていないことは、落ちた事実を数えないと言えない。
+func ghReleaseServerCounting(t *testing.T, tag string, assets map[string]string, downloaded *[]string) *httptest.Server {
+	t.Helper()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -641,10 +648,14 @@ func ghReleaseServer(t *testing.T, tag string, assets map[string]string) *httpte
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"assets": list})
 		case strings.HasPrefix(r.URL.Path, "/dl/"):
-			body, ok := assets[strings.TrimPrefix(r.URL.Path, "/dl/")]
+			name := strings.TrimPrefix(r.URL.Path, "/dl/")
+			body, ok := assets[name]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return
+			}
+			if downloaded != nil {
+				*downloaded = append(*downloaded, name)
 			}
 			_, _ = w.Write([]byte(body))
 		default:
@@ -808,6 +819,62 @@ func TestVerifyReleasesAllAssetsPresent(t *testing.T) {
 		t.Errorf("probing by default should not warn: %+v", res.Warnings)
 	}
 	validateAgainst(t, resultSchemaID, res)
+}
+
+// 既定(--install 無し)でも中身は確かめられる: GitHub は資産ごとに digest(実バイト列の sha256)を
+// 返すので、落とさずに checksums マニフェストと突き合わせられる。落としていないことも数えて確かめる
+// ——「落とさずに」が本当でなければ、毎回の verify に載せられない。
+func TestVerifyReleasesProbeChecksContentsWithoutDownloading(t *testing.T) {
+	assets := map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	}
+	assets["demo_1.2.0_checksums.txt"] = checksumsFor(assets, "demo_linux.tar.gz")
+	var downloaded []string
+	srv := ghReleaseServerCounting(t, "v1.2.0", assets, &downloaded)
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if !res.OK {
+		t.Fatalf("assets that match their sha256 should verify ok: %+v", res)
+	}
+	ck := checkFor(t, res, "releases")
+	if ck.Status != verifyStatusOK {
+		t.Fatalf("contents checked against the digests github reports are checked: %+v", ck)
+	}
+	if !strings.Contains(ck.Message, "without downloading") {
+		t.Errorf("the success must say how it checked them: %q", ck.Message)
+	}
+	for _, name := range downloaded {
+		if name != "latest.json" && !strings.HasSuffix(name, "checksums.txt") {
+			t.Errorf("only the manifests may be fetched; %s was downloaded", name)
+		}
+	}
+}
+
+// 名前は在るが中身が差し替えられた —— 既定の probe でも捕まえる(以前は --install を付けた人だけの特権)。
+func TestVerifyReleasesProbeCatchesATamperedAsset(t *testing.T) {
+	assets := map[string]string{
+		"latest.json":       latestJSON("1.2.0", "demo_linux.tar.gz"),
+		"demo_linux.tar.gz": "bin",
+	}
+	assets["demo_1.2.0_checksums.txt"] = checksumsFor(assets, "demo_linux.tar.gz")
+	assets["demo_linux.tar.gz"] = "tampered" // マニフェストを書いた後で中身だけ差し替える
+	srv := ghReleaseServer(t, "v1.2.0", assets)
+	chdir(t, scratchReleases(t, "1.2.0"))
+	swapReleasesProbe(t, srv.URL)
+
+	res := runVerify(context.Background(), mustLookup(t, "verify"), nil)
+	if res.OK {
+		t.Fatalf("an asset that does not match its sha256 must not be green: %+v", res)
+	}
+	if len(res.Errors) == 0 || res.Errors[0].Code != output.ErrVerifyFailed {
+		t.Fatalf("want %s: %+v", output.ErrVerifyFailed, res.Errors)
+	}
+	if !strings.Contains(res.Errors[0].Detail, "demo_linux.tar.gz") {
+		t.Errorf("the mismatched asset should be named: %+v", res.Errors[0])
+	}
 }
 
 // --install: checksums マニフェストの sha256 と実資産が一致する → verified。

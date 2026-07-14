@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -810,9 +811,51 @@ func verifyReleases(ctx context.Context, ch config.ResolvedChannel, tgt verifyTa
 	present := "releases " + tgt.Version + ": all " + strconv.Itoa(len(audit.Expected)) +
 		" assets listed in " + strings.Join(audit.Manifests, " and ") + " exist on the release at " + repo
 	if !flagInstall {
-		return verifyProbedOnly("releases", present+"; the assets were not downloaded, so their contents are unchecked"), audit, nil
+		return verifyReleaseDigests(audit, present), audit, nil
 	}
 	return verifyReleaseChecksums(ctx, probe, audit, present), audit, nil
+}
+
+// verifyReleaseDigests は既定(--install 無し)の中身照合。資産を**落とさずに**、GitHub が資産の
+// バイト列から出した digest を checksums マニフェストの sha256 と突き合わせる。
+//
+// 以前はここで「名前は在るが中身は見ていない」と言って止まっていた。だが GitHub は資産ごとに digest を
+// 返す —— 落とさずとも、上げたつもりの物と実際に配っている物が食い違っていること(アップロードが途中で
+// 切れた・後から差し替えられた)は見える。毎回の verify がタダで捕まえられる壊れ方を、--install を
+// 付けた人だけの特権にしておく理由が無い。
+//
+// 突き合わせる相手が無ければ(checksums マニフェストを持たない BYO 経路・digest を返さない古い GitHub)
+// 従来どおり probe で止める —— 確かめていないことを緑で返さない。
+func verifyReleaseDigests(audit channel.ReleaseAudit, present string) verifyOutcome {
+	unchecked := present + "; the assets were not downloaded, so their contents are unchecked"
+	if len(audit.Checksums) == 0 {
+		return verifyProbedOnly("releases", unchecked)
+	}
+	var bad []channel.ChecksumMismatch
+	checked := 0
+	for name, want := range audit.Checksums {
+		got, ok := audit.Digests[name]
+		if !ok {
+			continue // github がこの資産の digest を返さない
+		}
+		checked++
+		if !strings.EqualFold(want, got) {
+			bad = append(bad, channel.ChecksumMismatch{Asset: name, Want: want, Got: got})
+		}
+	}
+	if checked == 0 {
+		return verifyProbedOnly("releases", unchecked)
+	}
+	if len(bad) > 0 {
+		sort.Slice(bad, func(i, j int) bool { return bad[i].Asset < bad[j].Asset })
+		return verifyFailure("releases",
+			strconv.Itoa(len(bad))+" of "+strconv.Itoa(checked)+" release assets do not match their sha256",
+			"the assets github serves differ from what the checksums manifest says they are",
+			"re-run release to upload the assets again; users downloading them get something other than what was built",
+			mismatchDetail(bad), "wharfy release --yes")
+	}
+	return verifySuccess("releases", present+", and all "+strconv.Itoa(checked)+
+		" of them hash to what the checksums manifest says (compared against the digests github reports, without downloading them)")
 }
 
 // verifyReleaseChecksums は --install のときに資産を落として sha256 を検算する。
