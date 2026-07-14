@@ -42,6 +42,7 @@ var expectedCodes = []string{
 	"nothing_to_verify",
 	"pkg_not_indexed",
 	"prerelease_not_latest",
+	"prerelease_not_promoted",
 	"probe_failed",
 	"publish_failed",
 	"release_already_public",

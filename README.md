@@ -112,6 +112,10 @@ attestation is re-signed, so **the bytes you verified are the bytes users get**.
 promoting a release that is already latest changes nothing and reports ok. If verification goes red,
 you simply don't promote: the broken build was never visible to a single user.
 
+`publish` refuses a version that is still a prerelease, so an unverified build cannot slip into the
+tap or the bucket by a mistyped command — writing the channels is exactly what would hand it to
+users. When you *mean* to ship one (a staged beta), `--allow-prerelease` says so out loud.
+
 A draft release cannot do this — its assets need authentication to download, so you cannot exercise
 them the way a user would.
 

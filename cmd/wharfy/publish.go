@@ -109,11 +109,16 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 		if res, blocked := staleGeneratorRefusal(root, c); blocked {
 			return res
 		}
+		// 昇格していない版を各チャネルへ流さない。tap/bucket/script まで届けば、prerelease で
+		// 窓を開けた意味が消える(利用者は結局その版を掴む)。実体を見て、上げただけの版なら止める。
+		if res, blocked := prereleaseRefusal(ctx, c, cfg, version, tagMissing); blocked {
+			return res
+		}
 	}
 
 	// 引数なし = 全チャネル一括(release は 1 回・多重 release 衝突を避ける)。
 	if len(args) == 0 {
-		return withStaleGeneratorWarning(root, c, publishAll(ctx, c, root, cfg, in, version, tagMissing))
+		return withPrereleaseNotice(root, cfg, version, withStaleGeneratorWarning(root, c, publishAll(ctx, c, root, cfg, in, version, tagMissing)))
 	}
 
 	// 名指しのチャネルも channels: の集合に閉じる。畳んだチャネルの repo は archive されていることが
@@ -137,6 +142,58 @@ func runPublish(ctx context.Context, c registry.Command, args []string) output.R
 	if fz != nil {
 		res.Warnings = append(res.Warnings, freezeWarning(fz))
 	}
+	return withPrereleaseNotice(root, cfg, version, res)
+}
+
+// prereleaseRefusal は「まだ昇格していない版を配ろうとしている」なら publish --yes を止める。
+// 判断は GitHub の実体(そのタグのリリースが prerelease か)で行う —— 台帳は昇格が別のジョブで
+// 走れば手元に無いことがあり、配るか否かをそんな写しに委ねられない。
+// --allow-prerelease は段階的公開(ベータを先に一部へ配る)のための明示の口。
+func prereleaseRefusal(ctx context.Context, c registry.Command, cfg config.Config, version string, tagMissing bool) (output.Result, bool) {
+	if flagAllowPrerelease || tagMissing {
+		return output.Result{}, false
+	}
+	owner, repo, ok := splitOwnerName(cfg.Github)
+	if !ok {
+		return output.Result{}, false // 判断材料が無い(他の前提検査が拾う)
+	}
+	st, err := newReleaseStore(owner, repo, os.Getenv("GITHUB_TOKEN")).Get(ctx, "v"+version)
+	if err != nil || !st.Exists || !st.Prerelease {
+		return output.Result{}, false
+	}
+	res := output.New(c.Name, "refusing to publish v"+version+": it is still a prerelease", false)
+	res.Errors = []output.Problem{{
+		Code: output.ErrPrereleaseNotPromoted,
+		Message: "the github release for v" + version + " is a prerelease — users have not been given this version. " +
+			"publishing would write it into the tap, the bucket and the other channels, and they would get it anyway",
+		Hint: "verify it, then `wharfy promote --yes` (or pass --allow-prerelease to ship it to the channels on purpose, e.g. a staged beta)",
+	}}
+	res.Next = []output.NextDo{
+		{Reason: "check the artifacts from the consumer side before anyone gets them", Do: "wharfy verify --version " + version},
+		{Reason: "hand this version to users", Do: "wharfy promote --yes"},
+	}
+	return res, true
+}
+
+// withPrereleaseNotice は plan / dry-run に「この版はまだ上げただけだ」を添える。実体を見に行くのは
+// --yes の側(prereleaseRefusal)で、ここは手元の台帳を読むだけ —— plan は通信しない。
+func withPrereleaseNotice(root string, cfg config.Config, version string, res output.Result) output.Result {
+	if flagYes {
+		return res
+	}
+	st, err := state.Load(root, cfg.Project)
+	if err != nil || st.Publish == nil {
+		return res
+	}
+	rec, ok := st.Publish["releases"]
+	if !ok || !rec.Prerelease || rec.Version != version {
+		return res
+	}
+	res.Warnings = append(res.Warnings, output.Warning{
+		Code: output.WarnPrereleaseNotLatest,
+		Message: "v" + version + " was uploaded as a prerelease and has not been promoted: publish --yes will refuse it " +
+			"(promote it once you have verified it, or pass --allow-prerelease to ship it to the channels on purpose)",
+	})
 	return res
 }
 

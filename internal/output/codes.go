@@ -98,7 +98,11 @@ const (
 	// ErrNoRelease: 昇格しようとした版のリリースが無い。昇格は既に在るリリースのフラグを立てるだけの
 	// 操作で、資産を作ることはしない —— 無い物は latest にできない(先に release で上げる)。
 	ErrNoRelease = "no_release"
-	ErrInternal  = "internal" // 想定外(バグ)
+	// ErrPrereleaseNotPromoted: まだ昇格していない版を各チャネルへ配ろうとした。tap/bucket/script まで
+	// 書けば利用者はその版を掴む —— prerelease で開けた「利用者に見せずに検証する窓」が消える。
+	// 段階的公開(意図してベータを配る)は --allow-prerelease という明示の口だけに残す。
+	ErrPrereleaseNotPromoted = "prerelease_not_promoted"
+	ErrInternal              = "internal" // 想定外(バグ)
 )
 
 // CodeKind は正準カタログ内での分類。warning=処理続行 / error=ok=false で停止。
@@ -161,6 +165,7 @@ var Catalog = []CatalogEntry{
 	{ErrAttestUnverified, KindError, "配ってある物の来歴が消費者の目で検算できない(一部にしか付いていない/引けない)"},
 	{ErrReleaseAlreadyPublic, KindError, "--prerelease を求められたが、そのタグのリリースは既に latest として公開済み"},
 	{ErrNoRelease, KindError, "昇格しようとした版のリリースが無い(先に release で上げる)"},
+	{ErrPrereleaseNotPromoted, KindError, "まだ昇格していない版を publish しようとした(--allow-prerelease で意図的に越える)"},
 	{ErrInternal, KindError, "想定外(バグ)"},
 }
 

@@ -151,6 +151,9 @@ var Commands = []Command{
 		"the moment it lands, releases/latest/download/ and latest.json serve this version; publish then writes the channels (tap, bucket, …) against it",
 	}},
 	{Name: "publish", Summary: "push to owned channels; prepare gated ones", Args: "[channel]", Next: []string{"verify"}, Notes: []string{
+		"it refuses to publish a version whose github release is still a prerelease: writing it into the tap, the bucket and " +
+			"the rest would hand users the very version you have not verified yet — promote it first, or pass --allow-prerelease " +
+			"to ship it to the channels on purpose (a staged beta)",
 		triggerNote, selfGeneratorNote, attestNote,
 		"the container image is attested here rather than in release: an image is named by its manifest digest, and that digest only exists once the registry has accepted the push — so publish attests it right after pushing, and consumers check it with `gh attestation verify oci://<image>:<version> --repo <owner>/<repo>`",
 	}},

@@ -30,6 +30,9 @@ var (
 	flagVerifyVersion string
 	// flagAuthPrint は auth だけの局所フラグ(保存済みの資格情報を、そのまま使える形で stdout へ)。
 	flagAuthPrint bool
+	// flagAllowPrerelease は publish だけの局所フラグ(まだ昇格していない版を、承知の上で各チャネルへ
+	// 流す)。段階的公開・ベータ配布のための口で、既定は拒否 —— 黙って流れれば窓を開けた意味が消える。
+	flagAllowPrerelease bool
 	// flagPrerelease は release だけの局所フラグ(資産は上げるが、GitHub の latest にはしない)。
 	// 配る実物を利用者に見せる前に検証する窓を開けるためのもの。グローバルにしないのは、
 	// 昇格していない版を publish が黙って各チャネルへ流す口を作らないため。
@@ -100,6 +103,9 @@ func newCommand(c registry.Command) *cobra.Command {
 	}
 	if c.Name == "release" {
 		cmd.Flags().BoolVar(&flagPrerelease, "prerelease", false, "upload the release but do not make it latest: the assets are downloadable, users still get the old version — verify the real artifacts, then `wharfy promote` makes it latest")
+	}
+	if c.Name == "publish" {
+		cmd.Flags().BoolVar(&flagAllowPrerelease, "allow-prerelease", false, "publish a version that is still a prerelease (staged beta): by default publishing an unpromoted release is refused")
 	}
 	if c.Name == "verify" {
 		cmd.Flags().StringVar(&flagVerifyVersion, "version", "", "the version to check on each channel (default: the version wharfy works out — record, latest release, or latest tag)")
