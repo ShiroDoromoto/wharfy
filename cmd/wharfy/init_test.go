@@ -28,6 +28,34 @@ func TestManagedBlockIsEntryOnly(t *testing.T) {
 	}
 }
 
+// 管理ブロックは入口の二言だけ(責務2の続き)。禁止形・戒めの調子を混ぜないこと——読むのは指示に
+// 従うエージェントで、本文に無い制約まで方針として読み取る。現に「自動配布しない」と読まれ、CI を
+// 使うか使わないかという利用者の判断にまで及んだ。何をどう回すかは利用者が決める。
+func TestManagedBlockKeepsNoPolicyVoice(t *testing.T) {
+	block := managedBlock()
+
+	// 見出し・空行・マーカーを除いた本文。二言(2 行)を超えたら、入口以外の何かを言い始めている。
+	body := make([]string, 0, 2)
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "<!--") {
+			continue
+		}
+		body = append(body, line)
+	}
+	if len(body) > 2 {
+		t.Errorf("managed block says more than the two lines it owes (%d)\n---\n%s", len(body), block)
+	}
+
+	// 指図の匂い。1 つでも当たれば、撒かれた先で方針として読まれる。
+	lower := strings.ToLower(block)
+	for _, voice := range []string{"don't", "do not", "never", "must", "should", "always", "ci "} {
+		if strings.Contains(lower, voice) {
+			t.Errorf("managed block tells the reader what to do or not do (%q)\n---\n%s", voice, block)
+		}
+	}
+}
+
 // 管理ブロックから落とした「引き金は意図的に引く」作法が、能力マップ側(常に現行版)で語られること。
 // 落としただけで語り口が消えれば、方針そのものが失われる。
 func TestTriggerDisciplineLivesInAgentNotes(t *testing.T) {

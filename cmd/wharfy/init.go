@@ -35,13 +35,17 @@ const (
 // 変わっても追随しない。だから仕様・方針(非対話であること、引き金の作法)を一行でも焼き込めば、
 // 撒かれた先で古い記述として残り、エージェントはそれを読む。内容を持たなければ陳腐化しようがない
 // ——変わりうる話は全部 `wharfy agent`(常に現行版)側の注記で語る。
+//
+// 言うのは二言だけ: 「リリースはこのツールを通す」「できることは wharfy agent にある」。
+// 禁止形・戒めの調子は書かない——読むのは指示に従うエージェントで、この本文に無い制約まで
+// 方針として読み取ってしまう(現に「自動配布しない」と読まれ、CI を使うか使わないかという
+// 利用者の判断にまで及んだ)。何をどう回すかは利用者が決める。ここはその入口を指すだけ。
 func managedBlock() string {
 	body := strings.Join([]string{
 		"## Releasing",
 		"",
 		"Release and distribution for this project go through **wharfy**.",
-		"Don't guess the steps — run `wharfy agent` first (agents: `wharfy agent --json`)",
-		"and follow its output. That capability map is always current.",
+		"What it can do is in `wharfy agent` (`wharfy agent --json`).",
 	}, "\n")
 	return initBeginMarker + "\n" + body + "\n" + initEndMarker
 }

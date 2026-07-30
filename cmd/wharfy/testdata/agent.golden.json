@@ -61,7 +61,7 @@
         "agent"
       ],
       "notes": [
-        "the managed block is the entrance and nothing else — it says 'run wharfy agent', and no steps or policy are baked into it, so a copy sitting in your repo cannot go out of date. if a wharfy update does change it, status says so (init_stale) and re-running `wharfy init --yes` refreshes the block in place; nothing else ever writes those files"
+        "the managed block is the entrance and nothing else — two lines: releases go through wharfy, and what it can do is in `wharfy agent`. no steps and no policy are baked into it (not even the tone of one: an agent reads whatever it finds there as the rule, and how you trigger a release is yours to decide), so a copy sitting in your repo cannot go out of date. if a wharfy update does change it, status says so (init_stale) and re-running `wharfy init --yes` refreshes the block in place; nothing else ever writes those files"
       ]
     },
     {

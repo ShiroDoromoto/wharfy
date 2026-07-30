@@ -59,9 +59,10 @@ Keys wharfy does not know are refused (`config_invalid`), naming the key and the
 misspelled key never runs on the defaults while you believe it took effect.
 
 Once, so future agents don't reinvent your release: `wharfy init --yes` writes a small managed
-block to `AGENTS.md` and `CLAUDE.md` telling agents to run `wharfy agent` instead of guessing
-release steps. The block is the entrance and nothing else — no steps, no policy — because a copy
-sitting in your repo cannot follow wharfy as it changes, while `wharfy agent` is always current.
+block to `AGENTS.md` and `CLAUDE.md` pointing agents at `wharfy agent`. It is two lines — the tool
+releases go through, and where its capabilities are — and nothing else: no steps, no policy, not
+even a tone of one, because a copy sitting in your repo cannot follow wharfy as it changes (and an
+agent reads whatever it finds there as the rule), while `wharfy agent` is always current.
 Without `--yes` it previews; on a file you already have, it appends one block (re-running just
 refreshes it — idempotent).
 
