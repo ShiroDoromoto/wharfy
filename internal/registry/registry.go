@@ -101,17 +101,12 @@ const prereleaseNote = "--prerelease uploads the release but does not make it gi
 	"makes it latest, which is a separate and explicit step. this is the only way to verify what you actually ship when CI builds it: a laptop build " +
 	"is not those bytes. a draft release cannot do it (its assets need authentication to download)"
 
-// triggerNote は release / publish の注記。「どこで走らせるか」と「いつ引き金を引くか」は別の話で、
-// 縛るべきは後者だけ——なのに配布は身構えられがちで、CI 上で回すこと自体を避ける判断に倒れやすい。
-// wharfy 自身が非対話である事実(--yes は TTY を要らない・資格情報は env から来る)と、引き金は
-// 意図的に引くという作法を、駆動する前に能力マップの側で語る。
-//
-// この注記はかつて `wharfy init` の管理ブロックに焼き込まれていた。撒かれた本文は wharfy が変わっても
-// 追随しないので、変わりうる話は全部こちら(常に現行版)へ寄せ、管理ブロックは入口だけにした。
+// triggerNote は release / publish の注記。配布は身構えられがちで、CI 上で回すこと自体を避ける判断に
+// 倒れやすい——wharfy 自身が非対話である事実(--yes は TTY を要らない・資格情報は env から来る)だけを
+// 駆動する前に言う。どこで走らせるか、いつ引き金を引くかは利用者が決めることで、wharfy は言わない。
 const triggerNote = "wharfy is non-interactive: --yes needs no TTY and every credential comes from the environment, " +
-	"so the same commands run on a laptop and in a GitHub Actions workflow — building what you distribute in public CI is fine, " +
-	"and for open source it is the better default. what stays deliberate is the trigger, not the machine: ship on a tag push or a " +
-	"manual dispatch, never on every merge (auto-merging dependency bumps is fine — let them accumulate, then ship on purpose)"
+	"so the same commands run on a laptop and in a GitHub Actions workflow — what triggers a release (a tag push, a manual " +
+	"dispatch, a merge) is yours to wire up"
 
 // Commands は唯一の真実。順番は「通常の操作順」。
 //

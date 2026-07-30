@@ -56,18 +56,24 @@ func TestManagedBlockKeepsNoPolicyVoice(t *testing.T) {
 	}
 }
 
-// 管理ブロックから落とした「引き金は意図的に引く」作法が、能力マップ側(常に現行版)で語られること。
-// 落としただけで語り口が消えれば、方針そのものが失われる。
-func TestTriggerDisciplineLivesInAgentNotes(t *testing.T) {
+// 管理ブロックが持たない事実——wharfy は非対話で、手元でも CI でも同じコマンドが動く——が、能力マップ側
+// (常に現行版)で語られること。配布は身構えられがちで、これを知らないと CI で回す道が最初から消える。
+// 逆に「いつ引き金を引くか」は利用者が決めることなので、ここでも指図しない。
+func TestNonInteractiveFactLivesInAgentNotes(t *testing.T) {
 	for _, name := range []string{"release", "publish"} {
 		spec, ok := registry.Lookup(name)
 		if !ok {
 			t.Fatalf("registry has no %q command", name)
 		}
 		notes := strings.Join(spec.Notes, "\n")
-		for _, want := range []string{"non-interactive", "tag push", "never on every merge"} {
+		for _, want := range []string{"non-interactive", "GitHub Actions workflow"} {
 			if !strings.Contains(notes, want) {
-				t.Errorf("%s notes missing trigger discipline %q\n---\n%s", name, want, notes)
+				t.Errorf("%s notes no longer say wharfy runs unattended (%q)\n---\n%s", name, want, notes)
+			}
+		}
+		for _, unwanted := range []string{"never on every merge", "stays deliberate"} {
+			if strings.Contains(notes, unwanted) {
+				t.Errorf("%s notes tell the user when to ship (%q) — that is theirs to decide\n---\n%s", name, unwanted, notes)
 			}
 		}
 	}

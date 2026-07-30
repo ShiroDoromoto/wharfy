@@ -392,9 +392,9 @@ tap), `scoop` (your bucket), `winget` and `homebrew-core` (a fork) — need a PA
 secret and passed as `GITHUB_TOKEN`. Channels that stay in your own repo (`releases`, `script`,
 `goinstall`, `container` on ghcr) run on the built-in token with the right `permissions:`.
 
-What stays deliberate is the trigger, not the machine: ship on a tag push or a manual dispatch,
-never on every merge (`wharfy agent` says so on `release` and `publish`, so an agent driving the
-tool reads it before it drives).
+What triggers a release — a tag push, a manual dispatch, a merge — is yours to wire up; wharfy
+runs the same either way, and `wharfy agent` says as much on `release` and `publish`, so an agent
+driving the tool knows it can run there before it drives.
 
 #### Build provenance
 
