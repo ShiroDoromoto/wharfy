@@ -8,11 +8,13 @@ package attest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // OIDCEnv は Actions が置く OIDC の取り口。
@@ -74,4 +76,27 @@ func (a ActionsTokens) IDToken(ctx context.Context, audience string) (string, er
 		return "", errors.New("attest: OIDC endpoint returned an empty token")
 	}
 	return body.Value, nil
+}
+
+// jobWorkflowRef は OIDC トークンの job_workflow_ref クレーム(この job を抱えている workflow)を読む。
+//
+// 署名は検証しない。このトークンはたった今 Actions の取り口から取ったもので、ここで読むのは
+// Fulcio へ渡す身分の写しに過ぎない(身分の真偽は Fulcio が判じる)。読めなければ ok=false を返し、
+// 呼び出し側は GITHUB_WORKFLOW_REF に落とす——ここで失敗しても証明そのものは止めない。
+func jobWorkflowRef(idToken string) (string, bool) {
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", false
+	}
+	var claims struct {
+		JobWorkflowRef string `json:"job_workflow_ref"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return "", false
+	}
+	return claims.JobWorkflowRef, claims.JobWorkflowRef != ""
 }

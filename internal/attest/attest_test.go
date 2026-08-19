@@ -2,6 +2,7 @@ package attest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -259,4 +260,67 @@ func TestGitHubStoreExplainsMissingPermission(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "attestations: write") {
 		t.Fatalf("403 must name the missing permission, got %v", err)
 	}
+}
+
+// jwtWith は payload に claims を載せただけの JWT の形。署名は付けない
+// ——jobWorkflowRef は署名を検証しない(身分の真偽は Fulcio が判じる)ので、これで足りる。
+func jwtWith(claims string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc([]byte(claims)) + ".sig"
+}
+
+// TestAttestSignsAsTheWorkflowThatHoldsTheJob: 入口が実体を uses: で呼ぶ構成では、証明書の
+// Build Signer URI は実体を指す。builder.id をそこに合わせないと GitHub は 422 で預かりを拒む。
+// 一方 buildDefinition の workflow は「何が起動されたか」なので入口のままでなければならない。
+func TestAttestSignsAsTheWorkflowThatHoldsTheJob(t *testing.T) {
+	const reusable = "acme/widget/.github/workflows/_release.yml@refs/tags/v1.2.3"
+	tokens := &fakeTokens{token: jwtWith(`{"job_workflow_ref":"` + reusable + `"}`)}
+	signer := &fakeSigner{}
+
+	if _, err := Attest(context.Background(), ciOptions(),
+		[]Subject{{Name: "widget.tar.gz", SHA256: "abc"}}, tokens, signer, &fakeStore{}); err != nil {
+		t.Fatalf("attest: %v", err)
+	}
+
+	pred := predicateOf(t, signer.statement)
+	builder := pred["runDetails"].(map[string]any)["builder"].(map[string]any)["id"]
+	if builder != "https://github.com/"+reusable {
+		t.Errorf("builder.id must name the workflow that holds the job, got %v", builder)
+	}
+	wf := pred["buildDefinition"].(map[string]any)["externalParameters"].(map[string]any)["workflow"].(map[string]any)
+	if wf["path"] != ".github/workflows/release.yml" {
+		t.Errorf("externalParameters must keep naming what was triggered, got %v", wf["path"])
+	}
+}
+
+// TestAttestFallsBackToTheWorkflowRef: クレームが無い/JWT の形をしていないトークンでも証明は止めない。
+// 入口と実体を割っていない構成では job_workflow_ref == workflow_ref なので、落とし先が正しい。
+func TestAttestFallsBackToTheWorkflowRef(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"no claim", jwtWith(`{"sub":"repo:acme/widget"}`)},
+		{"not a jwt", "opaque-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			signer := &fakeSigner{}
+			if _, err := Attest(context.Background(), ciOptions(),
+				[]Subject{{Name: "widget.tar.gz", SHA256: "abc"}}, &fakeTokens{token: tc.token}, signer, &fakeStore{}); err != nil {
+				t.Fatalf("attest: %v", err)
+			}
+			pred := predicateOf(t, signer.statement)
+			builder := pred["runDetails"].(map[string]any)["builder"].(map[string]any)["id"]
+			if builder != "https://github.com/acme/widget/.github/workflows/release.yml@refs/tags/v1.2.3" {
+				t.Errorf("builder.id must fall back to GITHUB_WORKFLOW_REF, got %v", builder)
+			}
+		})
+	}
+}
+
+// predicateOf は署名に回った証言の predicate を取り出す。
+func predicateOf(t *testing.T, statement []byte) map[string]any {
+	t.Helper()
+	var got map[string]any
+	if err := json.Unmarshal(statement, &got); err != nil {
+		t.Fatalf("statement is not json: %v", err)
+	}
+	return got["predicate"].(map[string]any)
 }

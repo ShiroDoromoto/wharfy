@@ -130,7 +130,14 @@ func Attest(ctx context.Context, opts Options, subjects []Subject, tokens TokenS
 	if err != nil {
 		return Result{}, &Error{Err: err}
 	}
-	statement, err := Statement(subjects, opts.Env)
+	// 署名者(job_workflow_ref)はトークンにしか無い。再利用ワークフローだと env の
+	// GITHUB_WORKFLOW_REF は入口を指し、証明書の Build Signer URI は実体を指す——
+	// その食い違いのまま預けると GitHub は 422 で拒む。
+	env := opts.Env
+	if ref, ok := jobWorkflowRef(idToken); ok {
+		env.JobWorkflowRef = ref
+	}
+	statement, err := Statement(subjects, env)
 	if err != nil {
 		return Result{}, &Error{Err: err}
 	}

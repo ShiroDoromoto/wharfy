@@ -30,7 +30,8 @@ type Env struct {
 	ServerURL       string // GITHUB_SERVER_URL (既定 https://github.com)
 	SHA             string // GITHUB_SHA — この commit から出た、と言い切る根拠
 	Ref             string // GITHUB_REF (refs/tags/vX.Y.Z)
-	WorkflowRef     string // GITHUB_WORKFLOW_REF (owner/repo/.github/workflows/release.yml@refs/tags/vX.Y.Z)
+	WorkflowRef     string // GITHUB_WORKFLOW_REF — 起動された workflow(owner/repo/.github/workflows/release.yml@refs/tags/vX.Y.Z)
+	JobWorkflowRef  string // OIDC の job_workflow_ref — この job を抱えている workflow(＝署名者。env には出ない)
 	EventName       string // GITHUB_EVENT_NAME
 	RunID           string // GITHUB_RUN_ID
 	RunAttempt      string // GITHUB_RUN_ATTEMPT
@@ -58,6 +59,16 @@ func Statement(subjects []Subject, env Env) ([]byte, error) {
 			"name":   s.Name,
 			"digest": map[string]string{"sha256": s.SHA256},
 		})
+	}
+
+	// builder.id は「誰が署名したか」＝この job を抱えている workflow。GitHub の attestations API は
+	// ここを証明書の Build Signer URI(job_workflow_ref)と突き合わせ、食い違えば 422 で預かりを拒む。
+	// 入口(release.yml)が実体(_release.yml)を uses: で呼ぶ構成では、env の GITHUB_WORKFLOW_REF は
+	// 入口を指すので使えない。一方 buildDefinition の workflow は「何が起動されたか」だから、
+	// そちらは入口のままが正しい。JobWorkflowRef が空なら両者は同じ(＝割っていない構成)。
+	signer := env.JobWorkflowRef
+	if signer == "" {
+		signer = env.WorkflowRef
 	}
 
 	stmt := map[string]any{
@@ -89,8 +100,7 @@ func Statement(subjects []Subject, env Env) ([]byte, error) {
 				}},
 			},
 			"runDetails": map[string]any{
-				// builder.id は「誰が作ったか」。検算する側(--signer-workflow)が突き合わせるのはここ。
-				"builder": map[string]any{"id": server + "/" + env.WorkflowRef},
+				"builder": map[string]any{"id": server + "/" + signer},
 				"metadata": map[string]any{
 					"invocationId": server + "/" + env.Repository + "/actions/runs/" + env.RunID + "/attempts/" + env.RunAttempt,
 				},
